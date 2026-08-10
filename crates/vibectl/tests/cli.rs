@@ -176,3 +176,148 @@ fn paths_in_output_are_readable_not_extended_length() {
         "extended-length path leaked into human output:\n{stdout}"
     );
 }
+
+// --- vibe scan -----------------------------------------------------------
+
+fn make_project(root: &Path, name: &str, files: &[(&str, &str)]) {
+    for (rel, body) in files {
+        let p = root.join(name).join(rel);
+        std::fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+        std::fs::write(p, body).expect("write");
+    }
+}
+
+#[test]
+fn scan_indexes_projects_and_leaves_them_alone() {
+    let dir = tmp();
+    make_project(
+        dir.path(),
+        "macroring",
+        &[(
+            "package.json",
+            r#"{"name":"macroring","description":"nutrition tracking","dependencies":{"react":"^19.0.0"}}"#,
+        )],
+    );
+    make_project(
+        dir.path(),
+        "tideline",
+        &[("Cargo.toml", "[package]\nname=\"tideline\"\n")],
+    );
+
+    let out = vibe()
+        .args(["scan"])
+        .arg(dir.path())
+        .output()
+        .expect("run vibe");
+
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("macroring"), "{stdout}");
+    assert!(stdout.contains("tideline"), "{stdout}");
+    assert!(stdout.contains("2 project(s)"), "{stdout}");
+
+    // Scanning is a read. Nothing was created for either project.
+    assert!(!dir.path().join("macroring/.vibe").exists());
+    assert!(!dir.path().join("tideline/.vibe").exists());
+}
+
+#[test]
+fn scan_json_is_parseable_and_marks_undetectable_fields_as_unknown() {
+    let dir = tmp();
+    // A Go project with no remote and no deploy config: several fields have
+    // nothing to say, and each must say so explicitly.
+    make_project(
+        dir.path(),
+        "solo",
+        &[("go.mod", "module example.com/solo\n\ngo 1.23\n")],
+    );
+
+    let out = vibe()
+        .args(["scan", "--json"])
+        .arg(dir.path())
+        .output()
+        .expect("run vibe");
+
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON on stdout");
+
+    let project = &v["projects"][0];
+    assert_eq!(project["name"], "solo");
+    assert_eq!(project["detection"]["runtime"]["state"], "known");
+    assert_eq!(project["detection"]["runtime"]["value"], "go@1.23");
+
+    // The honest part, visible in the machine-readable output: an absent field
+    // carries a reason, not an empty string that a script would read as data.
+    assert_eq!(project["detection"]["deploy_url"]["state"], "unknown");
+    assert_eq!(project["detection"]["deploy_url"]["reason"], "no_evidence");
+
+    // Every claimed value cites its source.
+    assert_eq!(
+        project["detection"]["runtime"]["evidence"]["source"]["kind"], "file",
+        "a value without a citation should be impossible"
+    );
+    assert_eq!(
+        project["detection"]["runtime"]["evidence"]["source"]["path"], "go.mod",
+        "the citation names the file it came from"
+    );
+    assert_eq!(
+        project["detection"]["runtime"]["evidence"]["excerpt"],
+        "go 1.23"
+    );
+}
+
+#[test]
+fn scanning_a_directory_with_no_projects_says_so_and_succeeds() {
+    let dir = tmp();
+    std::fs::write(dir.path().join("stray.txt"), "hello").expect("write");
+
+    let out = vibe()
+        .args(["scan"])
+        .arg(dir.path())
+        .output()
+        .expect("run vibe");
+
+    assert!(out.status.success(), "an empty result is not a failure");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("No projects found"));
+}
+
+#[test]
+fn an_unreadable_manifest_exits_two_not_one() {
+    let dir = tmp();
+    make_project(
+        dir.path(),
+        "ahead",
+        &[
+            ("go.mod", "module example.com/ahead\n\ngo 1.23\n"),
+            (
+                ".vibe/project.toml",
+                "schema_version = \"9.0\"\n[project]\nname=\"ahead\"\n",
+            ),
+        ],
+    );
+    make_project(
+        dir.path(),
+        "fine",
+        &[("go.mod", "module example.com/fine\n\ngo 1.23\n")],
+    );
+
+    let out = vibe()
+        .args(["scan"])
+        .arg(dir.path())
+        .output()
+        .expect("run vibe");
+
+    // The registry was read and one project could not be. That is a partial
+    // result, and a script must be able to tell it from a total failure.
+    assert_eq!(out.status.code(), Some(2), "expected the partial exit code");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("fine"),
+        "the readable project still appears"
+    );
+    assert!(stdout.contains("unreadable"), "{stdout}");
+}

@@ -12,16 +12,18 @@ keywords.workspace = true
 
 [dependencies]
 directories = { workspace = true }
+ignore = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 toml_edit = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
 proptest = { workspace = true }
-serde_json = { workspace = true }
 tempfile = { workspace = true }
-# Negative control only — see the note in the workspace manifest.
+# Negative control only — see the note in the workspace manifest. CI asserts
+# this never reaches the non-dev dependency tree.
 toml = { workspace = true }
 
 [lints]

@@ -78,17 +78,38 @@ impl NewRequest {
 #[derive(Debug, Clone)]
 pub struct Registry {
     config: Config,
+    exec: std::sync::Arc<dyn crate::exec::ProcessRunner>,
 }
 
 impl Registry {
     #[must_use]
     pub fn open(config: Config) -> Self {
-        Self { config }
+        Self {
+            config,
+            exec: std::sync::Arc::new(crate::exec::SystemRunner::default()),
+        }
+    }
+
+    /// Inject a process runner. Tests use this to run without `git`, which is
+    /// also the code path a user without `git` installed takes.
+    #[must_use]
+    pub fn with_runner(mut self, exec: std::sync::Arc<dyn crate::exec::ProcessRunner>) -> Self {
+        self.exec = exec;
+        self
     }
 
     #[must_use]
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    /// Index what already exists on disk.
+    ///
+    /// Returns a [`ScanReport`] and nothing else. There is no code path from
+    /// here to a [`WritePlan`], so a scan structurally cannot modify anything —
+    /// see the `scan` module docs.
+    pub fn scan(&self, req: &crate::scan::ScanRequest, rep: &dyn Reporter) -> crate::ScanReport {
+        crate::scan::scan(req, self.exec.as_ref(), rep)
     }
 
     /// Plan a new project directory and its manifest.

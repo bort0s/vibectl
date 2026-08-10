@@ -38,6 +38,17 @@ pub trait Reporter: Send + Sync {
 #[serde(tag = "event", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Event {
+    ScanStarted {
+        projects: usize,
+    },
+    ProjectScanned {
+        /// Lossy display form, for progress only.
+        path: String,
+    },
+    ScanFinished {
+        projects: usize,
+        elapsed_ms: u64,
+    },
     ApplyStarted {
         ops: usize,
     },

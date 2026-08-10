@@ -20,6 +20,27 @@ pub struct Cli {
 pub enum Command {
     /// Scaffold a new project and register it
     New(NewArgs),
+    /// Index projects that already exist on disk
+    Scan(ScanArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ScanArgs {
+    /// Directory to index. Its subdirectories are searched for projects.
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+
+    /// How deep below the root to look for project directories
+    #[arg(long, default_value_t = 3)]
+    pub depth: usize,
+
+    /// Show values that were found but not written: weak evidence and
+    /// unresolved conflicts
+    #[arg(long)]
+    pub suggestions: bool,
+
+    #[command(flatten)]
+    pub format: FormatFlags,
 }
 
 /// Flags every write command carries.

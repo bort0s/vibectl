@@ -1,0 +1,348 @@
+//! Finding projects, and indexing each one exactly once.
+//!
+//! Two different walks, deliberately:
+//!
+//! - [`discover_projects`] is shallow and structural. It answers "which of
+//!   these directories is a project?" and stops descending the moment it knows,
+//!   because what is *inside* a project is that project's business.
+//! - [`FileIndex::build`] indexes one project. It runs once per project, and
+//!   every detector is gated against its result rather than being allowed to
+//!   touch the disk itself. That gating is the performance contract: on a Go
+//!   repo, the Node, Python and PHP detectors never run and never stat
+//!   anything (ADR-0003 §2).
+
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+
+/// Directories that are never worth descending into. Pruning these is most of
+/// the reason a scan is fast — `node_modules` alone can hold more files than
+/// the rest of a developer's home directory combined.
+pub const PRUNE_DIRS: &[&str] = &[
+    "node_modules",
+    "target",
+    ".git",
+    "dist",
+    "build",
+    "vendor",
+    ".next",
+    ".nuxt",
+    ".svelte-kit",
+    "venv",
+    ".venv",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".tox",
+    ".gradle",
+    ".terraform",
+    "Pods",
+    ".svn",
+    ".hg",
+    ".idea",
+    "coverage",
+];
+
+/// A file or directory whose presence means "this directory is a project".
+const PROJECT_MARKERS: &[&str] = &[
+    ".vibe",
+    ".git",
+    "package.json",
+    "Cargo.toml",
+    "pyproject.toml",
+    "requirements.txt",
+    "go.mod",
+    "composer.json",
+];
+
+/// Stop a pathological repository from consuming the whole scan budget.
+const MAX_INDEXED_ENTRIES: usize = 20_000;
+
+/// How deep below a scan root to look for project directories.
+///
+/// Three is enough for `~/projects/<name>` and `~/projects/<client>/<name>`
+/// without turning a scan of a home directory into a full filesystem crawl.
+pub const DEFAULT_DISCOVERY_DEPTH: usize = 3;
+
+/// What one project directory contains, as far as detection is concerned.
+#[derive(Debug, Clone, Default)]
+pub struct FileIndex {
+    /// Relative paths with forward slashes, e.g. `.vercel/project.json`.
+    files: BTreeSet<String>,
+    /// Base names present anywhere in the index, for cheap interest gating.
+    names: BTreeSet<String>,
+    /// Extensions present, without the dot.
+    extensions: BTreeSet<String>,
+    /// Directory names present, including pruned ones such as `.git`.
+    dirs: BTreeSet<String>,
+    /// True when the entry cap was hit, so callers know the index is partial
+    /// rather than assuming absence means absence.
+    truncated: bool,
+}
+
+impl FileIndex {
+    /// Index one project directory.
+    pub fn build(root: &Path) -> Self {
+        let mut index = FileIndex::default();
+
+        let walker = ignore::WalkBuilder::new(root)
+            // `.vibe`, `.git`, `.env.example` and `.vercel/` are all hidden, and
+            // all load-bearing. The default of skipping hidden entries would
+            // make the tool blind to its own manifest.
+            .hidden(false)
+            .git_ignore(true)
+            .git_global(false)
+            .parents(false)
+            .require_git(false)
+            .max_depth(Some(6))
+            .filter_entry(|entry| {
+                let name = entry.file_name().to_string_lossy();
+                !PRUNE_DIRS.contains(&name.as_ref())
+            })
+            .build();
+
+        for entry in walker.flatten() {
+            if index.files.len() >= MAX_INDEXED_ENTRIES {
+                index.truncated = true;
+                break;
+            }
+            let Ok(rel) = entry.path().strip_prefix(root) else {
+                continue;
+            };
+            if rel.as_os_str().is_empty() {
+                continue;
+            }
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+
+            let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
+            if let Some(name) = entry.file_name().to_str() {
+                if is_dir {
+                    index.dirs.insert(name.to_owned());
+                } else {
+                    index.names.insert(name.to_owned());
+                }
+            }
+            if !is_dir {
+                if let Some(ext) = rel.extension().and_then(|e| e.to_str()) {
+                    index.extensions.insert(ext.to_owned());
+                }
+                index.files.insert(rel_str);
+            }
+        }
+
+        // Pruned directories still count as present. `.git` is the case that
+        // matters: the git detector needs to know the repository exists, and
+        // descending into it would be both pointless and slow.
+        for pruned in PRUNE_DIRS {
+            if root.join(pruned).is_dir() {
+                index.dirs.insert((*pruned).to_owned());
+            }
+        }
+
+        index
+    }
+
+    #[must_use]
+    pub fn has_file(&self, name: &str) -> bool {
+        self.names.contains(name)
+    }
+
+    #[must_use]
+    pub fn has_dir(&self, name: &str) -> bool {
+        self.dirs.contains(name)
+    }
+
+    #[must_use]
+    pub fn has_extension(&self, ext: &str) -> bool {
+        self.extensions.contains(ext)
+    }
+
+    /// Relative paths whose base name matches, in deterministic order.
+    #[must_use]
+    pub fn paths_named(&self, name: &str) -> Vec<&str> {
+        self.files
+            .iter()
+            .filter(|p| p.rsplit('/').next() == Some(name))
+            .map(String::as_str)
+            .collect()
+    }
+
+    /// Relative paths whose base name starts with `prefix` and ends with
+    /// `suffix`, in deterministic order. For `requirements*.txt`.
+    #[must_use]
+    pub fn paths_matching(&self, prefix: &str, suffix: &str) -> Vec<&str> {
+        self.files
+            .iter()
+            .filter(|p| {
+                let base = p.rsplit('/').next().unwrap_or(p);
+                base.starts_with(prefix) && base.ends_with(suffix)
+            })
+            .map(String::as_str)
+            .collect()
+    }
+
+    #[must_use]
+    pub fn contains_path(&self, rel: &str) -> bool {
+        self.files.contains(rel)
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.files.is_empty() && self.dirs.is_empty()
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.files.len()
+    }
+
+    /// Whether the entry cap was hit. A caller must not read absence as
+    /// evidence when this is true.
+    #[must_use]
+    pub fn is_truncated(&self) -> bool {
+        self.truncated
+    }
+}
+
+/// Whether a directory is itself a project.
+#[must_use]
+pub fn is_project_dir(dir: &Path) -> bool {
+    PROJECT_MARKERS.iter().any(|m| dir.join(m).exists())
+}
+
+/// Find project directories at or below `root`.
+///
+/// Stops descending as soon as a directory is identified as a project, and
+/// never descends into a pruned directory. Results are sorted, so two scans of
+/// an unchanged tree produce the same order — a requirement for stable
+/// snapshots and for `vibe sync` not to churn.
+#[must_use]
+pub fn discover_projects(root: &Path, max_depth: usize) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    visit(root, 0, max_depth, &mut found);
+    found.sort();
+    found
+}
+
+fn visit(dir: &Path, depth: usize, max_depth: usize, out: &mut Vec<PathBuf>) {
+    if is_project_dir(dir) {
+        out.push(dir.to_path_buf());
+        return;
+    }
+    if depth >= max_depth {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        // An unreadable directory is not an error worth failing a whole scan
+        // for. It contributes nothing and the scan continues.
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if PRUNE_DIRS.contains(&name.as_ref()) {
+            continue;
+        }
+        visit(&path, depth + 1, max_depth, out);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write(root: &Path, rel: &str, contents: &str) {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, contents).unwrap();
+    }
+
+    #[test]
+    fn indexes_hidden_files_because_the_tool_depends_on_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, ".vibe/project.toml", "x");
+        write(root, ".env.example", "API_KEY=");
+        write(root, ".vercel/project.json", "{}");
+
+        let index = FileIndex::build(root);
+        assert!(index.contains_path(".vibe/project.toml"));
+        assert!(index.has_file(".env.example"));
+        assert!(index.contains_path(".vercel/project.json"));
+    }
+
+    #[test]
+    fn prunes_the_expensive_directories_but_still_records_dot_git() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "package.json", "{}");
+        write(root, "node_modules/left-pad/index.js", "x");
+        write(root, "target/debug/thing", "x");
+        std::fs::create_dir_all(root.join(".git/objects")).unwrap();
+        write(root, ".git/config", "x");
+
+        let index = FileIndex::build(root);
+        assert!(index.has_file("package.json"));
+        assert!(
+            !index.contains_path("node_modules/left-pad/index.js"),
+            "node_modules must not be descended into"
+        );
+        assert!(!index.contains_path("target/debug/thing"));
+        assert!(
+            !index.contains_path(".git/config"),
+            ".git contents are not indexed"
+        );
+        assert!(
+            index.has_dir(".git"),
+            "but the repository's existence is recorded"
+        );
+    }
+
+    #[test]
+    fn discovery_stops_at_a_project_and_does_not_descend_into_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "alpha/package.json", "{}");
+        write(root, "alpha/packages/inner/package.json", "{}");
+        write(root, "beta/Cargo.toml", "");
+        write(root, "notaproject/readme.md", "");
+
+        let found = discover_projects(root, DEFAULT_DISCOVERY_DEPTH);
+        assert_eq!(found, vec![root.join("alpha"), root.join("beta")]);
+    }
+
+    #[test]
+    fn discovery_is_sorted_so_two_scans_agree() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for name in ["zeta", "alpha", "mu"] {
+            write(root, &format!("{name}/go.mod"), "module x");
+        }
+        let a = discover_projects(root, DEFAULT_DISCOVERY_DEPTH);
+        let b = discover_projects(root, DEFAULT_DISCOVERY_DEPTH);
+        assert_eq!(a, b);
+        assert_eq!(
+            a.iter()
+                .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            vec!["alpha", "mu", "zeta"]
+        );
+    }
+
+    #[test]
+    fn an_empty_directory_is_not_a_project() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_project_dir(dir.path()));
+        assert!(discover_projects(dir.path(), 3).is_empty());
+    }
+
+    #[test]
+    fn a_directory_with_only_a_readme_is_not_a_project() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "README.md", "# notes");
+        assert!(!is_project_dir(dir.path()));
+    }
+}

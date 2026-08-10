@@ -19,9 +19,9 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use cli::{Cli, Command, NewArgs};
+use cli::{Cli, Command, NewArgs, ScanArgs};
 use exit::Exit;
-use vibe_core::{Config, NewRequest, Registry};
+use vibe_core::{Config, NewRequest, Registry, ScanRequest};
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -39,7 +39,33 @@ fn main() -> ExitCode {
 fn run(cli: &Cli) -> Result<Exit, vibe_core::CoreError> {
     match &cli.command {
         Command::New(args) => cmd_new(args),
+        Command::Scan(args) => cmd_scan(args),
     }
+}
+
+fn cmd_scan(args: &ScanArgs) -> Result<Exit, vibe_core::CoreError> {
+    let registry = Registry::open(Config::discover());
+    let req = ScanRequest::new(&args.path).with_max_depth(args.depth);
+
+    let rep = reporter::TermReporter::new(args.format.json);
+    let report = registry.scan(&req, &rep);
+
+    let mut stdout = std::io::stdout();
+    if args.format.json {
+        let json = serde_json::to_string_pretty(&report)
+            .expect("ScanReport is a plain data structure and always serialises");
+        let _ = writeln!(stdout, "{json}");
+    } else {
+        let _ = output::write_scan_human(&mut stdout, &report, args.suggestions);
+    }
+
+    // A project whose manifest could not be read is a *partial* result, not a
+    // failure: the registry was read and the other projects are fine. Exit 2
+    // is what lets a script tell those apart (ADR-0002 §3).
+    if report.unreadable() > 0 {
+        return Ok(Exit::Partial);
+    }
+    Ok(Exit::Success)
 }
 
 fn cmd_new(args: &NewArgs) -> Result<Exit, vibe_core::CoreError> {

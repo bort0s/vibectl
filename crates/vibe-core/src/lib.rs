@@ -33,20 +33,28 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 pub mod config;
+pub mod detect;
 pub mod error;
+pub mod exec;
 pub mod manifest;
 pub mod model;
 pub mod plan;
 pub mod registry;
 pub mod report;
+pub mod scan;
+pub mod walk;
 
 pub use config::Config;
+pub use detect::{Detection, Detector, DetectorId, Evidence, FieldPath, Specificity, Suggestion};
 pub use error::{CoreError, ErrorPayload};
+pub use exec::{NoRunner, ProcessRunner, SystemRunner};
 pub use manifest::{FieldEdit, ManifestDocument, SchemaVersion};
-pub use model::{Manifest, Status, Visibility};
+pub use model::{Confidence, Detected, Manifest, Status, UnknownReason, Visibility};
 pub use plan::{ApplyOutcome, ApplyReport, FileOp, PlanIntent, WritePlan};
 pub use registry::{NewRequest, Registry};
 pub use report::{CollectingReporter, Diagnostic, Event, NullReporter, Reporter, Severity};
+pub use scan::{ScanOutcome, ScanReport, ScanRequest, ScannedProject};
+pub use walk::FileIndex;
 
 /// Types that cross a `spawn_blocking` boundary in a desktop consumer must be
 /// `Send + Sync + 'static`. ADR-0005 §8 requires this to be a compile-time

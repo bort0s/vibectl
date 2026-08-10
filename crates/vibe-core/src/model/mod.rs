@@ -8,8 +8,10 @@
 //! what makes unknown-key preservation a property of the API rather than a rule
 //! people have to remember (ADR-0002 §5).
 
+mod detected;
 mod manifest;
 mod status;
 
+pub use detected::{Candidate, Confidence, Detected, UnknownReason};
 pub use manifest::{Context, Deploy, Manifest, Project, Repo, Stack, UnknownKey, ValueKind};
 pub use status::{Status, Visibility};

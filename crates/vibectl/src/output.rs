@@ -77,6 +77,94 @@ pub fn write_apply_human(out: &mut impl Write, report: &ApplyReport) -> std::io:
     }
 }
 
+/// Render a scan for a human.
+///
+/// The design rule this obeys: an undetectable field prints as `—`, never as a
+/// plausible-looking value and never as the word "unknown" dressed up as data.
+/// `--suggestions` is what surfaces the things that were found but deliberately
+/// not written.
+pub fn write_scan_human(
+    out: &mut impl Write,
+    report: &vibe_core::ScanReport,
+    show_suggestions: bool,
+) -> std::io::Result<()> {
+    if report.projects.is_empty() {
+        return writeln!(out, "No projects found in {}.", report.roots.join(", "));
+    }
+
+    for p in &report.projects {
+        let runtime = detected_or_dash(&p.detection.runtime);
+        writeln!(out, "{}  {}", p.name, p.path)?;
+        writeln!(out, "  stack     {runtime}")?;
+        if !p.detection.frameworks.is_empty() {
+            writeln!(out, "  uses      {}", p.detection.frameworks.join(", "))?;
+        }
+        if !p.detection.services.is_empty() {
+            writeln!(out, "  services  {}", p.detection.services.join(", "))?;
+        }
+        writeln!(out, "  remote    {}", detected_or_dash(&p.detection.remote))?;
+        writeln!(
+            out,
+            "  commit    {}",
+            detected_or_dash(&p.detection.last_commit)
+        )?;
+        if !p.detection.env_required.is_empty() {
+            writeln!(out, "  env       {}", p.detection.env_required.join(", "))?;
+        }
+        if let Some(err) = &p.manifest_error {
+            writeln!(out, "  manifest  unreadable: {}", err.message)?;
+        }
+        if p.index_truncated {
+            writeln!(
+                out,
+                "  note      too many files to index fully; absence is not evidence here"
+            )?;
+        }
+
+        if show_suggestions && !p.detection.suggestions.is_empty() {
+            writeln!(out, "  not written:")?;
+            for s in &p.detection.suggestions {
+                writeln!(
+                    out,
+                    "    {:?} = {}  ({:?}, from {})",
+                    s.field, s.value, s.why, s.detector
+                )?;
+            }
+        }
+        writeln!(out)?;
+    }
+
+    writeln!(
+        out,
+        "{} project(s) in {}ms",
+        report.projects.len(),
+        report.elapsed_ms
+    )?;
+    let unreadable = report.unreadable();
+    if unreadable > 0 {
+        writeln!(out, "{unreadable} manifest(s) could not be read")?;
+    }
+    let suggestions = report.suggestion_count();
+    if suggestions > 0 && !show_suggestions {
+        writeln!(
+            out,
+            "{suggestions} value(s) found but not written — re-run with --suggestions"
+        )?;
+    }
+    Ok(())
+}
+
+/// An em dash, not a guess and not the string "unknown".
+///
+/// Printing `unknown` in a value column invites it being read as data — and
+/// somebody would eventually grep for it. A dash reads as absence.
+fn detected_or_dash<T: std::fmt::Display>(d: &vibe_core::Detected<T>) -> String {
+    match d.value() {
+        Some(v) => v.to_string(),
+        None => "—".to_owned(),
+    }
+}
+
 /// Turn a structured diagnostic into a sentence.
 ///
 /// The catalogue lives here, not in core: core emits a stable code plus named

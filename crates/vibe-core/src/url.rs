@@ -308,8 +308,17 @@ mod tests {
     #[test]
     fn a_local_path_must_be_absolute_and_must_not_look_like_a_flag() {
         // Absolute: `git` resolves a relative path against a working directory
-        // *this crate* chose, not one the user meant.
-        for relative in ["agents", "src/agents", "./agents", "../agents", r"..\agents"] {
+        // *this crate* chose, not one the user meant. `~` is in the list
+        // because there is no shell in the way to expand it — `git` would take
+        // it as a directory literally named `~`.
+        for relative in [
+            "agents",
+            "src/agents",
+            "./agents",
+            "../agents",
+            r"..\agents",
+            "~/agents",
+        ] {
             let why = rejected(relative);
             assert!(why.contains("absolute path"), "`{relative}`: {why}");
         }

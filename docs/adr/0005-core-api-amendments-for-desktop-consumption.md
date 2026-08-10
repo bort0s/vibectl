@@ -341,15 +341,21 @@ Written down because a reader will otherwise assume it might, and reasonably so:
 rule 6 below exists precisely because `.git/hooks/post-commit` is execution, and
 a local clone is the one case where a *foreign* `.git/` is in reach.
 
-> **Verified on git 2.45.1. Pending confirmation on 2.54, and not settled until
-> then.** The `ext::` hole above was found on 2.54; this is a **negative** result
-> about security-relevant behaviour, established nine minor versions behind it.
-> New hook types, new trigger points and changed local-clone semantics are
-> exactly the kind of change that would invalidate it silently, and a negative
-> result on an older `git` says nothing about a newer one. Verifying a security
-> property on a version older than the one the hole was found on is backwards,
-> so the finding is recorded with the version it was tested against rather than
-> stated flatly.
+> **Confirmed on git 2.54.0, 2.55.0 and 2.55.0.windows.3.** It was first
+> established on 2.45.1, and that was not enough to settle it: the `ext::` hole
+> above was found on 2.54, and a **negative** result about security-relevant
+> behaviour established nine minor versions *behind* the one the hazard was
+> found on says nothing about the newer one. New hook types, new trigger points
+> and changed local-clone semantics are exactly what would invalidate it
+> silently.
+>
+> It is now a test —
+> `negative_control_cloning_a_local_repo_does_not_run_the_source_repos_hooks` —
+> so it is re-established on every CI run against whatever `git` the three
+> runners ship, and the versions above are the ones it has demonstrably run
+> under, confirmed by name rather than inferred from a green suite. A `git`
+> release that changes this makes the test red instead of making this paragraph
+> quietly wrong.
 
 The source repository was armed with every hook that could plausibly fire on a
 fetch or a checkout — `post-update`, `pre-receive`, `update`, `post-receive`,

@@ -98,10 +98,11 @@ impl GitUrl {
     ///
     /// Cloning from a local repository does **not** execute that repository's
     /// hooks — recorded in ADR-0005 §10 rule 4, because rule 6 makes the
-    /// opposite a reasonable thing for a reader to assume. Verified on git
-    /// 2.45.1 and **pending confirmation on 2.54**: it is a negative result
-    /// about security-relevant behaviour, established on an older `git` than
-    /// the one the `ext::` hole was found on.
+    /// opposite a reasonable thing for a reader to assume. Confirmed on git
+    /// 2.54.0, 2.55.0 and 2.55.0.windows.3 by
+    /// `negative_control_cloning_a_local_repo_does_not_run_the_source_repos_hooks`,
+    /// which re-establishes it on every CI run rather than leaving it as a
+    /// claim someone checked once.
     pub fn parse(raw: &str) -> Result<Self, CoreError> {
         let reject = |why: &'static str| {
             Err(CoreError::GitUrlRejected {

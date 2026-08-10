@@ -103,6 +103,26 @@ the multi-machine situation the tool exists for. So:
 - `--json` carries the error object in that project's slot, so a script sees a
   structured failure rather than a missing entry.
 
+**Exit codes.** "Something was unreadable" must be distinguishable from "the
+command failed", or a script cannot tell a partially-read registry from a broken
+one. The full table, owned by `vibectl/src/exit.rs`:
+
+| Code | Meaning | Emitted by |
+| --- | --- | --- |
+| `0` | Success. Every requested project was read and every requested write applied. | any command |
+| `1` | Failure. The command produced no useful result — bad arguments, no registry, an unreadable cache that could not be rebuilt, or a write that was refused or aborted. | any command |
+| `2` | **Partial.** Results were produced, but at least one entry could not be read. | read commands only |
+
+`2` is reachable only from `list`, `show` and `scan`. Write commands never exit
+`2`: per ADR-0001 §3 a `WritePlan` is all-or-nothing at the decision level, so a
+write either applied or did not. A major-schema mismatch on the *target* of a
+write is therefore a `1`, while the same manifest encountered while listing 30
+projects is a `2`.
+
+`2` is not exclusive to schema mismatches — an unreadable directory or a manifest
+with a TOML syntax error produces it too. The rule is about the shape of the
+outcome, not its cause.
+
 **Error text names both numbers and the action.** The `Display` impl produces:
 
 ```
@@ -215,6 +235,14 @@ archived = true
 - **`vibe archive` sets `[project] archived = true` and does not touch
   `status`.** Un-archiving is therefore not a guess: `archived = false` restores
   the exact prior state because the prior state was never overwritten.
+- **`vibe unarchive <name>` is part of the v1 CLI surface.** The "un-archiving is
+  not a guess" property is the entire justification for a separate key, and
+  without an inverse command it is a property nobody can reach. It is one
+  `FieldEdit::SetArchived(false)`, the same op `archive` uses with the other
+  operand, so it costs a clap subcommand and nothing else. `archive` on an
+  already-archived project and `unarchive` on a non-archived one are both
+  no-ops that produce an empty `WritePlan` (`ManifestDocument::into_op` returns
+  `None` when the rendered document is unchanged), not errors.
 - **`status` and `archived` are two dimensions and every combination is legal.**
   `dead` narrows to *abandoned before completion*; `archived` means *off my
   desk*. `shipped + archived` (finished, put away) and `dead + archived`

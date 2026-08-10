@@ -220,10 +220,37 @@ flag-parsed. A `--` separator precedes every path list.
 followed by an explicit allowlist. `PATH` and `HOME` (plus `USERPROFILE`,
 `APPDATA`, `LOCALAPPDATA`, `SYSTEMROOT` and `PATHEXT` on Windows, which `gh`
 needs to locate its config and which the process needs to resolve executables at
-all). **No `GIT_*` or `GH_*` passthrough whatsoever**, with one deliberate
-exception carried explicitly and only when present: `GITHUB_TOKEN`, which the
-spec designates as the fallback when `gh` is absent. Terminal and locale
+all). **No `GIT_*` or `GH_*` passthrough whatsoever.** Terminal and locale
 variables are not forwarded, which also makes subprocess output stable to parse.
+
+`GIT_CONFIG_NOSYSTEM=1` is set positively, not merely left unset. Clearing the
+environment stops an *inherited* hostile value, but the system-level
+`/etc/gitconfig` (or `%PROGRAMDATA%\Git\config`) is read regardless of
+environment, and it can define aliases and `core.sshCommand` just as a repo-local
+config can. This is defence against a machine that is already partly compromised
+rather than against our own plans, which is why it is cheap to set and pointless
+to argue about.
+
+**3a. `GITHUB_TOKEN` is injected per-op, not per-environment.** The spec makes
+`GITHUB_TOKEN` the fallback when `gh` is absent, but a credential in the
+environment of a subprocess that has no use for it is reachable by anything that
+subprocess goes on to run. So the credential is not part of the base environment:
+each operation declares `fn needs_credential(&self) -> bool`, and the env builder
+adds the token only for those that return `true`. In the v1 set that is
+`GhOp::RepoCreate` and `GitOp::Push` — `Init`, `Add`, `Commit` and `RemoteAdd`
+run with no credential in scope at all.
+
+**Open question, deliberately not answered here:** *which* of those ops can
+actually consume a `GITHUB_TOKEN` is a P5 decision, not a P0 one. `gh` reads
+`GH_TOKEN`/`GITHUB_TOKEN` from the environment and that path is straightforward.
+`git push` does **not** — git has no concept of `GITHUB_TOKEN`, and the usual
+bridges (a `credential.helper`, a token embedded in the remote URL) are
+respectively blocked by rule 2 and unacceptable because the URL gets written into
+`.git/config`. The honest possibilities are that the `gh`-absent fallback creates
+the repo via the API but does not push, or that it uses an askpass helper. This
+ADR fixes only the containment rule; P5 decides the mechanism, and if the answer
+turns out to be "the fallback cannot push", that is a graceful degradation the
+spec already permits.
 
 **4. `CreateFile` containment canonicalizes the parent, not the path.**
 `canonicalize()` fails on a path that does not yet exist, which is every path a
@@ -233,16 +260,45 @@ directory, and verify the remaining components contain no `..` and no absolute
 prefix. Directory ops are checked the same way as they are created, so a plan
 that creates `a/b/` then writes `a/b/c` re-checks at each step.
 
-**Residual risk, stated rather than papered over:** this is TOCTOU-vulnerable.
-Between the containment check and the write, the parent directory can be replaced
-with a symlink (Unix) or a directory junction / reparse point (Windows), redirecting
-the write outside the root. Closing it properly needs `openat`-style handle-relative
-I/O (`O_NOFOLLOW` / `FILE_FLAG_OPEN_REPARSE_POINT`), which is platform-specific
-`unsafe`-adjacent work that v1 is not taking on. The exposure is bounded by the
-fact that an attacker who can win that race already has write access to the user's
-project tree, and by the absence of any `Delete` op — the worst outcome is an
-additive write to an unintended location. This is recorded as a known limitation,
-not as a solved problem.
+**5. No write may land under `.git/`, checked after parent canonicalization.**
+
+Rules 1–3 close the argument vector and the environment. They do not close the
+*repository*, and containment-to-the-project-root is not containment when `.git/`
+is inside the project root:
+
+```
+CreateFile  .git/hooks/post-commit    ← passes every rule above
+GitOp       Commit                    ← executes it
+```
+
+`.git/hooks/*` needs no config and no argument to run; `.git/config` supplies
+aliases and `core.sshCommand` to a subsequent `git` invocation. Neither path
+touches argv, so the closed `GitOp` enum is simply not in the way. The check is
+therefore on the *destination*: after canonicalizing the deepest existing
+ancestor, reject the op if any component of the resolved path is `.git` (or a
+`.git` file pointing elsewhere, as in a worktree or submodule — resolve it and
+reject the target too). `vibe` writes `.vibe/project.toml`, `README.md`,
+`CLAUDE.md`, and `AGENTS.md`. It has no legitimate reason to write inside `.git/`
+ever, so a categorical rejection costs exactly nothing and needs no exception
+list to maintain.
+
+**Residual risk, restated now that rule 5 exists.** The parent-canonicalization
+in rule 4 is TOCTOU-vulnerable: between the check and the write, the parent can
+be swapped for a symlink (Unix) or a directory junction / reparse point
+(Windows), redirecting the write outside the root. Closing it properly needs
+`openat`-style handle-relative I/O (`O_NOFOLLOW` /
+`FILE_FLAG_OPEN_REPARSE_POINT`), which is platform-specific `unsafe`-adjacent
+work v1 is not taking on.
+
+The bound on that risk is **not** "there is no `Delete` op, so the worst case is
+an additive write." That reasoning was wrong: it holds only while an additive
+write is harmless, and an additive write to `.git/hooks/post-commit` is
+execution. The correct statement is that rule 5 is what makes the bound true —
+with the two paths that turn an additive write into execution categorically
+rejected, an attacker who wins the race gets a file written somewhere
+unintended, in a tree they already had write access to in order to win the race
+at all. That is a real weakness and it is worth revisiting when a frontend
+lands; it is not a privilege escalation.
 
 **Why now and not P5/P6:** the same reason the `Deserialize` derive was dropped.
 Rule 1 in particular changes the *shape* of `FileOp::RunCommand`, and narrowing a

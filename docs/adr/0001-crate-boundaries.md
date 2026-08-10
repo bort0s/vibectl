@@ -2,7 +2,11 @@
 
 ## Status
 
-Accepted (2026-08-10)
+Accepted (2026-08-10). **Amended by
+[ADR-0005](0005-core-api-amendments-for-desktop-consumption.md)**, which
+resolves the Tauri assumptions flagged at the end of this document and changes
+the `WritePlan`, `ScanReport`, `ApplyReport`, and `ProjectId` shapes. Read 0005
+alongside this one before implementing.
 
 ## Context
 

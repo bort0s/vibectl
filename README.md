@@ -7,8 +7,16 @@ indexes the rest — inferring stack, git state, and deploy target from what is
 already on disk — and keeps a small manifest next to each one so you (and your
 agents) can pick any of them back up without archaeology.
 
-> **Status: pre-alpha.** The workspace skeleton and CI are in place. Nothing is
-> implemented yet and nothing is published to crates.io. Do not install this.
+> **Status: pre-alpha, under active development.** Nothing is published to
+> crates.io yet.
+>
+> Working today: `vibe new`, `vibe scan`, `vibe list`, `vibe show`, `vibe sync`,
+> `vibe archive` / `vibe unarchive`, with `--json` on reads and `--dry-run` on
+> writes. Manifests round-trip through `toml_edit`, so your comments and any
+> keys this build does not recognise survive editing.
+>
+> Not built yet: `vibe render` (P4), `gh` integration in `vibe new` (P5), and
+> optional AI enrichment (P6).
 
 ## The idea
 
@@ -17,14 +25,29 @@ are starting from a mess.
 
 ```console
 $ vibe scan ~/projects
-  indexed 34 projects in 1.2s · 28 with git remotes · 6 undetectable stacks
+macroring  /home/you/projects/macroring
+  stack     node@22
+  uses      react@19, vite@5
+  services  supabase, vercel
+  remote    github.com/you/macroring
+  env       SUPABASE_ANON_KEY, SUPABASE_URL
+
+mystery  /home/you/projects/mystery
+  stack     —
+  remote    —
+
+2 project(s) in 43ms
 
 $ vibe list
-  NAME         STACK              STATUS   LAST COMMIT   DEPLOY
-  macroring    node@22 · react    active    2 days ago   vercel
-  tideline     rust@1.97          paused    7 months ago —
-  otterbase    python@3.12        idea      —            —
+NAME       STACK    STATUS   COMMIT      REMOTE
+macroring  node@22  active   2026-08-08  github.com/you/macroring
+mystery    —        idea     —           —
 ```
+
+The second project has a `Dockerfile` saying `FROM python:3.11` and nothing
+else. It reads as obviously Python to a human, so `vibe` says nothing — there is
+no `pyproject.toml`, no `requirements.txt`, and no `.py` file. An empty field is
+the honest answer, and `--suggestions` shows what was found but not written.
 
 `vibe scan` is the point of the tool. Scaffolding (`vibe new`) exists because it
 would be strange if it didn't, and is kept deliberately minimal.
@@ -103,8 +126,16 @@ These are constraints, not aspirations. They are why the tool is shaped this way
    Every write can be previewed with `--dry-run`.
 3. **Cross-platform.** Linux, macOS, and Windows are all first-class; the test
    suite runs on all three.
-4. **Scan is fast.** 50 repositories in under two seconds. `node_modules`,
-   `target`, `.git`, `dist`, and `vendor` are never descended into.
+4. **Scan is fast.** 50 repositories in well under two seconds. Measured at a
+   **654 ms median / 686 ms p90 warm, ~1067 ms median cold** on a 2017 quad-core
+   with a SATA SSD, over a corpus of 50 single-commit git repositories carrying
+   the usual `node_modules` / `target` / `.venv` noise. Cold costs ~1.5x rather
+   than a multiple, because the scan barely touches the disk — 96% of the time
+   is the two `git` subprocess calls per repository, and the same corpus with no
+   `.git` at all indexes in 34 ms. Cost is linear at ~13 ms per project, so the
+   two-second budget is exhausted at roughly **150 projects**. The harness,
+   corpus definition and measurement protocol are in
+   [`crates/vibe-core/examples/scan_bench.rs`](crates/vibe-core/examples/scan_bench.rs).
 5. **Detection is honest.** When the stack cannot be inferred, the field is left
    empty and flagged. The tool does not guess, and it never invents a
    plausible-looking value.

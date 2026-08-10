@@ -281,11 +281,22 @@ fn consider(
     notes: &mut SyncNotes,
 ) -> Option<String> {
     if let Some(v) = detected.writable_value() {
-        return if current == Some(v.as_str()) {
-            None
-        } else {
-            Some(v.clone())
-        };
+        if current == Some(v.as_str()) {
+            return None;
+        }
+        // The rule has a second half, found by testing it: a recorded value is
+        // also never replaced by a *less precise* one. A bare `package.json`
+        // detects `node`; a manifest already recording `node@22` knows more
+        // than the disk currently says, because an earlier sync saw a lockfile
+        // or a person typed it. Overwriting is still information loss even
+        // though the incoming value is not empty.
+        if let Some(existing) = current
+            && existing.starts_with(&format!("{v}@"))
+        {
+            notes.kept.push(field.to_owned());
+            return None;
+        }
+        return Some(v.clone());
     }
 
     // Nothing detected. An *empty* field with nothing to fill it is not worth

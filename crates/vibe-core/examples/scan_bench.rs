@@ -69,11 +69,23 @@
 //! Eviction decays: only the first trial after a busy period is genuinely cold,
 //! so trust trial 1 and discard the rest.
 //!
-//! **Shapes this corpus still omits**, each of which a real `~/projects` has:
-//! a repository with >1000 refs (the one shape measured to break the budget), a
-//! git worktree, a `.gitignore` in every project (~+40% walk cost), and
-//! realistic source-file volume. Walk cost is ~5% of the total, so the last two
-//! move the number by ~2% — but the first is not a rounding error.
+//! **Shapes this corpus omits, ranked by how much they bias the number** —
+//! written down so the ranking does not have to be rediscovered:
+//!
+//! 1. **A repository with >1000 refs. Biases optimistic, materially.** Hits the
+//!    git subprocesses, which are ~96% of scan time. This is the one shape
+//!    measured to break the budget outright.
+//! 2. **A git worktree or submodule. Biases optimistic.** Also hits the git
+//!    calls. Before worktrees were handled, such a project cost ~1 ms instead
+//!    of ~14 — so a corpus containing them looked *faster* while being *more*
+//!    wrong.
+//! 3. **A `.gitignore` in every project. Immaterial** (~+40% of walk cost, and
+//!    walk is ~5% of the total, so ~+2%).
+//! 4. **Realistic source-file volume. Immaterial**, same arithmetic, and
+//!    confirmed by the noise-volume finding above.
+//!
+//! Both material gaps are in the same place: anything touching `git` moves the
+//! number, anything touching the walk does not.
 //!
 //! CI cannot keep a wall-clock budget at all — a shared runner's drift exceeds
 //! what is being measured. `tests/scan_budget.rs` guards the *cause* instead:

@@ -359,3 +359,57 @@ fn a_write_plan_serialises_but_cannot_be_deserialised() {
     // Verified by uncommenting it and observing E0277. Anyone who adds the
     // derive to make something convenient will find this comment first.
 }
+
+/// Every plan constructor must produce absolute paths.
+///
+/// `plan_sync` and `plan_archive` shipped building plans rooted at whatever
+/// relative path the caller passed, and `validate_path` refused them at apply
+/// time — the guard caught a real bug three phases of review had not. This
+/// asserts the property in CI so the next constructor is caught before a user
+/// sees it.
+#[test]
+fn every_plan_constructor_produces_absolute_paths() {
+    let dir = tmp();
+    let root = root_of(&dir);
+    let previous = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(&root).expect("chdir");
+
+    let registry =
+        Registry::open(Config::default()).with_runner(std::sync::Arc::new(vibe_core::NoRunner));
+
+    // Relative paths throughout, which is what a user typing `vibe sync foo`
+    // actually produces.
+    let plan = registry
+        .plan_new(&NewRequest::new("proj").with_parent_dir("."))
+        .expect("plan_new");
+    assert!(plan.root.is_absolute(), "plan_new root: {:?}", plan.root);
+    registry.apply(&plan, &NullReporter).expect("apply");
+
+    let (sync_plan, _) = registry
+        .plan_sync(std::path::Path::new("proj"), &NullReporter)
+        .expect("plan_sync");
+    assert!(
+        sync_plan.root.is_absolute(),
+        "plan_sync root: {:?}",
+        sync_plan.root
+    );
+
+    let archive_plan = registry
+        .plan_archive(std::path::Path::new("proj"), true)
+        .expect("plan_archive");
+    assert!(
+        archive_plan.root.is_absolute(),
+        "plan_archive root: {:?}",
+        archive_plan.root
+    );
+    // And it applies, which is the thing that was actually broken.
+    registry.apply(&archive_plan, &NullReporter).expect("apply");
+
+    for plan in [&sync_plan, &archive_plan] {
+        for op in &plan.ops {
+            assert!(op.path().is_absolute(), "op path: {:?}", op.path());
+        }
+    }
+
+    std::env::set_current_dir(previous).expect("restore cwd");
+}

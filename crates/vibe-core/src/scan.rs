@@ -222,7 +222,7 @@ pub(crate) fn scan(req: &ScanRequest, exec: &dyn ProcessRunner, rep: &dyn Report
                             cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
                             break;
                         }
-                        let scanned = scan_one(dir, detectors, exec, req.per_project_budget);
+                        let scanned = scan_one(dir, detectors, exec, req.per_project_budget, rep);
                         rep.event(Event::ProjectScanned {
                             path: scanned.path.clone(),
                         });
@@ -272,6 +272,7 @@ fn scan_one(
     detectors: &[Box<dyn crate::detect::Detector>],
     exec: &dyn ProcessRunner,
     budget: Option<Duration>,
+    rep: &dyn Reporter,
 ) -> ScannedProject {
     let index = FileIndex::build(dir);
     let reads = ReadCache::new(dir);
@@ -284,13 +285,26 @@ fn scan_one(
     let manifest_file = manifest_path(dir);
     let (has_manifest, name, status, archived, manifest_error) = if manifest_file.is_file() {
         match ManifestDocument::open(&manifest_file).and_then(|d| d.parse()) {
-            Ok(m) => (
-                true,
-                m.project.name,
-                m.project.status.to_string(),
-                m.project.archived,
-                None,
-            ),
+            Ok(m) => {
+                // One diagnostic per manifest, because core does not know what
+                // a "run" is. The caller coalesces them: a scan over thirty
+                // forward-versioned manifests must print one line, not thirty
+                // (ADR-0002 §3).
+                if m.schema_version.compat() == crate::manifest::Compat::MinorNewer {
+                    rep.event(Event::Diagnostic(
+                        crate::report::Diagnostic::warn(crate::report::W_SCHEMA_MINOR_NEWER)
+                            .with_subject(display_path(&manifest_file).0)
+                            .with_param("found", m.schema_version.to_string()),
+                    ));
+                }
+                (
+                    true,
+                    m.project.name,
+                    m.project.status.to_string(),
+                    m.project.archived,
+                    None,
+                )
+            }
             Err(e) => (
                 true,
                 dir_name(dir),

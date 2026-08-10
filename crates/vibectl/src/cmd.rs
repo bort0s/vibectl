@@ -32,6 +32,7 @@ pub fn list(args: &ListArgs) -> Result<Exit, CoreError> {
 
     // A project whose manifest could not be read is a partial result, not a
     // failure: the registry was read and the rest is fine.
+    rep.flush();
     if report.unreadable() > 0 {
         return Ok(Exit::Partial);
     }
@@ -81,6 +82,9 @@ pub fn sync(args: &SyncArgs) -> Result<Exit, CoreError> {
     if !args.format.json {
         let _ = output::write_sync_notes(&mut stderr, &notes);
     }
+    // One line per distinct diagnostic, once per run. Core emits one per
+    // manifest because it does not know what a run is.
+    rep.flush();
 
     if args.write.dry_run {
         if !args.format.json {

@@ -17,7 +17,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use vibe_core::agents::{AgentState, GitOp, GitUrl, StoreConfig, install_path, lock};
-use vibe_core::{Config, FileOp, NullReporter, Registry, SchemaVersion};
+use vibe_core::{
+    Config, FileOp, NullReporter, ProcessRunner, Registry, SchemaVersion, SystemRunner,
+};
 
 const TODAY: &str = "2026-08-10";
 
@@ -179,6 +181,119 @@ fn a_hostile_url_cannot_become_an_option_even_if_validation_were_bypassed() {
     assert!(
         sep < url_at,
         "the separator must precede the user-controlled value: {argv:?}"
+    );
+}
+
+/// Every hook that could plausibly fire on a fetch or a checkout.
+const HOOKS_THAT_COULD_FIRE: &[&str] = &[
+    "post-update",
+    "pre-receive",
+    "update",
+    "post-receive",
+    "post-checkout",
+    "post-commit",
+    "pre-push",
+    "proc-receive",
+    "reference-transaction",
+    "post-index-change",
+];
+
+/// The hooks that have fired so far, by name.
+fn fired(markers: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(markers)
+        .expect("marker directory")
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// **The negative control for the local-path form of rule 4.**
+///
+/// Rule 4 permits an absolute local path, which means `git clone` gets pointed
+/// at a repository this crate did not create. Rule 6 exists because
+/// `.git/hooks/post-commit` is execution, so "does cloning run the *source*
+/// repository's hooks?" is the next question, and a reader who has just read
+/// rule 6 will assume the answer might be yes. ADR-0005 §10 rule 4 says it is
+/// no. This checks that rather than citing it, against whatever `git` the
+/// machine has — which on `ubuntu-latest` is the version the `ext::` hole was
+/// found on, so CI is where the claim gets confirmed rather than asserted.
+///
+/// **The positive control is the point.** Probes that never fire would make the
+/// negative half pass vacuously, and a clone that failed would leave exactly
+/// the same silence as a clone that ran no hooks. Both are the ADR-0002 §7
+/// failure — a guard that was never reached — so the probes are proved live and
+/// the clone is proved to have succeeded *before* silence is read as evidence.
+#[test]
+fn negative_control_cloning_a_local_repo_does_not_run_the_source_repos_hooks() {
+    if !git_available() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let markers = tmp.path().join("markers");
+    std::fs::create_dir_all(&markers).unwrap();
+
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    git(&src, &["init", "-q", "-b", "main"]);
+
+    // Forward slashes: this string goes into a shell script, and git-for-
+    // windows runs hooks through its own `sh`, which does not want backslashes.
+    let marker_dir = markers.to_string_lossy().replace('\\', "/");
+    for &hook in HOOKS_THAT_COULD_FIRE {
+        let script = format!("#!/bin/sh\ntouch \"{marker_dir}/{hook}\"\n");
+        let path = src.join(".git").join("hooks").join(hook);
+        std::fs::write(&path, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
+    // --- positive control: the probes are live ---------------------------
+    std::fs::write(src.join("a.txt"), "hi\n").unwrap();
+    git(&src, &["add", "-A"]);
+    git(&src, &["commit", "-qm", "seed"]);
+    let after_commit = fired(&markers);
+    assert!(
+        after_commit.iter().any(|h| h == "post-commit"),
+        "the hook probes never fired on an ordinary commit, so the silence \
+         after the clone below would prove nothing about cloning. Fix the \
+         probes rather than trusting the result: {after_commit:?}"
+    );
+
+    // --- the negative result ---------------------------------------------
+    for entry in std::fs::read_dir(&markers).unwrap() {
+        std::fs::remove_file(entry.unwrap().path()).unwrap();
+    }
+
+    let dest = tmp.path().join("clone");
+    let url = GitUrl::parse(&src.to_string_lossy().replace('\\', "/"))
+        .expect("an absolute local path is a rule 4 URL");
+    let out = SystemRunner::default()
+        .run_git_op(&GitOp::Clone {
+            url,
+            dest: dest.clone(),
+        })
+        .expect("the clone runs");
+
+    // Asserted, never assumed. A clone that failed leaves no markers and looks
+    // identical to the result being claimed.
+    assert!(out.success(), "the clone itself failed: {out:?}");
+    assert!(
+        dest.join("a.txt").is_file(),
+        "the clone produced no working tree, so nothing was exercised: {out:?}"
+    );
+
+    let after_clone = fired(&markers);
+    assert!(
+        after_clone.is_empty(),
+        "cloning a local repository executed that repository's hooks: \
+         {after_clone:?}. ADR-0005 §10 rule 4 records that it does not, and \
+         rule 6 exists because a hook in a repository we did not write is \
+         execution. If this fails, the ADR is wrong, not this test."
     );
 }
 

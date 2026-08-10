@@ -19,7 +19,15 @@ path = "src/main.rs"
 [dependencies]
 vibe-core = { workspace = true }
 
+clap = { workspace = true }
+serde_json = { workspace = true }
+
+# `anyhow` is deliberately not declared yet. ADR-0001 §4 reserves it for this
+# crate, but every P1 command returns a single error type, so adding it now
+# would be an unused dependency waiting to become a habit.
+
 [dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

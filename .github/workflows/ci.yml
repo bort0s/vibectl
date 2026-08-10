@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least privilege: nothing here writes to the repo, publishes packages,
+# or touches the API beyond reading the checked-out source.
+permissions:
+  contents: read
+
+# A new push to the same branch/PR makes the in-flight run obsolete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Incremental compilation is pure overhead on ephemeral runners: it produces
+  # large artifacts that bloat the cache and are never reused across machines.
+  CARGO_INCREMENTAL: 0
+  # Registry/toolchain fetches are the flakiest part of Rust CI.
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
+  RUST_BACKTRACE: short
+  # NOTE: RUSTFLAGS is deliberately NOT set to "-D warnings" globally.
+  # Denying warnings is the lint job's contract (see below). Applying it to the
+  # test matrix would turn an unused import into a red "Tests / windows-latest"
+  # check, which misreports what actually broke.
+
+jobs:
+  fmt:
+    name: Format (rustfmt)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable, rustfmt)
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt
+          # rustfmt never compiles the crate graph, so there is nothing worth
+          # caching and no cargo registry to warm.
+          cache: false
+
+      - name: Check formatting
+        # Formatting is byte-identical on every platform; running this once is
+        # sufficient. No --locked: rustfmt does not resolve dependencies.
+        run: cargo fmt --all --check
+
+  clippy:
+    name: Lint (clippy, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      # Belt and braces alongside `-- -D warnings`: this also catches plain
+      # rustc warnings emitted while building build scripts and proc-macro
+      # dependencies of the workspace.
+      RUSTFLAGS: -D warnings
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable, clippy)
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
+          cache: false
+
+      - name: Restore cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          # rust-cache already folds runner.os, the host triple, the rustc
+          # version and the Cargo.lock hash into the key, so caches can never
+          # leak across OSes. `shared-key` keeps every leg of this matrix in a
+          # namespace separate from the test matrix, whose target/ dir holds
+          # different artifacts (real rlibs vs. clippy metadata).
+          shared-key: clippy
+          key: ${{ matrix.os }}
+
+      - name: Run clippy
+        # --all-targets covers tests, benches and examples, not just the lib/bin.
+        # --locked fails loudly if Cargo.lock is stale or missing rather than
+        # silently resolving to newer dependencies than the committed lockfile.
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      # Cross-platform path handling is a hard constraint for this project, so
+      # a Linux failure must never cancel the Windows leg before it reports.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          # No extra components: the test job needs neither rustfmt nor clippy.
+          cache: false
+
+      - name: Restore cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test
+          key: ${{ matrix.os }}
+
+      - name: Build tests
+        # Compiling first separates "it does not build on Windows" from
+        # "a test assertion failed on Windows" in the checks list.
+        run: cargo test --locked --workspace --all-features --no-run
+
+      - name: Run tests
+        run: cargo test --locked --workspace --all-features
+
+  # Single stable check to require in branch protection, so adding or removing
+  # a matrix leg never means editing the repository's protection rules.
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    needs: [fmt, clippy, test]
+    steps:
+      - name: Verify all required jobs succeeded
+        run: |
+          echo "fmt:    ${{ needs.fmt.result }}"
+          echo "clippy: ${{ needs.clippy.result }}"
+          echo "test:   ${{ needs.test.result }}"
+          test "${{ needs.fmt.result }}"    = "success" || exit 1
+          test "${{ needs.clippy.result }}" = "success" || exit 1
+          test "${{ needs.test.result }}"   = "success" || exit 1

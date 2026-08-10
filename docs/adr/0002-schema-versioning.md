@@ -345,6 +345,30 @@ Naming a program that cannot exist (`ext::vibe-nonexistent-helper-probe`) makes
 nothing needing to run or exist. Where an assertion genuinely cannot be made
 deterministic, it must **fail loudly when it could not run**, never pass quietly.
 
+**And a control must be paired: same input, enabling condition removed, hazard
+must be *absent*.** A control that only asserts a hazard is present is sensitive
+in one direction. It fires when the hazard exists, and it goes **quiet when the
+hazard gets worse** — which is the direction that matters.
+
+The same `ext::` case is the worked example. Asserting only that the transport
+runs *with* `protocol.ext.allow = always` in the per-user config leaves two
+things unestablished:
+
+1. **That the config is the enabling condition at all**, rather than something
+   merely present while the hole reproduced. Nothing tested the difference.
+2. **That the hole has not widened.** If a future `git` enabled `ext::` without
+   any config, the one-sided control would still pass — the hazard it asserts is
+   still there, only now reachable by more people. It would report green while
+   the thing it exists to watch got strictly worse.
+
+So the control runs the invocation twice, identical but for the enabling
+condition, and asserts the hazard appears in one and is **absent** in the other.
+That makes the premise a tested claim rather than an assumption, and makes the
+test sensitive in both directions: it fails if the hazard disappears *and* if it
+spreads. The general form — **assert the mechanism is present under the
+condition and absent without it** — applies to any control whose value depends
+on a precondition someone wrote down once and nobody has checked since.
+
 The corollary, from `W_SCHEMA_MINOR_NEWER`: a warning defined and never emitted
 is a policy that exists only in this document. A test asserting a diagnostic is
 reported must check that something *produces* it, not merely that a consumer

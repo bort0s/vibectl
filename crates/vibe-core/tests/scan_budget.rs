@@ -197,8 +197,46 @@ fn a_git_worktree_is_recognised_as_a_repository() {
         "a worktree shares the repository's history: {:?}",
         p.detection.last_commit.reason()
     );
-    assert_eq!(
-        p.detection.branch.value().map(String::as_str),
-        Some("feature")
-    );
+}
+
+/// The `%D` regression, guarded structurally.
+///
+/// `git log -1 --format=%cI%n%D` looks like a free way to get the branch along
+/// with the commit date. It is not: `%D` is the ref decoration, so git loads
+/// and matches every ref in the repository. Measured on this machine, that took
+/// a flat 44ms call to 439ms at 2,000 refs and 4,567ms at 50,000 — one project
+/// costing twice the budget for fifty. A repository reaches thousands of refs
+/// simply by having a few hundred remote branches.
+///
+/// Wall-clock cannot catch this in CI, and a corpus of fresh repositories has
+/// no refs to expose it. So the format string itself is the assertion.
+#[test]
+fn no_git_call_uses_a_ref_count_dependent_format() {
+    if !git_available() {
+        eprintln!("skipping: git is not on PATH");
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    make_repo(dir.path(), "repo");
+
+    let runner = std::sync::Arc::new(CountingRunner::new());
+    let registry = Registry::open(Config::default()).with_runner(runner.clone());
+    let _ = registry.scan(&ScanRequest::new(dir.path()), &NullReporter);
+
+    let argv = runner
+        .argv
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert!(!argv.is_empty(), "the scan should have used git");
+
+    for call in &argv {
+        for arg in call {
+            assert!(
+                !arg.contains("%D") && !arg.contains("%d"),
+                "ref-decoration formats grow with ref count and must not be used: {call:?}"
+            );
+        }
+    }
 }

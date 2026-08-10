@@ -9,7 +9,14 @@
 //! repository it is reading, and the tests in `scan_never_writes.rs` compare
 //! `.git` before and after.
 //!
-//! `dirty` is deliberately **not** detected, a deviation from ADR-0003 §7.
+//! `branch` and `dirty` are deliberately **not** detected, a deviation from
+//! ADR-0003 §7. Neither appears in the manifest schema nor in the columns
+//! `vibe list` shows, so neither has a consumer in v1 — and both are expensive:
+//! `git status` walks the working tree, and every way of getting the branch
+//! costs either a third subprocess or a ref-count-dependent format. They can
+//! return the day a command actually displays them.
+//!
+//! The original note on `dirty`:
 //! `git status` is the most expensive call we could make — it walks the working
 //! tree — and the flag appears in neither the manifest schema nor the columns
 //! `vibe list` shows, so it was pure cost. It can return the day a command
@@ -42,11 +49,7 @@ impl Detector for GitRepo {
     }
 
     fn produces(&self) -> &'static [FieldPath] {
-        &[
-            FieldPath::RepoRemote,
-            FieldPath::GitBranch,
-            FieldPath::GitLastCommit,
-        ]
+        &[FieldPath::RepoRemote, FieldPath::GitLastCommit]
     }
 
     fn detect(&self, ctx: &DetectCtx<'_>) -> Result<Vec<Finding>, DetectError> {
@@ -82,53 +85,49 @@ impl Detector for GitRepo {
             }
         }
 
-        // One call for both the commit date and the branch. `%D` is the ref
-        // decoration — "HEAD -> main, origin/main" — so the branch comes free
-        // with the timestamp instead of costing a second `rev-parse`.
+        // `--format=%cI` and nothing else. An earlier version folded branch
+        // detection in with `%cI%n%D` to save one ~17ms spawn — a bad trade
+        // that took two attempts to see. `%D` is the ref *decoration*, so git
+        // must load and match every ref in the repository to produce it:
         //
-        // This matters more than it looks. Process spawn is ~17ms on Windows;
-        // measured over 50 repositories, the git calls were 3.4s of a 3.5s
-        // scan. Every call removed is ~0.85s off the budget.
-        if let Ok(o) = ctx.git(&["--no-optional-locks", "log", "-1", "--format=%cI%n%D"]) {
-            if o.success() {
-                let mut lines = o.trimmed().lines();
-                if let Some(date) = lines.next().map(str::trim).filter(|d| !d.is_empty()) {
-                    out.push(text_finding(
-                        FieldPath::GitLastCommit,
-                        date,
-                        Confidence::Certain,
-                        Specificity::Manifest,
-                        Evidence::from_command(&o.argv, date),
-                        GIT_ID,
-                    ));
-                }
-                if let Some(branch) = lines.next().and_then(branch_from_decoration) {
-                    out.push(text_finding(
-                        FieldPath::GitBranch,
-                        &branch,
-                        Confidence::Certain,
-                        Specificity::Manifest,
-                        Evidence::from_command(&o.argv, branch.clone()),
-                        GIT_ID,
-                    ));
-                }
+        //     refs      %cI      %cI%n%D
+        //        0    44 ms        37 ms
+        //     2000    44 ms       439 ms
+        //   50000     44 ms      4567 ms   (packed; 7354 ms loose)
+        //
+        // Measured on this machine. A repository reaches thousands of refs by
+        // having a few hundred remote branches, since `git fetch` creates one
+        // ref per branch. At 50k refs a single project cost more than twice the
+        // whole 2s budget for fifty. The flat call was replaced by one that
+        // grows with something the user controls and we do not.
+        //
+        // `--no-optional-locks` does not help here; it was measured too.
+        let log = ctx.git(&["--no-optional-locks", "log", "-1", "--format=%cI"]);
+
+        // Propagated, not swallowed. `if let Ok(o)` here discarded a timeout,
+        // and the field then merged as `no_evidence` — "we looked and there is
+        // nothing to say" — when what happened was "we ran out of time". That
+        // is exactly the substitution ADR-0003 §8 exists to forbid, and the
+        // `%D` cost above is what made it reachable on a real repository.
+        if let Err(e @ (DetectError::NotAttempted { .. } | DetectError::Timeout)) = &log {
+            return Err(e.clone());
+        }
+
+        if let Ok(o) = log {
+            if o.success() && !o.trimmed().is_empty() {
+                out.push(text_finding(
+                    FieldPath::GitLastCommit,
+                    o.trimmed(),
+                    Confidence::Certain,
+                    Specificity::Manifest,
+                    Evidence::from_command(&o.argv, o.trimmed()),
+                    GIT_ID,
+                ));
             }
         }
 
         Ok(out)
     }
-}
-
-/// The local branch from a `%D` ref decoration.
-///
-/// `HEAD -> main, origin/main, tag: v1` yields `main`. A detached HEAD yields
-/// nothing, which is correct: there is no branch to report.
-fn branch_from_decoration(decoration: &str) -> Option<String> {
-    decoration
-        .split(',')
-        .map(str::trim)
-        .find_map(|part| part.strip_prefix("HEAD -> "))
-        .map(str::to_owned)
 }
 
 /// `git@github.com:user/repo.git` and `https://github.com/user/repo.git` both

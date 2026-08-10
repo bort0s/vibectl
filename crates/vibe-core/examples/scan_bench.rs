@@ -7,15 +7,49 @@
 //! developer's `~/projects`: 20 Node, 10 Rust, 8 Python, 6 Go, 4 PHP, 2
 //! polyglot. Each is a real git repository with one commit. Each carries the
 //! noise directory its ecosystem actually produces — `node_modules`, `target`,
-//! `.venv`, `vendor` — because pruning those is most of what makes a scan fast,
-//! and a corpus without them measures nothing interesting.
+//! `.venv`, `vendor`.
 //!
-//! **Cache state.** Warm. The corpus is generated immediately before the run,
-//! so it is in the OS page cache. This is the honest case to optimise for —
-//! `vibe scan` is a command people re-run — and it is also the *faster* case,
-//! so it must be reported as such rather than passed off as the general number.
-//! A first-ever cold scan of a real `~/projects` will be slower and is not
-//! measured here.
+//! **Correction, recorded so nobody reads the corpus size as evidence:** the
+//! noise volumes measure nothing. Stripping all 20,478 noise files — leaving 22
+//! files per project — changed the median by less than the run-to-run spread.
+//! The prune set works well enough that walking is invisible beside spawning
+//! `git`: with no `.git` present at all, 50 projects index in **34 ms**. The
+//! noise is kept because a corpus without it would be unrepresentative, not
+//! because it is load-bearing for the number.
+//!
+//! **The practical ceiling is ~150 projects.** Cost is ~13.2 ms/project and
+//! stays linear to at least 500, because the bottleneck is a fixed per-repo
+//! subprocess cost rather than anything that grows with N. If a user ever
+//! reports a slow scan, project count is the first number to check.
+//!
+//! **Cache state.** Warm, and **cold is UNMEASURED**. The corpus is generated
+//! immediately before the run, so it is in the OS page cache. Warm is the
+//! honest case to optimise for — `vibe scan` is a command people re-run — but
+//! it is also the faster one, and dropping the page cache on Windows needs
+//! administrator rights this was not run with. A first-ever cold scan will be
+//! slower by an unknown amount. Do not let the warm number stand in for both.
+//!
+//! **Protocol.** Three runs, min/max, is retired — it does not survive contact
+//! with this machine. The same binary and corpus produced a 583 ms median in
+//! one sitting and a 684 ms median in another, differing only in what else was
+//! running, with the spread widening 3.6x. Within-sitting variance is small;
+//! *between*-sitting drift is several times larger, and n=3 samples one cluster
+//! and reports it as the number.
+//!
+//! An acceptable protocol for any future claim:
+//!
+//! - At least 11 runs in one sitting, reporting **median and p90**, never a
+//!   single best case.
+//! - Repeat in a second sitting and report both medians. A claim that does not
+//!   survive the gap between sittings is noise.
+//!   `--runs N` sets the sample size.
+//! - State the machine, the cache state, and the corpus alongside the number,
+//!   every time. A number without those three is not comparable to anything.
+//!
+//! CI cannot keep a wall-clock budget at all — a shared runner's drift exceeds
+//! what is being measured. `tests/scan_budget.rs` guards the *cause* instead:
+//! at most two `git` invocations per repository, which is ~96% of scan time and
+//! is deterministic.
 //!
 //! **Hardware.** Recorded by the caller, not by this program. Numbers without a
 //! machine attached are not comparable.
@@ -95,6 +129,12 @@ fn main() {
         .and_then(|i| args.get(i + 1))
         .and_then(|v| v.parse().ok())
         .unwrap_or(50);
+    let runs: usize = args
+        .iter()
+        .position(|a| a == "--runs")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(11);
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let root = tmp.path().to_path_buf();
@@ -116,17 +156,14 @@ fn main() {
     };
     let req = ScanRequest::new(&root);
 
-    // Three runs. The first is reported separately because it is the one a
-    // user actually experiences after `cd`-ing somewhere new; the later ones
-    // show whether anything is being cached that should not be.
     let mut timings = Vec::new();
-    for run in 1..=3 {
+    for run in 1..=runs {
         let started = Instant::now();
         let report = registry.scan(&req, &NullReporter);
         let elapsed = started.elapsed();
         timings.push(elapsed);
         println!(
-            "run {run}: {:>7.1}ms   {} projects   {} suggestions   {} unreadable",
+            "run {run:>3}: {:>7.1}ms   {} projects   {} suggestions   {} unreadable",
             elapsed.as_secs_f64() * 1000.0,
             report.projects.len(),
             report.suggestion_count(),
@@ -139,24 +176,31 @@ fn main() {
         );
     }
 
-    let best = timings.iter().min().expect("three runs");
-    let worst = timings.iter().max().expect("three runs");
+    // Median and p90, not best-of-N. A best case is the one number guaranteed
+    // not to describe what a user experiences.
+    let mut sorted: Vec<f64> = timings.iter().map(|d| d.as_secs_f64() * 1000.0).collect();
+    sorted.sort_by(f64::total_cmp);
+    let median = sorted[sorted.len() / 2];
+    let p90 = sorted[((sorted.len() * 9) / 10).min(sorted.len() - 1)];
+    let min = sorted[0];
+    let max = sorted[sorted.len() - 1];
+
     println!();
     println!(
-        "best {:.1}ms / worst {:.1}ms for {projects} projects",
-        best.as_secs_f64() * 1000.0,
-        worst.as_secs_f64() * 1000.0
+        "n={} projects={projects}  min {min:.0}  med {median:.0}  p90 {p90:.0}  max {max:.0} (ms)",
+        sorted.len()
     );
     println!(
-        "budget: 2000ms for 50 projects -> {}",
-        if worst.as_millis() <= 2000 && projects >= 50 {
-            "MET (worst case, warm cache)"
+        "budget 2000ms/50 projects -> {}   [warm cache; cold UNMEASURED]",
+        if p90 <= 2000.0 && projects >= 50 {
+            "MET at p90"
         } else if projects < 50 {
             "n/a (fewer than 50 projects)"
         } else {
             "MISSED"
         }
     );
+    println!("repeat in a second sitting and compare medians before believing this");
 
     if keep {
         let kept = std::env::temp_dir().join("vibe-bench-corpus");

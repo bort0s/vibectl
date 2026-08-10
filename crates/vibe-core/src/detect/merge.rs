@@ -51,7 +51,6 @@ pub struct Detection {
     pub remote: Detected<String>,
     pub visibility: Detected<String>,
     pub deploy_url: Detected<String>,
-    pub branch: Detected<String>,
     pub last_commit: Detected<String>,
     /// Found, but not written: weak values and unresolved conflicts.
     pub suggestions: Vec<Suggestion>,
@@ -86,7 +85,6 @@ pub fn merge(findings: &[Finding], failures: &[DetectorFailure]) -> Detection {
     let remote = scalar(FieldPath::RepoRemote);
     let visibility = scalar(FieldPath::RepoVisibility);
     let deploy_url = scalar(FieldPath::DeployUrl);
-    let branch = scalar(FieldPath::GitBranch);
     let last_commit = scalar(FieldPath::GitLastCommit);
     let frameworks = resolve_set(FieldPath::StackFramework, findings, &mut suggestions);
     let services = resolve_set(FieldPath::StackService, findings, &mut suggestions);
@@ -123,7 +121,6 @@ pub fn merge(findings: &[Finding], failures: &[DetectorFailure]) -> Detection {
         remote,
         visibility,
         deploy_url,
-        branch,
         last_commit,
         suggestions,
         unreadable,

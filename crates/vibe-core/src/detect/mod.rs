@@ -40,7 +40,6 @@ pub enum FieldPath {
     RepoVisibility,
     DeployUrl,
     DeployEnvRequired,
-    GitBranch,
     GitLastCommit,
 }
 
@@ -68,13 +67,12 @@ impl FieldPath {
             | FieldPath::RepoRemote
             | FieldPath::RepoVisibility
             | FieldPath::DeployUrl
-            | FieldPath::GitBranch
             | FieldPath::GitLastCommit => MergeKind::Scalar,
         }
     }
 
     /// Every field, for exhaustive iteration in tests and reports.
-    pub const ALL: [FieldPath; 10] = [
+    pub const ALL: [FieldPath; 9] = [
         FieldPath::ProjectDescription,
         FieldPath::StackRuntime,
         FieldPath::StackFramework,
@@ -83,7 +81,6 @@ impl FieldPath {
         FieldPath::RepoVisibility,
         FieldPath::DeployUrl,
         FieldPath::DeployEnvRequired,
-        FieldPath::GitBranch,
         FieldPath::GitLastCommit,
     ];
 }

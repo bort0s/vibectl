@@ -163,28 +163,40 @@ pub(crate) fn scan(req: &ScanRequest, exec: &dyn ProcessRunner, rep: &dyn Report
     // is nothing to optimise about that except overlapping it.
     //
     // `std::thread::scope` rather than rayon: the pool is bounded, the work
-    // items are coarse, and this avoids adding a dependency for a fixed-size
-    // fan-out. Results are re-sorted afterwards, so output order does not
-    // depend on which thread finished first.
+    // items are coarse, and this avoids a dependency for a fixed-size fan-out.
+    //
+    // Work is pulled from a shared cursor rather than split into static chunks.
+    // Static chunking was measured and it is not safe here: four heavy
+    // repositories among fifty trivial ones cost a 747ms median when they
+    // landed in different chunks and 1177ms (max 1936ms, against a 2000ms
+    // budget) when they landed in the same one. Nothing differed but their
+    // names.
+    //
+    // And clustering is the *likely* arrangement, not the unlucky one, because
+    // `dirs` is sorted by path and related projects share a prefix — a client's
+    // `acme-api`, `acme-web`, `acme-worker` sort adjacently and tend to be
+    // similar in size. A cursor makes the distribution irrelevant: a thread
+    // that draws a monorepo simply takes fewer items.
     let threads = std::thread::available_parallelism()
         .map_or(4, std::num::NonZeroUsize::get)
         .clamp(1, 8);
-    let chunk_size = dirs.len().div_ceil(threads.max(1)).max(1);
 
-    let cancelled_at = std::sync::atomic::AtomicUsize::new(usize::MAX);
+    let cursor = std::sync::atomic::AtomicUsize::new(0);
+    let cancelled = std::sync::atomic::AtomicBool::new(false);
     let mut collected: Vec<(usize, ScannedProject)> = std::thread::scope(|scope| {
-        let handles: Vec<_> = dirs
-            .chunks(chunk_size)
-            .enumerate()
-            .map(|(chunk_index, chunk)| {
+        let handles: Vec<_> = (0..threads)
+            .map(|_| {
                 let detectors = &detectors;
-                let cancelled_at = &cancelled_at;
+                let cursor = &cursor;
+                let cancelled = &cancelled;
+                let dirs = &dirs;
                 scope.spawn(move || {
-                    let mut out = Vec::with_capacity(chunk.len());
-                    for (offset, dir) in chunk.iter().enumerate() {
-                        let index = chunk_index * chunk_size + offset;
+                    let mut out = Vec::new();
+                    loop {
+                        let index = cursor.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(dir) = dirs.get(index) else { break };
                         if rep.should_cancel() {
-                            cancelled_at.fetch_min(index, std::sync::atomic::Ordering::Relaxed);
+                            cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
                             break;
                         }
                         let scanned = scan_one(dir, detectors, exec, req.per_project_budget);
@@ -209,13 +221,12 @@ pub(crate) fn scan(req: &ScanRequest, exec: &dyn ProcessRunner, rep: &dyn Report
     collected.sort_by_key(|(index, _)| *index);
     let projects: Vec<ScannedProject> = collected.into_iter().map(|(_, p)| p).collect();
 
-    let stopped_at = cancelled_at.load(std::sync::atomic::Ordering::Relaxed);
-    let outcome = if stopped_at == usize::MAX {
-        ScanOutcome::Completed
-    } else {
+    let outcome = if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
         ScanOutcome::Cancelled {
             after_projects: projects.len(),
         }
+    } else {
+        ScanOutcome::Completed
     };
 
     let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);

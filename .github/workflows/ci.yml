@@ -2,7 +2,22 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # Every branch, deliberately unfiltered. An allowlist of branch prefixes has
+    # exactly one failure mode — a branch nobody thought to list gets no CI at
+    # all — and that is the gap this closes: `feat/agent-store` was pushed,
+    # matched neither `main` nor a pull request, and ran nothing, which looks
+    # identical to passing. Silent non-verification is the expensive outcome
+    # here; runner-minutes on a scratch branch are not.
+    #
+    # `branches` (rather than omitting the filter) still excludes tag pushes, so
+    # P7 cutting a release tag from an already-verified commit does not re-run
+    # the whole matrix for nothing.
+    #
+    # A branch that later opens a PR is built twice, once per event. That is
+    # accepted rather than fixed: suppressing it needs a condition on every job,
+    # and the duplicate is at worst wasteful, while the alternative failure —
+    # skipping a run that mattered — is the one being designed out.
+    branches: ['**']
   pull_request:
     branches: [main]
 
@@ -11,12 +26,17 @@ on:
 permissions:
   contents: read
 
-# A new push to the same PR makes the in-flight run obsolete. Pushes to main
+# A new push to the same ref makes the in-flight run obsolete. Pushes to main
 # are NOT cancelled: P7 cuts releases from main, and a commit whose CI was
 # cancelled by the next push would sit on main permanently unverified.
+#
+# Keyed on the ref rather than the event, because feature branches now trigger
+# pushes too and the reasoning that applied to a PR applies to them unchanged:
+# superseded runs are waste everywhere except main, where the point is that
+# every commit keeps its own verdict.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   CARGO_TERM_COLOR: always

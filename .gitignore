@@ -1,0 +1,19 @@
+# Build artifacts
+/target/
+
+# Cargo.lock IS committed — this workspace ships a binary.
+
+# Editor / OS noise
+*.rs.bk
+*.pdb
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# insta (P4) leaves these behind on a failed snapshot review
+*.snap.new
+
+# Local agent tooling — third-party agent definitions, not part of this project.
+# Remove this line if you decide to vendor them into the public repo.
+.claude/

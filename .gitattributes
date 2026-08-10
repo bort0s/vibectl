@@ -1,14 +1,18 @@
-# Normalize everything to LF in the repository, regardless of contributor OS.
-#
-# This is not cosmetic. Two things depend on it:
-#   - `cargo fmt --check` in CI compares against LF-formatted output.
-#   - insta snapshot tests (P4) would otherwise produce CRLF-vs-LF diffs that
-#     fail only on the Windows leg of the matrix.
+# Normalize text files to LF in the repository, regardless of contributor OS.
+# `cargo fmt --check` in CI compares against LF-formatted output, so a CRLF
+# checkout on Windows would fail the format job for reasons unrelated to code.
 * text=auto eol=lf
 
-# Snapshots and fixtures are compared byte-for-byte; never let git rewrite them.
-*.snap    -text
-*.snap.new -text
+# Snapshots are compared byte-for-byte, so git must not rewrite them in either
+# direction. This is deliberately NOT the eol=lf rule above: insta writes \n on
+# every platform, and the Windows CI leg is what catches a snapshot that
+# somehow acquired CRLF. Byte-exactness is worth more here than auto-repair.
+*.snap -text
+
+# Windows batch files are the one thing that genuinely breaks with LF —
+# cmd.exe mis-parses `goto` and labels. Relevant once P7 adds release scripts.
+*.bat text eol=crlf
+*.cmd text eol=crlf
 
 # Binary types git should not try to diff or normalize.
 *.png binary

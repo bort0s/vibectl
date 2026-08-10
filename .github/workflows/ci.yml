@@ -11,10 +11,12 @@ on:
 permissions:
   contents: read
 
-# A new push to the same branch/PR makes the in-flight run obsolete.
+# A new push to the same PR makes the in-flight run obsolete. Pushes to main
+# are NOT cancelled: P7 cuts releases from main, and a commit whose CI was
+# cancelled by the next push would sit on main permanently unverified.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -25,10 +27,15 @@ env:
   CARGO_NET_RETRY: 10
   RUSTUP_MAX_RETRIES: 10
   RUST_BACKTRACE: short
-  # NOTE: RUSTFLAGS is deliberately NOT set to "-D warnings" globally.
-  # Denying warnings is the lint job's contract (see below). Applying it to the
-  # test matrix would turn an unused import into a red "Tests / windows-latest"
-  # check, which misreports what actually broke.
+  # RUSTFLAGS is deliberately NOT set to "-D warnings" globally: denying
+  # warnings is the lint job's contract, and applying it to the test matrix
+  # would turn an unused import into a red "Test (windows-latest)" check that
+  # misreports what actually broke.
+  #
+  # Note that this requires `rustflags: ""` on every setup-rust-toolchain step.
+  # That action defaults its `rustflags` input to "-D warnings" and exports it
+  # to $GITHUB_ENV whenever RUSTFLAGS is not already set, so omitting the input
+  # would silently give the test matrix the strictness this comment disclaims.
 
 jobs:
   fmt:
@@ -47,6 +54,7 @@ jobs:
           # rustfmt never compiles the crate graph, so there is nothing worth
           # caching and no cargo registry to warm.
           cache: false
+          rustflags: ""
 
       - name: Check formatting
         # Formatting is byte-identical on every platform; running this once is
@@ -62,9 +70,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     env:
-      # Belt and braces alongside `-- -D warnings`: this also catches plain
-      # rustc warnings emitted while building build scripts and proc-macro
-      # dependencies of the workspace.
+      # Alongside `-- -D warnings`, this also catches plain rustc warnings
+      # emitted while building build scripts and proc-macro dependencies.
+      # Set here rather than via the toolchain action's input so there is
+      # exactly one source of RUSTFLAGS in this workflow.
       RUSTFLAGS: -D warnings
     steps:
       - name: Check out repository
@@ -76,6 +85,9 @@ jobs:
           toolchain: stable
           components: clippy
           cache: false
+          # See the workflow-level env comment. The job-level RUSTFLAGS above
+          # is authoritative; this stops the action contributing a second one.
+          rustflags: ""
 
       - name: Restore cargo cache
         uses: Swatinem/rust-cache@v2
@@ -93,6 +105,25 @@ jobs:
         # --locked fails loudly if Cargo.lock is stale or missing rather than
         # silently resolving to newer dependencies than the committed lockfile.
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+      - name: Verify vibe-core has no CLI or terminal dependencies
+        # ADR-0001 makes `vibe-core` reusable from a future Tauri frontend by
+        # keeping argument parsing and terminal rendering out of it. Clippy's
+        # print_stdout/print_stderr denials in lib.rs catch the `println!`
+        # family but nothing stops someone adding `clap` to the crate, so the
+        # dependency half of that boundary is asserted here instead.
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          set -euo pipefail
+          banned='^(clap|clap_builder|comfy-table|anyhow)$'
+          found=$(cargo tree --locked -p vibe-core -e normal --prefix none \
+                  | awk '{print $1}' | sort -u | grep -E "$banned" || true)
+          if [ -n "$found" ]; then
+            echo "::error::vibe-core must not depend on CLI/terminal crates. Found:"
+            echo "$found"
+            exit 1
+          fi
+          echo "vibe-core dependency boundary OK"
 
   test:
     name: Test (${{ matrix.os }})
@@ -114,6 +145,9 @@ jobs:
           toolchain: stable
           # No extra components: the test job needs neither rustfmt nor clippy.
           cache: false
+          # Required, not optional: without this the action exports
+          # RUSTFLAGS=-D warnings and a stray warning fails as a *test* failure.
+          rustflags: ""
 
       - name: Restore cargo cache
         uses: Swatinem/rust-cache@v2
@@ -135,7 +169,9 @@ jobs:
     name: CI
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    if: always()
+    # `always()` would also fire when the whole run is cancelled by
+    # cancel-in-progress, reporting a spurious failure on a superseded run.
+    if: ${{ !cancelled() }}
     needs: [fmt, clippy, test]
     steps:
       - name: Verify all required jobs succeeded

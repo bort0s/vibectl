@@ -164,11 +164,59 @@ something.
 file.** A crash leaves a file with no entry — unowned, untouched, reported — and
 never an entry pointing at a file that is gone.
 
-**Temp-plus-rename is sufficient here; a journal is not needed.** The two-file
-window is real, but every state it can produce is a state the ownership model
-already has a name for, and the recovery action is a command the user was
-running anyway. A journal would buy exactness in a case where the fallback is
-"run `add` again."
+**The window is contained, not closed — and the distinction matters.**
+
+Temp-plus-rename gives atomicity **per file**. It does nothing whatever about
+the gap between two atomic writes; if it did, the ordering argument above would
+have been unnecessary. Calling the window "atomic" would invite a later reader
+to assume it is closed and skip the state-table check on a new code path, which
+is exactly the assumption that turns a named state into an unhandled one.
+
+What makes the window acceptable is **containment**: every state it can produce
+is named in §5, and every one of them recovers by running a command the user was
+already running. That is the claim, and it has to be re-established for any new
+code path that writes both files — it does not follow from the writes being
+individually atomic.
+
+A journal would buy exactness where the fallback is "run `add` again", at the
+cost of a third on-disk format with its own versioning and its own corruption
+story. Not taken.
+
+#### 4a. Crash mid-`update`, across N agents
+
+`update` rewrites many agents. A crash partway leaves some at the new revision,
+some at the old, and the lockfile advanced for only some of them.
+
+**This is covered, and the reason is that `source_rev` is per-agent.** Each
+`[[agent]]` entry records the store commit *its own* content came from, so a
+half-finished update is not a corrupt state — it is N independent per-agent
+states, each of which is already in the table:
+
+- Agents rewritten before the crash: lock entry updated, file matches →
+  `Installed`, at the new revision.
+- Agents not yet reached: lock entry untouched, file matches its recorded hash →
+  `Installed`, at the old revision, and `status` reports them as outdated
+  because their `source_rev` differs from the store `HEAD`.
+- The agent being written at the moment of the crash: file written, entry not
+  yet updated (per §4's ordering) → its recorded hash no longer matches the file
+  → `Modified`.
+
+The first two need no action; re-running `update` completes them. Only the third
+needs the user, and it needs it for a good reason: from the lockfile alone,
+"we crashed halfway through writing this" and "the user edited it" are the same
+observation. Reporting it as `Modified` and refusing to overwrite without
+`--force` is the honest reading, and it errs toward not destroying an edit.
+
+**Had `source_rev` been a single store-wide field**, this would not work: a
+partially-advanced global revision would describe every agent inaccurately, and
+there would be no way to tell which ones had actually been rewritten. That is
+the reason the field is per-`[[agent]]` rather than in the file header, and it
+is worth stating because a store-wide field looks like the obvious
+normalisation.
+
+`update` writes agents in `name` order, so a crash leaves a prefix rather than
+an arbitrary subset — which makes a partial state easier for a human to reason
+about, though nothing depends on it.
 
 ### 5. The `status` state table
 

@@ -259,15 +259,18 @@ ADR fixes only the containment rule; P5 decides the mechanism, and if the answer
 turns out to be "the fallback cannot push", that is a graceful degradation the
 spec already permits.
 
-**4. Any URL reaching argv is validated against a scheme allowlist before
-construction.** Permit `https://`, `ssh://`, and the scp-like `user@host:path`
-form. Reject everything else — explicitly including any `<transport>::` form,
-`file://`, and any value beginning with `-`. Rules 1–3 filter argv *shape* and
-cannot cover a slot whose purpose is to carry a user string; this rule filters
-the value.
+**4. Any URL reaching argv is validated against a closed allowlist before
+construction.** Permit `https://`, `ssh://`, the scp-like `user@host:path` form,
+and an absolute local filesystem path. Reject everything else — explicitly
+including any `<transport>::` form, `file://`, and any value beginning with `-`.
+Rules 1–3 filter argv *shape* and cannot cover a slot whose purpose is to carry
+a user string; this rule filters the value.
 
 *Added 2026-08-10, after implementation found the hole. Rules 5 and 6 below were
-numbered 4 and 5 before this was inserted; every reference has been updated.*
+numbered 4 and 5 before this was inserted; every reference has been updated. The
+local-path form was folded into the rule on review the same day — it had been
+recorded as an implementation widening in ADR-0006 §9a, which is one place too
+far from the rule it widens.*
 
 The diagnosis matters more than the fix. **Rules 1–3 are all argv-shaped**: they
 decide which flags may appear and what the environment contains. The positional
@@ -301,6 +304,81 @@ future reader will otherwise assume was covered:
 
 **The allowlist is closed, not a denylist.** A denylist is precisely what would
 have missed this: nobody writes down a transport they have not heard of.
+
+**The one non-scheme form is an absolute local path.** ADR-0006 §1 promises the
+store works "against any host, or a local path, or a fork", and without a local
+path the store cannot be exercised without a network. The alternative — a mocked
+command runner — would leave every containment property in this section asserted
+against **strings** rather than against `git`, which is the same failure as the
+sabotaged guard in ADR-0002 §7: a negative control that never reaches the thing
+it is controlling for. So the local path is part of rule 4, not a liberty the
+implementation took against it.
+
+Two conditions make it statable as a rule, and both are checked in
+`vibe_core::url` before a `GitUrl` exists:
+
+1. **The path must be absolute.** A relative path is resolved by `git` against a
+   working directory *we* chose, so accepting one would make the meaning of a
+   user-supplied string depend on our own state. `/…` and `X:\…` / `X:/…` are
+   both recognised on both platforms: a Windows path arriving at a Unix build is
+   a configuration error for `git` to report, not a string to reinterpret — and
+   reading `C:\src\agents` as the scp-like host `C` is exactly that
+   reinterpretation, turning a local path into a network fetch.
+2. **The value must not begin with `-`.** This is rule 2's shape check applied at
+   *construction* rather than only at use, so a bad value is reported where the
+   config is read instead of from inside a clone. The `--` separator in the
+   constructed argv is the second lock, not the first.
+
+**`file://` stays rejected, and the asymmetry is not arbitrary.** A `file://` URL
+goes through `git`'s URL parsing and its transport machinery; a bare absolute
+path takes the local-clone path and is never parsed as a URL at all. The property
+worth keeping is that the *scheme* allowlist is closed, and a value that is
+unambiguously a filesystem path — absolute, with no `://` and no `::` — cannot
+name a transport whatever `git` goes on to do with it.
+
+**Cloning from a local repository does not execute that repository's hooks.**
+Written down because a reader will otherwise assume it might, and reasonably so:
+rule 6 below exists precisely because `.git/hooks/post-commit` is execution, and
+a local clone is the one case where a *foreign* `.git/` is in reach.
+
+> **Verified on git 2.45.1. Pending confirmation on 2.54, and not settled until
+> then.** The `ext::` hole above was found on 2.54; this is a **negative** result
+> about security-relevant behaviour, established nine minor versions behind it.
+> New hook types, new trigger points and changed local-clone semantics are
+> exactly the kind of change that would invalidate it silently, and a negative
+> result on an older `git` says nothing about a newer one. Verifying a security
+> property on a version older than the one the hole was found on is backwards,
+> so the finding is recorded with the version it was tested against rather than
+> stated flatly.
+
+The source repository was armed with every hook that could plausibly fire on a
+fetch or a checkout — `post-update`, `pre-receive`, `update`, `post-receive`,
+`post-checkout`, `post-commit`, `pre-push`, `proc-receive`,
+`reference-transaction`, `post-index-change` — each writing a marker file.
+
+- No marker appeared for a bare-path clone, for `file://`, or for `--no-local`.
+- **The probes are known-good rather than assumed so.** An ordinary commit in
+  that same repository fired the three of them a commit triggers
+  (`post-commit`, `post-index-change`, `reference-transaction`), which is what
+  establishes that the marker mechanism, the executable bit and the shebang all
+  work. A negative result from a probe that was never exercised proves nothing,
+  which is the ADR-0002 §7 failure in miniature.
+- `clone` does not copy `.git/hooks`. The new clone's hooks come from the
+  template directory, which is `.sample` files.
+- The nearest thing to an exception is `uploadpack.packObjectsHook`, and `git`
+  itself closes it: the value is **ignored when it is found in repository-level
+  config**, a documented safety measure against fetching from untrusted
+  repositories. Confirmed in both directions — the identical hook value fires
+  when set in global config and does not fire when set in the source
+  repository's own config.
+
+What a local clone *does* spawn is `git-upload-pack` in the source repository,
+which reads that repository's config. The guarantee is therefore about hooks, not
+about the foreign config going unread; it holds because the one key that would
+turn a fetch into an execution is the one `git` refuses to honour from there. The
+global-config half of that result is not a new hole — it is the same
+`~/.gitconfig` route recorded above, which `GIT_CONFIG_NOSYSTEM=1` does not
+cover and which "Deliberately not taken" below declines to close.
 
 **This rule does not belong to whichever feature hits it first.** The agent store
 is the first place a user-chosen URL reaches argv and will not be the last:

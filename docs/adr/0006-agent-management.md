@@ -361,19 +361,22 @@ and will not be the last. `[repo] remote` is next.
 The validator therefore lives in `vibe_core::url`, and every op that puts a URL
 in argv takes the validated type rather than a `String`.
 
-**One recorded widening of rule 4 as drafted.** Rule 4 permits `https://`,
-`ssh://` and the scp-like form. The implementation additionally permits an
-**absolute local filesystem path**, because §1 of this ADR promises the store
-works "against any host, or a local path, or a fork", and because without it the
-store cannot be tested at all without a network — which would leave every
-containment property asserted against strings rather than against `git`.
+**One widening, now folded into the rule rather than left beside it.** Rule 4 as
+first drafted permitted `https://`, `ssh://` and the scp-like form. It also
+permits an **absolute local filesystem path**, because §1 of this ADR promises
+the store works "against any host, or a local path, or a fork", and because
+without it the store cannot be tested at all without a network — which would
+leave every containment property asserted against strings rather than against
+`git`. Mocking the command runner would buy that same network independence and
+give up the only thing those tests are for: the assertions would land on strings
+this crate produced rather than on what `git` actually does with them.
 
-`file://` stays rejected, and the asymmetry is not arbitrary: a `file://` URL
-goes through `git`'s URL and transport machinery, while a bare absolute path
-takes the local-clone path and is never parsed as a URL. Keeping the *scheme*
-allowlist closed is the property worth having, and a value that is unambiguously
-a filesystem path — absolute, with no `://` and no `::` — cannot name a
-transport whatever `git` does with it.
+That is stated in ADR-0005 §10 rule 4 itself, not here, for the same reason the
+rest of the rule is — it is not this feature's exception to a general rule, it is
+part of the general rule. So are its two conditions (the path must be absolute;
+it must not begin with `-`), the reason `file://` stays rejected while a bare
+path does not, and the verified note that cloning from a local repository does
+not execute that repository's hooks.
 
 #### 9b. Store git operations do not travel inside a `WritePlan`
 

@@ -72,11 +72,22 @@ impl GitUrl {
     /// # The local-path case, and its asymmetry with `file://`
     ///
     /// Rule 4 as first drafted permitted only the two schemes and the scp-like
-    /// form. An absolute local path is permitted here as a deliberate, recorded
-    /// widening, because ADR-0006 §1 promises the store works "against any host,
-    /// or a local path, or a fork" — and because without it the store cannot be
-    /// tested at all without a network, which would leave every containment
-    /// property in this module asserted only against strings.
+    /// form. An absolute local path is permitted too, because ADR-0006 §1
+    /// promises the store works "against any host, or a local path, or a fork"
+    /// — and because without it the store cannot be tested at all without a
+    /// network, which would leave every containment property in this module
+    /// asserted only against strings.
+    ///
+    /// Two conditions are what make it statable as a rule rather than an
+    /// exception, and both are checked below:
+    ///
+    /// 1. **Absolute.** `git` resolves a relative path against a working
+    ///    directory *this crate* chose, so accepting one would make a user
+    ///    string's meaning depend on our own state.
+    /// 2. **Not beginning with `-`.** Rule 2's shape check, applied at
+    ///    construction rather than only at use, so a bad value is reported
+    ///    where the config is read instead of from inside a clone. The `--` in
+    ///    the constructed argv is the second lock, not the first.
     ///
     /// `file://` stays rejected, and the asymmetry is not arbitrary. A `file://`
     /// URL goes through `git`'s URL machinery and its transport layer; a bare
@@ -84,6 +95,13 @@ impl GitUrl {
     /// URL. Keeping the *scheme* allowlist closed is the property worth having,
     /// and a value that is unambiguously a filesystem path — absolute, with no
     /// `://` and no `::` — cannot name a transport whatever `git` does with it.
+    ///
+    /// Cloning from a local repository does **not** execute that repository's
+    /// hooks — recorded in ADR-0005 §10 rule 4, because rule 6 makes the
+    /// opposite a reasonable thing for a reader to assume. Verified on git
+    /// 2.45.1 and **pending confirmation on 2.54**: it is a negative result
+    /// about security-relevant behaviour, established on an older `git` than
+    /// the one the `ext::` hole was found on.
     pub fn parse(raw: &str) -> Result<Self, CoreError> {
         let reject = |why: &'static str| {
             Err(CoreError::GitUrlRejected {
@@ -279,6 +297,34 @@ mod tests {
         ] {
             assert!(GitUrl::parse(ok).is_ok(), "`{ok}` should be accepted");
         }
+    }
+
+    /// The two conditions that make the local-path form a *rule* rather than an
+    /// exception to one (ADR-0005 §10 rule 4).
+    ///
+    /// Asserted together and under a name that says so, because each half is
+    /// currently also covered incidentally by a test named for something else —
+    /// and a property that no test is named after is one nobody notices losing.
+    #[test]
+    fn a_local_path_must_be_absolute_and_must_not_look_like_a_flag() {
+        // Absolute: `git` resolves a relative path against a working directory
+        // *this crate* chose, not one the user meant.
+        for relative in ["agents", "src/agents", "./agents", "../agents", r"..\agents"] {
+            let why = rejected(relative);
+            assert!(why.contains("absolute path"), "`{relative}`: {why}");
+        }
+
+        // Not flag-shaped — and this check runs *before* the absolute-path
+        // branch, so a value cannot buy its way past it by also looking like a
+        // path.
+        for flaglike in ["-/tmp/agents", "--upload-pack=/tmp/agents", "-C/tmp"] {
+            let why = rejected(flaglike);
+            assert!(why.contains("starts with `-`"), "`{flaglike}`: {why}");
+        }
+
+        // The check is on the trimmed value, so padding smuggles nothing past
+        // it — `parse` trims first and stores what it checked.
+        rejected("  -/tmp/agents  ");
     }
 
     /// A Windows drive letter must never be read as an scp-like host. Treating

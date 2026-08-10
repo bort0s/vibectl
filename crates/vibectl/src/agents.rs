@@ -94,12 +94,21 @@ pub fn update(args: &AgentsUpdateArgs) -> Result<Exit, CoreError> {
 pub fn list(args: &AgentsListArgs) -> Result<Exit, CoreError> {
     let registry = Registry::open(Config::discover());
     let store = store_config(&args.store);
-    let listings = registry.agents_list(Some(&args.path), &store)?;
+    let today = registry.config().today_utc();
+    let catalogue = registry.agents_list(Some(&args.path), &store, &today)?;
+    let listings = &catalogue.listings;
 
     let mut stdout = std::io::stdout();
+    let mut stderr = std::io::stderr();
     if args.format.json {
-        let json = serde_json::to_string_pretty(&listings).expect("plain data serialises");
-        let _ = writeln!(stdout, "{json}");
+        // `store_age` alongside the agents, as `status`, `add`, `remove` and
+        // `sync` already do. A bare array was the odd one out, and it was the
+        // shape that made the age impossible to report.
+        let payload = serde_json::json!({
+            "agents": listings,
+            "store_age": staleness_json(catalogue.staleness),
+        });
+        let _ = writeln!(stdout, "{}", pretty(&payload));
         return Ok(Exit::Success);
     }
 
@@ -115,7 +124,7 @@ pub fn list(args: &AgentsListArgs) -> Result<Exit, CoreError> {
     }
 
     let width = listings.iter().map(|l| l.name.len()).max().unwrap_or(4);
-    for l in &listings {
+    for l in listings {
         let mark = if l.declared { "*" } else { " " };
         let desc = l.description.as_deref().unwrap_or("—");
         let _ = writeln!(stdout, "{mark} {:<width$}  {desc}", l.name, width = width);
@@ -126,6 +135,14 @@ pub fn list(args: &AgentsListArgs) -> Result<Exit, CoreError> {
         "\n{} agent(s); {declared} declared by this project (*)",
         listings.len()
     );
+
+    // ADR-0006 §7. `list` is the command where this matters most: every name
+    // above is a fact about this machine's copy of the store, and a reader with
+    // no age has no way to tell a complete list from a twelve-day-old one.
+    // Skipped in the empty-store branch above, which already says it in prose.
+    if catalogue.staleness.worth_reporting() {
+        let _ = write_store_age(&mut stderr, catalogue.staleness);
+    }
     Ok(Exit::Success)
 }
 
@@ -268,8 +285,14 @@ fn finish(
             r.why
         );
     }
-    // Regardless of the usual quiet rules — ADR-0006 §6.
-    if agent_plan.should_report_store_age() {
+    // ADR-0006 §7: any command that read the store says so when it is stale.
+    // This is broader than what was here before, which fired only for §6's
+    // `NotInStore` case — so `add`, `remove` and `sync` used to install from a
+    // twelve-day-old store without mentioning it, as long as every name
+    // resolved. §6 is the sharper case *inside* this one
+    // (`store_age_must_not_be_suppressed`), and the two agree exactly while
+    // there is no quiet flag for §6 to override.
+    if agent_plan.staleness.worth_reporting() {
         let _ = write_store_age(&mut stderr, agent_plan.staleness);
     }
 

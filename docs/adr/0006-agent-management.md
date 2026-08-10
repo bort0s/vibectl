@@ -508,6 +508,49 @@ declined to change, by making a visible problem invisible.
 This is the next thing to check whenever a refusal path is added — §9g's
 adoption path is where it applies next.
 
+#### 9i. §7 was implemented only where §6 required it
+
+§7 says the store's age is reported "after **any** command that already read the
+store". §6 says it more sharply for one case: when something is `NotInStore`,
+the age must appear *regardless of the usual quiet rules*, because otherwise
+"this agent does not exist" is asserted when the truth is "this machine has not
+fetched for twelve days".
+
+Only §6 was built. The predicate fired on `NotInStore && stale`, so:
+
+- **`agents list` never reported the age at all** — and it is the command where
+  the omission is worst. Every name it prints is a fact about this machine's
+  copy of the store, and a reader given no age cannot tell a complete list from
+  a stale one. The bare `Vec<StoreListing>` return type made it unrepresentable,
+  which is why the shape changed to `AgentCatalogue { listings, staleness }`.
+- **`add`, `remove` and `sync` installed from a stale store in silence**
+  whenever every requested name happened to resolve. The user most likely to be
+  hurt — someone whose store is old but whose names all still exist — was
+  exactly the one told nothing.
+
+Both now report on `Staleness::worth_reporting()`, which is §7's condition. §6's
+predicate is kept and renamed `store_age_must_not_be_suppressed`, because the
+two agree **only while there is no quiet flag**: the day `--quiet` lands, §7's
+line may be suppressed and §6's must not be. Keeping one predicate would have
+lost that distinction silently, which is the failure mode §7 of ADR-0002 is
+about.
+
+`agents list --json` consequently gains a `store_age` field beside `agents`,
+matching `status`, `add`, `remove` and `sync`. It was the only one emitting a
+bare array, and that shape was the reason the age had nowhere to go.
+
+**Tested at the core boundary only, and that is a recorded gap.** The rule is
+covered by a paired test — a pinned committer date, one `today` inside the
+threshold and one outside, so only the date being asked about moves. The
+*command* wiring is not covered, because `vibectl` builds its `Config` with
+`discover()` and therefore a `SystemClock`, and `Config::with_clock`/`FixedClock`
+have no route through the CLI. A CLI test could only assert the fresh direction
+— "a store fetched just now prints no age" — which passes just as well when the
+call is missing entirely. That is a control that cannot fail in the direction
+that matters (ADR-0002 §7), so it is deliberately not written. Closing this
+needs a way to inject the clock into the CLI, which is a decision about the
+binary's test surface rather than about agent management.
+
 ## Consequences
 
 **Easier:** `vibe agents sync` after a fresh clone gets a project's agents right

@@ -16,7 +16,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use vibe_core::agents::{AgentState, GitOp, GitUrl, StoreConfig, install_path, lock};
+use vibe_core::agents::{AgentState, GitOp, GitUrl, Staleness, StoreConfig, install_path, lock};
 use vibe_core::{
     Config, FileOp, NullReporter, ProcessRunner, Registry, SchemaVersion, SystemRunner,
 };
@@ -70,6 +70,12 @@ fn make_upstream(dir: &Path, agents: &[(&str, &str)]) -> PathBuf {
         std::fs::write(repo.join("engineering").join(format!("{name}.md")), text).unwrap();
     }
     git(&repo, &["init", "-q", "-b", "main"]);
+    // ADR-0002 §7: a fixture must not leave anything running. `git commit`
+    // otherwise spawns a detached `git maintenance run --auto`, which is how
+    // `scan_never_writes` acquired an intermittent red — and these tests build
+    // a repository per case, so it is also gratuitous load.
+    git(&repo, &["config", "gc.auto", "0"]);
+    git(&repo, &["config", "maintenance.auto", "false"]);
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-qm", "agents"]);
     repo
@@ -365,6 +371,89 @@ fn negative_control_cloning_a_local_repo_does_not_run_the_source_repos_hooks() {
     );
 }
 
+/// ADR-0006 §7 at the command where it was missing.
+///
+/// `list` reads the store, so it must be able to say how old the store is.
+/// Every name it prints is a fact about *this machine's copy*, and a reader
+/// with no age cannot tell a complete list from a twelve-day-old one — the same
+/// substitution as reporting "this agent does not exist" when the truth is
+/// "this machine has not fetched since Tuesday".
+///
+/// **Paired, per ADR-0002 §7**: a stale store reports stale *and* a fresh one
+/// reports fresh. Asserting only the stale direction would pass equally well
+/// against a `staleness` field wired to a constant, which is a control that
+/// cannot fail in the direction that matters.
+///
+/// Deterministic, also per §7: the store's committer date is pinned, so the
+/// only thing that moves between the two halves is the date being asked about.
+/// Nothing here depends on when the test ran or how long it took.
+#[test]
+fn list_reports_the_store_age_and_does_so_in_both_directions() {
+    if !git_available() {
+        return;
+    }
+    const COMMITTED: &str = "2026-08-01T12:00:00+00:00";
+
+    let tmp = tempfile::tempdir().unwrap();
+    let upstream = make_upstream(tmp.path(), &[("a", "body a")]);
+
+    // Pin the committer date, which is what `staleness` reads (`log -1
+    // --format=%cI`). Without this the store's age is "however long ago the
+    // fixture ran", and the stale half of this test could never be written.
+    let out = Command::new("git")
+        .args(["commit", "--amend", "--no-edit", "-q"])
+        .current_dir(&upstream)
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+        .env("GIT_AUTHOR_DATE", COMMITTED)
+        .env("GIT_COMMITTER_DATE", COMMITTED)
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "could not pin the fixture's commit date: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let store = store_at(&tmp.path().join("store"), &upstream);
+    let reg = registry();
+    reg.agents_update_store(&store).expect("clone");
+
+    // Three days on: inside the seven-day default, so nothing is said.
+    let fresh = reg.agents_list(None, &store, "2026-08-04").expect("list");
+    assert_eq!(
+        fresh.staleness,
+        Staleness::Days {
+            days: 3,
+            stale: false
+        }
+    );
+    assert!(
+        !fresh.staleness.worth_reporting(),
+        "a store fetched three days ago must not nag"
+    );
+
+    // Twenty days on: the same store, the same clone, only the observer's date
+    // has moved.
+    let stale = reg.agents_list(None, &store, "2026-08-21").expect("list");
+    assert_eq!(
+        stale.staleness,
+        Staleness::Days {
+            days: 20,
+            stale: true
+        }
+    );
+    assert!(stale.staleness.worth_reporting());
+
+    // The age travels *beside* the agents, not instead of them: both calls
+    // return the identical listing.
+    assert_eq!(fresh.listings, stale.listings);
+    assert_eq!(fresh.listings.len(), 1);
+    assert_eq!(fresh.listings[0].name, "a");
+}
+
 /// The store proves it is the store before `reset --hard` gets near it.
 ///
 /// This is the guard that stops a mistyped `--store-path` from destroying the
@@ -473,7 +562,8 @@ fn update_clones_then_fast_forwards() {
     assert!(third.changed());
     assert_ne!(third.from_rev, third.to_rev);
 
-    let listings = reg.agents_list(None, &store).expect("list");
+    let catalogue = reg.agents_list(None, &store, TODAY).expect("list");
+    let listings = &catalogue.listings;
     assert_eq!(listings.len(), 2);
     assert_eq!(listings[0].name, "a");
     assert_eq!(
@@ -890,7 +980,7 @@ fn every_command_except_update_works_with_the_network_gone() {
     // Delete the upstream entirely. Anything that reaches for it now fails.
     std::fs::remove_dir_all(&upstream).unwrap();
 
-    assert!(reg.agents_list(Some(&proj), &store).is_ok());
+    assert!(reg.agents_list(Some(&proj), &store, TODAY).is_ok());
     assert!(reg.agents_status(&proj, &store, TODAY).is_ok());
     let planned = reg
         .plan_agents_sync(&proj, false, false, &store, TODAY)

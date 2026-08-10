@@ -85,13 +85,21 @@ impl AgentPlan {
         !self.refused.is_empty()
     }
 
-    /// Whether the store's age needs to be said out loud.
+    /// Whether the `NotInStore` case of ADR-0006 §6 applies.
     ///
-    /// Only when something is `NotInStore`. Reporting a name the store lacks
-    /// without saying the store is twelve days old turns a fact about this
-    /// machine into a claim about the project.
+    /// Reporting a name the store lacks without saying the store is twelve days
+    /// old turns a fact about this machine into a claim about the project. §6
+    /// therefore requires the age line here **regardless of the usual quiet
+    /// rules**, which is stronger than §7's general "a command that read the
+    /// store says when it is stale".
+    ///
+    /// Today those two conditions produce the same output, because there is no
+    /// quiet flag for §6 to override and §7 already covers every stale store.
+    /// This predicate is kept, and kept separate, because the moment a `--quiet`
+    /// lands the two stop agreeing: §7's line may be suppressed and this one
+    /// must not be.
     #[must_use]
-    pub fn should_report_store_age(&self) -> bool {
+    pub fn store_age_must_not_be_suppressed(&self) -> bool {
         self.report.any(AgentState::NotInStore) && self.staleness.worth_reporting()
     }
 }
@@ -117,6 +125,21 @@ pub struct StoreListing {
     pub declared: bool,
 }
 
+/// What `agents list` answers: what the store holds, and how old that is.
+///
+/// The age travels with the listing rather than beside it, because ADR-0006 §7
+/// applies to *any* command that read the store and `list` is the one where it
+/// matters most. A bare `Vec<StoreListing>` made that unimplementable: a user
+/// reading a list of agents had no way to tell it was twelve days old, which is
+/// the same error as reporting "this agent does not exist" when the truth is
+/// "this machine has not fetched since Tuesday".
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct AgentCatalogue {
+    pub listings: Vec<StoreListing>,
+    pub staleness: Staleness,
+}
+
 impl Registry {
     /// Clone or fast-forward the store. **The only command that uses the
     /// network** (ADR-0006 §1).
@@ -124,12 +147,13 @@ impl Registry {
         Store::new(store, self.runner()).update()
     }
 
-    /// Everything the store offers, offline.
+    /// Everything the store offers, offline, with the store's age.
     pub fn agents_list(
         &self,
         project_dir: Option<&Path>,
         store: &StoreConfig,
-    ) -> Result<Vec<StoreListing>, CoreError> {
+        today_utc: &str,
+    ) -> Result<AgentCatalogue, CoreError> {
         let handle = Store::new(store, self.runner());
         let declared = match project_dir {
             Some(dir) => declared_agents(dir).unwrap_or_default(),
@@ -157,7 +181,10 @@ impl Registry {
             })
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(out)
+        Ok(AgentCatalogue {
+            listings: out,
+            staleness: handle.staleness(today_utc),
+        })
     }
 
     /// The state table for one project.

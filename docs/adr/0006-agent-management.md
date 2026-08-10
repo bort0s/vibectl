@@ -539,17 +539,30 @@ about.
 matching `status`, `add`, `remove` and `sync`. It was the only one emitting a
 bare array, and that shape was the reason the age had nowhere to go.
 
-**Tested at the core boundary only, and that is a recorded gap.** The rule is
-covered by a paired test — a pinned committer date, one `today` inside the
-threshold and one outside, so only the date being asked about moves. The
-*command* wiring is not covered, because `vibectl` builds its `Config` with
-`discover()` and therefore a `SystemClock`, and `Config::with_clock`/`FixedClock`
-have no route through the CLI. A CLI test could only assert the fresh direction
-— "a store fetched just now prints no age" — which passes just as well when the
-call is missing entirely. That is a control that cannot fail in the direction
-that matters (ADR-0002 §7), so it is deliberately not written. Closing this
-needs a way to inject the clock into the CLI, which is a decision about the
-binary's test surface rather than about agent management.
+**Tested at both boundaries, paired at each.** The core test pins the committer
+date and moves the `today` argument either side of the threshold. The CLI test
+does the same thing from the other end and needs no injection point at all.
+
+That second one was nearly not written, on the reasoning that `vibectl` builds
+its `Config` with `discover()` and therefore a `SystemClock`, so `FixedClock`
+has no route in and only the fresh direction could be asserted — a control that
+cannot fail in the direction that matters. **The reasoning was wrong, and the
+way it was wrong is worth keeping.**
+
+Staleness is a function of *two* values: the store's tip commit date, and
+today. `FixedClock` exists because **now** cannot be moved. But **then** can:
+the age is read from the store's tip commit, `git clone` preserves committer
+dates because commit objects are immutable, and so a backdated upstream commit
+produces a store that is *genuinely* old against the real system clock. The age
+the binary reports is then one it actually read off the disk rather than one the
+test asserted into existence — which is also why `--stale-after 0` is not a
+substitute: the threshold is "older than N days", so on the day of a fetch the
+store is not stale at any threshold.
+
+The fixture already had this (`git_dated`/`fixture_dated`, used by §6's test);
+the limitation was assumed rather than checked. **Before adding a test surface
+to a binary, check whether the world can be made old instead of the clock made
+to lie.**
 
 ## Consequences
 

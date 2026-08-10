@@ -251,6 +251,61 @@ fn a_declared_agent_the_store_lacks_exits_two_and_names_the_stores_age() {
     );
 }
 
+/// ADR-0006 §7 through the binary: `list` read the store, so `list` says how
+/// old the store is.
+///
+/// **This is the test that would have caught the gap.** Before it, the age was
+/// reported only for §6's `NotInStore` case, so `list` — every line of which is
+/// a fact about this machine's copy — said nothing at all, and the stale half
+/// below fails against that build.
+///
+/// **Paired, per ADR-0002 §7.** The fresh half is not decoration: a test that
+/// only asserts the line appears would pass against a build that printed it
+/// unconditionally, which is a different bug with the same symptom (nagging a
+/// user who fetched this morning). Both halves are needed for either to mean
+/// anything.
+///
+/// **Deterministic, and without a clock injected into the binary.** Staleness
+/// is a function of two things, and `FixedClock` exists only because *now*
+/// cannot be moved. *Then* can: the store's age comes from its tip commit's
+/// committer date, which `git clone` preserves because commit objects are
+/// immutable. So the fixture backdates the upstream commit and the age the
+/// binary reports is one it genuinely read off the disk. A 2020 date is stale
+/// against any real clock this will ever run under.
+#[test]
+fn list_reports_the_stores_age_when_it_is_old_and_stays_quiet_when_it_is_not() {
+    if !git_available() {
+        return;
+    }
+
+    // Old: the store's tip commit is years back.
+    let old = fixture_dated(&["alpha"], &[], Some("2020-01-01T00:00:00Z"));
+    old.update();
+    let out = old.cmd(&["list", &old.proj.to_string_lossy()]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let err = stderr(&out);
+    assert!(
+        err.contains("vibe agents update"),
+        "a stale store must name the fix on stderr: {err}"
+    );
+    // The agents still go to stdout. The age is a note about the answer, not a
+    // replacement for it, and a `--json` consumer must be able to ignore it.
+    assert!(stdout(&out).contains("alpha"), "{}", stdout(&out));
+
+    // Fresh: same fixture, same command, commit dated now.
+    let fresh = fixture(&["alpha"], &[]);
+    fresh.update();
+    let out = fresh.cmd(&["list", &fresh.proj.to_string_lossy()]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let err = stderr(&out);
+    assert!(
+        !err.contains("vibe agents update"),
+        "a store fetched moments ago must not be reported as stale: {err}"
+    );
+}
+
 #[test]
 fn status_reports_each_state_and_remove_undeclares() {
     if !git_available() {

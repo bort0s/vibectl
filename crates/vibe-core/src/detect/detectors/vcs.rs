@@ -3,6 +3,12 @@
 //! No `libgit2`. `git` already exists, already handles every repository layout
 //! anyone has, and is not our code to get wrong.
 //!
+//! Every invocation passes `--no-optional-locks`, which stops git taking the
+//! index lock or refreshing the index as a side effect of a read. That is a
+//! small speed win and a correctness one: `scan` must not modify the
+//! repository it is reading, and the tests in `scan_never_writes.rs` compare
+//! `.git` before and after.
+//!
 //! `dirty` is deliberately **not** detected, a deviation from ADR-0003 §7.
 //! `git status` is the most expensive call we could make — it walks the working
 //! tree — and the flag appears in neither the manifest schema nor the columns
@@ -57,7 +63,7 @@ impl Detector for GitRepo {
         // The first is swallowed per-command below. The second propagates, so
         // the merge pass reports `NotAttempted` against every field this
         // detector would have produced.
-        let remote = ctx.git(&["remote", "get-url", "origin"]);
+        let remote = ctx.git(&["--no-optional-locks", "remote", "get-url", "origin"]);
         if let Err(e @ (DetectError::NotAttempted { .. } | DetectError::Timeout)) = &remote {
             return Err(e.clone());
         }
@@ -83,7 +89,7 @@ impl Detector for GitRepo {
         // This matters more than it looks. Process spawn is ~17ms on Windows;
         // measured over 50 repositories, the git calls were 3.4s of a 3.5s
         // scan. Every call removed is ~0.85s off the budget.
-        if let Ok(o) = ctx.git(&["log", "-1", "--format=%cI%n%D"]) {
+        if let Ok(o) = ctx.git(&["--no-optional-locks", "log", "-1", "--format=%cI%n%D"]) {
             if o.success() {
                 let mut lines = o.trimmed().lines();
                 if let Some(date) = lines.next().map(str::trim).filter(|d| !d.is_empty()) {

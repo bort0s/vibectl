@@ -1,0 +1,204 @@
+//! A guard on the scan budget that a CI runner can actually keep.
+//!
+//! Wall-clock assertions do not belong in CI: a shared runner's timings drift
+//! by more than the thing being measured. Measured on one machine in one
+//! session, the same binary and corpus produced a median of 583ms and then a
+//! median of 684ms depending only on what else was running — a 17% shift, with
+//! the spread widening 3.6x. A 2000ms assertion would pass while a 3x
+//! regression hid inside it, and would fail spuriously on a loaded runner.
+//!
+//! So this asserts the *cause* instead. The scan is ~98% subprocess spawn:
+//! walking and detecting 50 repositories costs ~93ms, while the `git` calls for
+//! the same 50 cost ~570ms at a measured ceiling of ~175 spawns/second (the
+//! knee is at core count — Windows process creation is kernel-CPU work, not
+//! I/O wait). Subprocess count per project is therefore the budget, and it is
+//! deterministic.
+//!
+//! If someone adds a third git call per repository, that is a ~50% regression
+//! and this test says so on every platform, in every session.
+
+use std::path::Path;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use vibe_core::exec::{CommandOutput, ProcessRunner, SystemRunner};
+use vibe_core::{Config, NullReporter, Registry, ScanRequest};
+
+/// Wraps the real runner and counts what goes through it.
+#[derive(Debug)]
+struct CountingRunner {
+    inner: SystemRunner,
+    calls: AtomicUsize,
+    argv: Mutex<Vec<Vec<String>>>,
+}
+
+impl CountingRunner {
+    fn new() -> Self {
+        Self {
+            inner: SystemRunner::default(),
+            calls: AtomicUsize::new(0),
+            argv: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl ProcessRunner for CountingRunner {
+    fn git_available(&self) -> bool {
+        self.inner.git_available()
+    }
+
+    fn run_git(
+        &self,
+        cwd: &Path,
+        args: &[&str],
+    ) -> Result<CommandOutput, vibe_core::detect::DetectError> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        self.argv
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(args.iter().map(|s| (*s).to_owned()).collect());
+        self.inner.run_git(cwd, args)
+    }
+}
+
+fn git_available() -> bool {
+    std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+fn make_repo(root: &Path, name: &str) {
+    let dir = root.join(name);
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    std::fs::write(dir.join("package.json"), r#"{"name":"x"}"#).expect("write");
+    for args in [
+        vec!["init", "-q"],
+        vec!["config", "user.email", "t@example.invalid"],
+        vec!["config", "user.name", "t"],
+        vec!["add", "package.json"],
+        vec!["commit", "-q", "-m", "initial"],
+    ] {
+        let _ = std::process::Command::new("git")
+            .args(&args)
+            .current_dir(&dir)
+            .output();
+    }
+}
+
+/// The budget, expressed as the quantity that determines it.
+const MAX_GIT_CALLS_PER_PROJECT: usize = 2;
+
+#[test]
+fn a_scan_spends_at_most_two_git_invocations_per_repository() {
+    if !git_available() {
+        eprintln!("skipping: git is not on PATH");
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    for i in 0..5 {
+        make_repo(dir.path(), &format!("repo{i}"));
+    }
+
+    let runner = std::sync::Arc::new(CountingRunner::new());
+    let registry = Registry::open(Config::default()).with_runner(runner.clone());
+    let report = registry.scan(&ScanRequest::new(dir.path()), &NullReporter);
+
+    assert_eq!(report.projects.len(), 5);
+    let calls = runner.calls.load(Ordering::Relaxed);
+    assert!(
+        calls <= 5 * MAX_GIT_CALLS_PER_PROJECT,
+        "{calls} git calls for 5 repositories exceeds the budget of \
+         {MAX_GIT_CALLS_PER_PROJECT} per project. Subprocess spawn is ~98% of \
+         scan time; every extra call per repo is a ~50% regression. Calls made: {:?}",
+        runner
+            .argv
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    );
+
+    // The scan actually used git, or this proves nothing.
+    assert!(calls > 0, "no git calls were made at all");
+    assert!(
+        report
+            .projects
+            .iter()
+            .all(|p| p.detection.last_commit.is_known()),
+        "every repo has a commit, so every one should report it"
+    );
+}
+
+#[test]
+fn every_git_invocation_declines_to_take_a_lock() {
+    if !git_available() {
+        eprintln!("skipping: git is not on PATH");
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    make_repo(dir.path(), "repo");
+
+    let runner = std::sync::Arc::new(CountingRunner::new());
+    let registry = Registry::open(Config::default()).with_runner(runner.clone());
+    let _ = registry.scan(&ScanRequest::new(dir.path()), &NullReporter);
+
+    let argv = runner
+        .argv
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert!(!argv.is_empty());
+    for call in &argv {
+        assert!(
+            call.contains(&"--no-optional-locks".to_owned()),
+            "a read must not be able to take the index lock: {call:?}"
+        );
+    }
+}
+
+/// A git worktree or submodule has `.git` as a *file*, not a directory. Before
+/// this was handled, every such project reported no remote and no commit as
+/// `no_evidence` — the tool claiming the repository had nothing to say when it
+/// had simply never asked.
+#[test]
+fn a_git_worktree_is_recognised_as_a_repository() {
+    if !git_available() {
+        eprintln!("skipping: git is not on PATH");
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    make_repo(dir.path(), "main");
+    let wt = dir.path().join("wt");
+    let ok = std::process::Command::new("git")
+        .args(["worktree", "add", "-q"])
+        .arg(&wt)
+        .args(["-b", "feature"])
+        .current_dir(dir.path().join("main"))
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !ok {
+        eprintln!("skipping: could not create a worktree");
+        return;
+    }
+
+    assert!(
+        wt.join(".git").is_file(),
+        "the fixture must have a .git FILE"
+    );
+
+    let registry = Registry::open(Config::default());
+    let report = registry.scan(&ScanRequest::new(&wt), &NullReporter);
+    let p = report.projects.first().expect("the worktree is a project");
+
+    assert!(
+        p.detection.last_commit.is_known(),
+        "a worktree shares the repository's history: {:?}",
+        p.detection.last_commit.reason()
+    );
+    assert_eq!(
+        p.detection.branch.value().map(String::as_str),
+        Some("feature")
+    );
+}

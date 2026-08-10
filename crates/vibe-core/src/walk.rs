@@ -185,6 +185,18 @@ impl FileIndex {
             }
         }
 
+        // In a git **worktree or submodule, `.git` is a file**, not a
+        // directory — a one-line pointer at the real git directory. Testing
+        // only `is_dir()` made the git detector never fire on those, so every
+        // worktree silently reported no remote and no last commit as
+        // `no_evidence`. It is recorded as a directory here because
+        // `Interest::DirName(".git")` is the question the detector asks, and
+        // the answer it wants is "is this a repository", not "what inode type
+        // is this".
+        if root.join(".git").exists() {
+            index.root_dirs.insert(".git".to_owned());
+        }
+
         index
     }
 

@@ -79,6 +79,10 @@ impl NewRequest {
 pub struct Registry {
     config: Config,
     exec: std::sync::Arc<dyn crate::exec::ProcessRunner>,
+    /// `None` disables caching entirely, which is what tests use so they never
+    /// touch the developer's real cache — and is also the honest code path for
+    /// a platform with no cache directory.
+    cache_path: Option<PathBuf>,
 }
 
 impl Registry {
@@ -87,7 +91,20 @@ impl Registry {
         Self {
             config,
             exec: std::sync::Arc::new(crate::exec::SystemRunner::default()),
+            cache_path: crate::ops::default_cache_path(),
         }
+    }
+
+    /// Point the cache somewhere else, or nowhere.
+    #[must_use]
+    pub fn with_cache_path(mut self, path: Option<PathBuf>) -> Self {
+        self.cache_path = path;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn cache_path(&self) -> Option<PathBuf> {
+        self.cache_path.clone()
     }
 
     /// Inject a process runner. Tests use this to run without `git`, which is
@@ -180,7 +197,7 @@ impl Registry {
 /// read. Containment still canonicalises both sides when it compares them
 /// (`plan::validate_path`), so nothing is weakened by keeping the *displayed*
 /// path in its ordinary form.
-fn absolutize(p: &Path) -> Result<PathBuf, CoreError> {
+pub(crate) fn absolutize(p: &Path) -> Result<PathBuf, CoreError> {
     let absolute = if p.is_absolute() {
         p.to_path_buf()
     } else {

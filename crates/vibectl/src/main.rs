@@ -10,6 +10,7 @@
 #![allow(unreachable_pub)]
 
 mod cli;
+mod cmd;
 mod exit;
 mod output;
 mod reporter;
@@ -40,6 +41,11 @@ fn run(cli: &Cli) -> Result<Exit, vibe_core::CoreError> {
     match &cli.command {
         Command::New(args) => cmd_new(args),
         Command::Scan(args) => cmd_scan(args),
+        Command::List(args) => cmd::list(args),
+        Command::Show(args) => cmd::show(args),
+        Command::Sync(args) => cmd::sync(args),
+        Command::Archive(args) => cmd::archive(args, true),
+        Command::Unarchive(args) => cmd::archive(args, false),
     }
 }
 

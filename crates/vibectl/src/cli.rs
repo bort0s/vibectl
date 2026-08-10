@@ -22,6 +22,73 @@ pub enum Command {
     New(NewArgs),
     /// Index projects that already exist on disk
     Scan(ScanArgs),
+    /// Show the registry as a table
+    List(ListArgs),
+    /// Dump one project's manifest, ready to paste at an agent
+    Show(ShowArgs),
+    /// Re-read the disk and update a manifest
+    Sync(SyncArgs),
+    /// Take a project off your desk. Never deletes anything.
+    Archive(ArchiveArgs),
+    /// Put an archived project back
+    Unarchive(ArchiveArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ListArgs {
+    /// Directory to list projects from
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+
+    #[arg(long, default_value_t = 3)]
+    pub depth: usize,
+
+    /// Include archived projects, which are hidden by default
+    #[arg(long)]
+    pub all: bool,
+
+    /// Only projects with this status
+    #[arg(long, value_parser = parse_status)]
+    pub status: Option<Status>,
+
+    #[command(flatten)]
+    pub format: FormatFlags,
+}
+
+#[derive(Debug, Args)]
+pub struct ShowArgs {
+    /// Project directory
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+
+    #[command(flatten)]
+    pub format: FormatFlags,
+}
+
+#[derive(Debug, Args)]
+pub struct SyncArgs {
+    /// Project directory
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+
+    #[command(flatten)]
+    pub write: WriteFlags,
+
+    #[command(flatten)]
+    pub format: FormatFlags,
+}
+
+#[derive(Debug, Args)]
+pub struct ArchiveArgs {
+    /// Project directory
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+
+    #[command(flatten)]
+    pub write: WriteFlags,
+
+    #[command(flatten)]
+    pub format: FormatFlags,
 }
 
 #[derive(Debug, Args)]

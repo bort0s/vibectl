@@ -77,6 +77,11 @@ impl ScanRequest {
     pub fn roots(&self) -> &[PathBuf] {
         &self.roots
     }
+
+    #[must_use]
+    pub fn max_depth(&self) -> usize {
+        self.max_depth
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -97,6 +102,10 @@ pub struct ScannedProject {
     /// The directory name, or the manifest's `project.name` if one is readable.
     pub name: String,
     pub has_manifest: bool,
+    /// The manifest's status, or `"unknown"` when there is no readable
+    /// manifest. Denormalised here because it is a `list` column.
+    pub status: String,
+    pub archived: bool,
     /// Set when a manifest exists but could not be read — a major schema
     /// mismatch, a syntax error, a missing name. The project still appears;
     /// it is an error row, not a missing entry.
@@ -273,19 +282,33 @@ fn scan_one(
     let detection = crate::detect::merge(&findings, &failures);
 
     let manifest_file = manifest_path(dir);
-    let (has_manifest, name, manifest_error) = if manifest_file.is_file() {
+    let (has_manifest, name, status, archived, manifest_error) = if manifest_file.is_file() {
         match ManifestDocument::open(&manifest_file).and_then(|d| d.parse()) {
-            Ok(m) => (true, m.project.name, None),
-            Err(e) => (true, dir_name(dir), Some(e.to_wire())),
+            Ok(m) => (
+                true,
+                m.project.name,
+                m.project.status.to_string(),
+                m.project.archived,
+                None,
+            ),
+            Err(e) => (
+                true,
+                dir_name(dir),
+                "unknown".to_owned(),
+                false,
+                Some(e.to_wire()),
+            ),
         }
     } else {
-        (false, dir_name(dir), None)
+        (false, dir_name(dir), "unknown".to_owned(), false, None)
     };
 
     ScannedProject {
         path: display_path(dir).0,
         name,
         has_manifest,
+        status,
+        archived,
         manifest_error,
         index_truncated: index.is_truncated(),
         detection,

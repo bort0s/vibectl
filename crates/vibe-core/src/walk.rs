@@ -40,6 +40,22 @@ pub const PRUNE_DIRS: &[&str] = &[
     ".hg",
     ".idea",
     "coverage",
+    // Added after measurement found each of these routinely holds thousands of
+    // files that the entry cap would otherwise spend itself on. Yarn Berry
+    // zero-installs alone is commonly 10k+.
+    ".yarn",
+    ".turbo",
+    ".cache",
+    ".parcel-cache",
+    ".angular",
+    ".nx",
+    "bower_components",
+    ".dart_tool",
+    "DerivedData",
+    ".stack-work",
+    "_build",
+    ".bundle",
+    ".cargo",
 ];
 
 /// A file or directory whose presence means "this directory is a project".
@@ -144,8 +160,13 @@ impl FileIndex {
             })
             .build();
 
+        // Counts every entry, not only files. Counting files alone left a tree
+        // of many directories with few files uncapped entirely — the cap is
+        // meant to bound work, and enumerating a directory is work.
+        let mut seen = 0usize;
         for entry in walker.flatten() {
-            if index.files.len() >= MAX_INDEXED_ENTRIES {
+            seen += 1;
+            if seen >= MAX_INDEXED_ENTRIES {
                 index.truncated = true;
                 break;
             }

@@ -54,6 +54,27 @@
 //!   immediately measuring against it means measuring the antivirus.
 //!   `Get-MpComputerStatus` reports whether a scan is in flight.
 //!
+//! **Caveat on the reported figure.** The ~900ms median quoted for P2 predates
+//! the antivirus check. It stands as reported, but it was taken without
+//! confirming Defender was idle, and the corpus had just been generated — so it
+//! is more likely an over-estimate than an under-estimate. Any figure quoted
+//! from here on must state that the check was made.
+//!
+//! **Cold cache, measured after all.** A standby-list eviction harness (no
+//! admin rights needed: allocate and touch N GiB to force a trim) put cold at a
+//! ~1067ms median against ~684ms warm — **~1.5x, not a multiple** — because the
+//! scan barely reads from disk. Corpus metadata costs ~35ms cold and `git.exe`
+//! plus its DLLs ~80ms *once*, not per call. A 2.8s outlier reproduced twice is
+//! whole-system first-run-after-boot image faulting, not scan-specific.
+//! Eviction decays: only the first trial after a busy period is genuinely cold,
+//! so trust trial 1 and discard the rest.
+//!
+//! **Shapes this corpus still omits**, each of which a real `~/projects` has:
+//! a repository with >1000 refs (the one shape measured to break the budget), a
+//! git worktree, a `.gitignore` in every project (~+40% walk cost), and
+//! realistic source-file volume. Walk cost is ~5% of the total, so the last two
+//! move the number by ~2% — but the first is not a rounding error.
+//!
 //! CI cannot keep a wall-clock budget at all — a shared runner's drift exceeds
 //! what is being measured. `tests/scan_budget.rs` guards the *cause* instead:
 //! at most two `git` invocations per repository, which is ~96% of scan time and

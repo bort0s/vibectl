@@ -243,3 +243,180 @@ fn hint_for(err: &CoreError) -> Option<&'static str> {
         _ => None,
     }
 }
+
+/// The registry table.
+pub fn write_list_human(
+    out: &mut impl Write,
+    report: &vibe_core::ListReport,
+) -> std::io::Result<()> {
+    if report.projects.is_empty() {
+        writeln!(out, "No projects.")?;
+        if report.archived_hidden > 0 {
+            writeln!(
+                out,
+                "{} archived - pass --all to include them.",
+                report.archived_hidden
+            )?;
+        }
+        return Ok(());
+    }
+
+    let w_name = report
+        .projects
+        .iter()
+        .map(|p| p.name.len())
+        .max()
+        .unwrap_or(4)
+        .max(4);
+    writeln!(
+        out,
+        "{:<w$}  {:<16}  {:<10}  {:<12}  REMOTE",
+        "NAME",
+        "STACK",
+        "STATUS",
+        "COMMIT",
+        w = w_name
+    )?;
+    for p in &report.projects {
+        writeln!(
+            out,
+            "{:<w$}  {:<16}  {:<10}  {:<12}  {}",
+            p.name,
+            p.runtime.as_deref().unwrap_or("—"),
+            if p.error.is_some() {
+                "unreadable"
+            } else {
+                &p.status
+            },
+            p.last_commit
+                .as_deref()
+                .map_or("—", |c| c.get(..10).unwrap_or(c)),
+            p.remote.as_deref().unwrap_or("—"),
+            w = w_name
+        )?;
+    }
+
+    writeln!(out)?;
+    let mut parts = vec![format!("{} project(s)", report.projects.len())];
+    if report.from_cache > 0 {
+        // The "list may be stale and says so" half of the ADR-0004 contract.
+        parts.push(format!("{} from cache", report.from_cache));
+    }
+    if report.archived_hidden > 0 {
+        parts.push(format!("{} archived hidden", report.archived_hidden));
+    }
+    writeln!(out, "{}", parts.join(", "))?;
+
+    if let Some(note) = &report.cache_note {
+        writeln!(out, "note: {note}")?;
+    }
+    Ok(())
+}
+
+/// One project in full, formatted to be pasted at an agent.
+pub fn write_show_human(
+    out: &mut impl Write,
+    view: &vibe_core::ProjectView,
+) -> std::io::Result<()> {
+    let m = &view.manifest;
+    writeln!(out, "# {}", m.project.name)?;
+    writeln!(out, "path:        {}", view.path)?;
+    writeln!(
+        out,
+        "status:      {}{}",
+        m.project.status,
+        if m.project.archived {
+            " (archived)"
+        } else {
+            ""
+        }
+    )?;
+    if let Some(d) = &m.project.description {
+        writeln!(out, "description: {d}")?;
+    }
+    if let Some(c) = &m.project.created {
+        writeln!(out, "created:     {c}")?;
+    }
+    writeln!(out)?;
+    writeln!(
+        out,
+        "runtime:     {}",
+        m.stack.runtime.as_deref().unwrap_or("—")
+    )?;
+    if !m.stack.frameworks.is_empty() {
+        writeln!(out, "frameworks:  {}", m.stack.frameworks.join(", "))?;
+    }
+    if !m.stack.services.is_empty() {
+        writeln!(out, "services:    {}", m.stack.services.join(", "))?;
+    }
+    writeln!(
+        out,
+        "remote:      {}",
+        m.repo.remote.as_deref().unwrap_or("—")
+    )?;
+    if let Some(u) = &m.deploy.url {
+        writeln!(out, "deploy:      {u}")?;
+    }
+    if !m.deploy.env_required.is_empty() {
+        writeln!(out, "env:         {}", m.deploy.env_required.join(", "))?;
+    }
+    if !m.context.decisions.is_empty() {
+        writeln!(out, "\ndecisions:")?;
+        for d in &m.context.decisions {
+            writeln!(out, "  - {d}")?;
+        }
+    }
+    if !m.context.next.is_empty() {
+        writeln!(out, "\nnext:")?;
+        for n in &m.context.next {
+            writeln!(out, "  - {n}")?;
+        }
+    }
+
+    // Surfaced rather than hidden: the user can see what an upgrade unlocks.
+    if !view.unknown_keys.is_empty() {
+        writeln!(
+            out,
+            "\n{} key(s) this build does not understand:",
+            view.unknown_keys.len()
+        )?;
+        for k in &view.unknown_keys {
+            writeln!(out, "  {}", k.dotted_path)?;
+        }
+    }
+    Ok(())
+}
+
+/// What `sync` declined to do.
+///
+/// The split matters: `kept` and `unreadable` describe the user's project and
+/// they can act on both. `not_attempted` is a fact about this machine, and
+/// presenting it as a property of the repository would send them looking for a
+/// problem that is not there.
+pub fn write_sync_notes(out: &mut impl Write, notes: &vibe_core::SyncNotes) -> std::io::Result<()> {
+    if notes.is_empty() {
+        return Ok(());
+    }
+    if !notes.kept.is_empty() {
+        writeln!(
+            out,
+            "kept existing value(s) for {} - detection had nothing better to offer:",
+            notes.kept.len()
+        )?;
+        for f in &notes.kept {
+            writeln!(out, "  {f}")?;
+        }
+    }
+    for u in &notes.unreadable {
+        writeln!(out, "warning: could not read {u}")?;
+    }
+    if !notes.not_attempted.is_empty() {
+        writeln!(
+            out,
+            "note: some detection could not run on this machine ({}) - \
+             this says nothing about the project itself",
+            notes.not_attempted.join("; ")
+        )?;
+    }
+    Ok(())
+}

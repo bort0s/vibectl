@@ -193,6 +193,40 @@ If the on-disk value differs from our record, **the user (or an agent, or a merg
 
 Critically, this **fails closed when the cache is missing**: no record → treat as user-authored → never overwrite. A user who deletes their cache loses convenience, never content. That property is the reason provenance is allowed to live in a regenerable cache at all.
 
+### Amendment: fail-closed extends to a failed *detection*, not only a missing cache
+
+The rule above answers "is this value ours to update?". It does not answer "do
+we have anything to update it *with*?", and the two failures look identical at
+the write boundary — where `Detected<T>`, `UnknownReason` and the conflict
+states all collapse into flat manifest fields. Without this amendment, a field
+that P2 populated last week becomes empty this week because `git` happened not
+to be on `PATH`. That is data loss wearing a sync's clothes.
+
+**`sync` never overwrites a populated field with an absence.** If the on-disk
+value is non-empty and detection returns `Detected::Unknown` for any reason, the
+existing value stands. An empty field may be filled; a filled field is only ever
+replaced by another *value*.
+
+The reasons are not interchangeable, and the difference decides what the user is
+told. It is the same axis split as confidence-versus-specificity: two conditions
+that both block a write, only one of which the user can act on.
+
+| Detection outcome | Write | Reported as |
+|---|---|---|
+| `Known`, writable | Update the field | A normal change in the plan |
+| `Unknown{Conflict}` | Refused | **Actionable.** The disk disagrees with itself — two authoritative manifests claim different runtimes. Surfaced with both candidates and their evidence so the user can resolve it. |
+| `Unknown{LowConfidenceOnly}` | Refused | **Actionable.** Something was found but not corroborated. Offered as a suggestion to confirm. |
+| `Unknown{Unreadable}` | Refused | **Actionable.** A file is present and malformed. Names the file and the parse error. |
+| `Unknown{NotAttempted}` | Refused | **Not actionable by the user, and not about their project.** `git` is missing from *this machine*. Reported once per run, not per field, and never as a property of the repository. |
+| `Unknown{Timeout}` | Refused | As `NotAttempted`: a fact about this run, not about the project. |
+| `Unknown{NoEvidence}` | Refused | Silent. Nothing on disk spoke to the field; there is nothing to tell the user. |
+
+The distinction that matters most is the last three against the first three.
+Reporting "could not determine the runtime" when the real cause is a missing
+`git` binary invites the user to go looking at their repository for a problem
+that is on their machine — the same class of error as the fabricated
+`Unreadable` on a file that never existed (see §2's amendment).
+
 ### 7. v1 detector inventory
 
 | Detector | Interest | Produces |

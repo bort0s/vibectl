@@ -14,11 +14,13 @@ use crate::plan::FileOp;
 /// there is no code path that can invent a field, and adding one is a visible
 /// change to this enum rather than a line buried in a command implementation.
 ///
-/// The variants that carry detection results — `SetStackRuntime`,
-/// `SetRepoRemote`, `SetDeployUrl` — are deliberately **absent in P1**. They
-/// take a `Detected<T>` (ADR-0003), the detection engine does not exist yet,
-/// and shipping them as `Option<String>` now would mean a breaking change to a
-/// public enum the moment P2 lands. Adding variants later is additive.
+/// The detection-fed variants carry a plain `String`, not a `Detected<T>`.
+/// ADR-0002 sketched the latter, but the ADR-0003 §6 amendment moved the
+/// decision earlier: `sync` decides whether a detection is fit to write
+/// *before* building an edit, so an edit that exists at all necessarily has a
+/// real value behind it. Threading `Detected` down here would mean the write
+/// layer re-deciding a question already answered, in a place with less context
+/// to answer it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FieldEdit {
@@ -29,6 +31,9 @@ pub enum FieldEdit {
     /// because archiving never overwrote it (ADR-0002 §6).
     SetArchived(bool),
     SetRepoVisibility(Visibility),
+    SetStackRuntime(String),
+    SetRepoRemote(String),
+    SetDeployUrl(String),
     ReplaceStackFrameworks(Vec<String>),
     ReplaceStackServices(Vec<String>),
     ReplaceDeployEnvRequired(Vec<String>),
@@ -46,6 +51,12 @@ pub enum FieldEdit {
 pub enum EditReason {
     Created,
     FieldsUpdated,
+    /// Written from detection rather than by hand. Distinguished so a
+    /// `--dry-run` can show which lines came off the disk rather than from the
+    /// user (ADR-0003 §3).
+    Synced,
+    Archived,
+    Unarchived,
     SchemaMigration {
         from: SchemaVersion,
         to: SchemaVersion,
@@ -199,6 +210,15 @@ impl ManifestDocument {
             }
             FieldEdit::SetRepoVisibility(v) => {
                 self.set_str("repo", "visibility", &v.to_string())?;
+            }
+            FieldEdit::SetStackRuntime(v) => {
+                self.set_str("stack", "runtime", &v)?;
+            }
+            FieldEdit::SetRepoRemote(v) => {
+                self.set_str("repo", "remote", &v)?;
+            }
+            FieldEdit::SetDeployUrl(v) => {
+                self.set_str("deploy", "url", &v)?;
             }
             FieldEdit::ReplaceStackFrameworks(items) => {
                 self.set_array("stack", "frameworks", &items)?;

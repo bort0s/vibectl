@@ -282,6 +282,33 @@ pub const SCHEMA_MINOR: u16 = 0;
 Only the major is compared for the refuse/accept decision; the minor is compared
 only to decide whether to warn.
 
+### The rule for testing a preservation property
+
+Written down because intending to get it right has now failed three times, and
+been caught by the same mechanism all three times.
+
+**Any test asserting that something is preserved must (a) place its sentinels on
+keys the command under test actually writes, and (b) be negative-controlled by
+breaking the preservation mechanism and observing the test fail.**
+
+Sentinels only on untouched keys test that the parser does not corrupt the file.
+They do not test what the design exists to guarantee — that the *edited* key
+keeps its surroundings. Three times a preservation test was written that passed
+against an implementation with decor preservation deliberately removed:
+
+- P1, the `toml_edit` round-trip property: every sentinel was on an unedited key.
+- P3, `sync` at the command level: the same omission, in a test written
+  specifically because of the first one.
+
+In both cases the test was correct-looking, passed, and proved nothing. In both
+cases the negative control found it in one run. **The negative control is not a
+nice-to-have here; it is the only thing that has ever detected this.**
+
+The corollary, from `W_SCHEMA_MINOR_NEWER`: a warning defined and never emitted
+is a policy that exists only in this document. A test asserting a diagnostic is
+reported must check that something *produces* it, not merely that a consumer
+would render it if given one.
+
 The regression test that matters, and that must exist before the first write
 feature ships: a corpus of manifests in `crates/vibe-core/tests/corpus/` — each
 with comments, blank lines, mixed array styles, and keys from a hypothetical

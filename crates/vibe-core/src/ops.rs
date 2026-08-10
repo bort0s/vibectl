@@ -261,6 +261,12 @@ impl Registry {
                 },
             );
         }
+        // Note on cost: this runs for every rescanned project, including on a
+        // filtered `list --status`. Filtering happens after the scan, so a
+        // filtered list pays the full scan price. That is correct — the cache
+        // must reflect everything that was read, not only what was displayed —
+        // but it is not obvious from the call site.
+        //
         // Entries for projects that no longer exist are left rather than
         // evicted. The cache accumulates ghosts, which cost bytes; evicting on
         // absence would let a scan of one root silently delete the registry's
@@ -285,14 +291,8 @@ fn consider(
             return None;
         }
         // The rule has a second half, found by testing it: a recorded value is
-        // also never replaced by a *less precise* one. A bare `package.json`
-        // detects `node`; a manifest already recording `node@22` knows more
-        // than the disk currently says, because an earlier sync saw a lockfile
-        // or a person typed it. Overwriting is still information loss even
-        // though the incoming value is not empty.
-        if let Some(existing) = current
-            && existing.starts_with(&format!("{v}@"))
-        {
+        // also never replaced by a *less precise* one.
+        if current.is_some_and(|existing| is_more_precise(existing, v)) {
             notes.kept.push(field.to_owned());
             return None;
         }
@@ -326,6 +326,29 @@ fn consider(
     None
 }
 
+/// Whether `existing` says the same thing as `incoming`, with more precision.
+///
+/// **This is the only string-shape assumption in the merge path**, and it is
+/// contained here on purpose. Every detector emits scalar runtimes in one
+/// shape — `lang` or `lang@version` — so "the same language, with a version
+/// attached" is expressible as a prefix. A bare `package.json` detects `node`;
+/// a manifest already recording `node@22` knows more than the disk currently
+/// says, because an earlier sync saw a lockfile or a person typed it.
+/// Overwriting is information loss even though the incoming value is not empty.
+///
+/// It deliberately does no parsing, no comparison, and no normalisation. Values
+/// that do not share that shape simply do not match, and the ordinary write
+/// happens.
+///
+/// If a second heuristic ever wants to live beside this one, that is the signal
+/// to carry `Specificity` through to the merge boundary and compare *that*
+/// instead of comparing strings.
+fn is_more_precise(existing: &str, incoming: &str) -> bool {
+    existing.len() > incoming.len()
+        && existing.starts_with(incoming)
+        && existing.as_bytes().get(incoming.len()) == Some(&b'@')
+}
+
 /// The union of what is recorded and what was detected, or `None` if unchanged.
 fn merged(current: &[String], detected: &[String]) -> Option<Vec<String>> {
     if detected.is_empty() {
@@ -356,4 +379,31 @@ fn summary_from_scan(p: &ScannedProject) -> ProjectSummary {
 /// Where the cache lives, if anywhere.
 pub(crate) fn default_cache_path() -> Option<PathBuf> {
     Config::cache_dir().map(|d| d.join(crate::cache::cache_file_name()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_more_precise;
+
+    #[test]
+    fn precision_is_recognised_only_in_the_lang_at_version_shape() {
+        // The case it exists for.
+        assert!(is_more_precise("node@22", "node"));
+        assert!(is_more_precise("python@3.12", "python"));
+        assert!(is_more_precise("rust@1.85", "rust"));
+
+        // Not more precise: identical, shorter, or a different language.
+        assert!(!is_more_precise("node", "node"));
+        assert!(!is_more_precise("node", "node@22"));
+        assert!(!is_more_precise("go@1.23", "node"));
+
+        // The shape assumption stated as a test: a prefix that is not followed
+        // by `@` is a different value, not a less precise one. `nodejs` must
+        // not be treated as a more precise `node`, and a URL must not be
+        // treated as a more precise scheme.
+        assert!(!is_more_precise("nodejs", "node"));
+        assert!(!is_more_precise("node-22", "node"));
+        assert!(!is_more_precise("https://x.example.com", "https"));
+        assert!(!is_more_precise("", ""));
+    }
 }

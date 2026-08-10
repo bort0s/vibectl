@@ -115,6 +115,15 @@ pub struct ScanReport {
     pub projects: Vec<ScannedProject>,
     pub outcome: ScanOutcome,
     pub elapsed_ms: u64,
+    /// Directories the walk stopped at because `--depth` was reached, and
+    /// which still contained subdirectories.
+    ///
+    /// A project below one of these was not found, and its absence from
+    /// `projects` says nothing about whether it exists. Reporting "no projects
+    /// found" after declining to look would be the same substitution the
+    /// detectors are forbidden from making.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub depth_limited: Vec<String>,
 }
 
 impl ScanReport {
@@ -146,11 +155,16 @@ pub(crate) fn scan(req: &ScanRequest, exec: &dyn ProcessRunner, rep: &dyn Report
     }
 
     let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut depth_limited: Vec<String> = Vec::new();
     for root in &roots {
-        dirs.extend(discover_projects(root, req.max_depth));
+        let found = discover_projects(root, req.max_depth);
+        dirs.extend(found.projects);
+        depth_limited.extend(found.depth_limited.iter().map(|p| display_path(p).0));
     }
     dirs.sort();
     dirs.dedup();
+    depth_limited.sort();
+    depth_limited.dedup();
 
     rep.event(Event::ScanStarted {
         projects: dirs.len(),
@@ -240,6 +254,7 @@ pub(crate) fn scan(req: &ScanRequest, exec: &dyn ProcessRunner, rep: &dyn Report
         projects,
         outcome,
         elapsed_ms,
+        depth_limited,
     }
 }
 

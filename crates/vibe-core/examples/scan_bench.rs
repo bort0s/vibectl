@@ -45,6 +45,14 @@
 //!   `--runs N` sets the sample size.
 //! - State the machine, the cache state, and the corpus alongside the number,
 //!   every time. A number without those three is not comparable to anything.
+//! - **Check the antivirus.** On Windows this is the single largest
+//!   confounder, and it is invisible unless looked for. Three measurements of
+//!   this same corpus and binary in one session gave medians of 583ms, 684ms
+//!   and 1012ms, with the standard deviation going from 15 to 142 — the last
+//!   one taken while Defender real-time protection was indexing the ~250k
+//!   files the benchmark had just created. Generating a large corpus and
+//!   immediately measuring against it means measuring the antivirus.
+//!   `Get-MpComputerStatus` reports whether a scan is in flight.
 //!
 //! CI cannot keep a wall-clock budget at all — a shared runner's drift exceeds
 //! what is being measured. `tests/scan_budget.rs` guards the *cause* instead:

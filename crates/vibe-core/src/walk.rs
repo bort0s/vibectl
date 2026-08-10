@@ -263,6 +263,20 @@ pub fn is_project_dir(dir: &Path) -> bool {
     PROJECT_MARKERS.iter().any(|m| dir.join(m).exists())
 }
 
+/// What a discovery walk found, and what it declined to look at.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Discovered {
+    pub projects: Vec<PathBuf>,
+    /// Directories not descended into because the depth limit was reached.
+    ///
+    /// Absence of a project below one of these is **not** evidence that there
+    /// is no project there. Reporting "no projects found" after declining to
+    /// look is the honest-detection rule failing at the traversal layer rather
+    /// than the detector layer, and it is exactly as misleading — so the walk
+    /// says where it stopped and the caller surfaces it.
+    pub depth_limited: Vec<PathBuf>,
+}
+
 /// Find project directories at or below `root`.
 ///
 /// Stops descending as soon as a directory is identified as a project, and
@@ -270,19 +284,27 @@ pub fn is_project_dir(dir: &Path) -> bool {
 /// an unchanged tree produce the same order — a requirement for stable
 /// snapshots and for `vibe sync` not to churn.
 #[must_use]
-pub fn discover_projects(root: &Path, max_depth: usize) -> Vec<PathBuf> {
-    let mut found = Vec::new();
+pub fn discover_projects(root: &Path, max_depth: usize) -> Discovered {
+    let mut found = Discovered::default();
     visit(root, 0, max_depth, &mut found);
-    found.sort();
+    found.projects.sort();
+    found.depth_limited.sort();
     found
 }
 
-fn visit(dir: &Path, depth: usize, max_depth: usize, out: &mut Vec<PathBuf>) {
+fn visit(dir: &Path, depth: usize, max_depth: usize, out: &mut Discovered) {
     if is_project_dir(dir) {
-        out.push(dir.to_path_buf());
+        out.projects.push(dir.to_path_buf());
         return;
     }
     if depth >= max_depth {
+        // Only record a stop if there was somewhere further to go. A leaf
+        // directory at the depth limit hides nothing.
+        if std::fs::read_dir(dir).is_ok_and(|mut e| {
+            e.any(|entry| entry.is_ok_and(|entry| entry.file_type().is_ok_and(|t| t.is_dir())))
+        }) {
+            out.depth_limited.push(dir.to_path_buf());
+        }
         return;
     }
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -365,7 +387,7 @@ mod tests {
         write(root, "notaproject/readme.md", "");
 
         let found = discover_projects(root, DEFAULT_DISCOVERY_DEPTH);
-        assert_eq!(found, vec![root.join("alpha"), root.join("beta")]);
+        assert_eq!(found.projects, vec![root.join("alpha"), root.join("beta")]);
     }
 
     #[test]
@@ -379,7 +401,8 @@ mod tests {
         let b = discover_projects(root, DEFAULT_DISCOVERY_DEPTH);
         assert_eq!(a, b);
         assert_eq!(
-            a.iter()
+            a.projects
+                .iter()
                 .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
                 .collect::<Vec<_>>(),
             vec!["alpha", "mu", "zeta"]
@@ -387,10 +410,30 @@ mod tests {
     }
 
     #[test]
+    fn a_depth_limited_walk_says_where_it_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "a/b/c/d/package.json", "{}");
+
+        // Depth 2 cannot reach the project at depth 4.
+        let found = discover_projects(root, 2);
+        assert!(found.projects.is_empty());
+        assert!(
+            !found.depth_limited.is_empty(),
+            "declining to look must be reported, not silently returned as absence"
+        );
+
+        // Deep enough, and it is found with nothing withheld.
+        let found = discover_projects(root, 4);
+        assert_eq!(found.projects, vec![root.join("a/b/c/d")]);
+        assert!(found.depth_limited.is_empty());
+    }
+
+    #[test]
     fn an_empty_directory_is_not_a_project() {
         let dir = tempfile::tempdir().unwrap();
         assert!(!is_project_dir(dir.path()));
-        assert!(discover_projects(dir.path(), 3).is_empty());
+        assert!(discover_projects(dir.path(), 3).projects.is_empty());
     }
 
     #[test]

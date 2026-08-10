@@ -2,7 +2,16 @@
 
 ## Status
 
-Accepted (2026-08-10)
+Accepted (2026-08-10). **Amended (2026-08-10)** after implementation and two
+adversarial reviews. Changes, each recorded at the section it affects:
+
+- §2 — `Specificity` moved from the `Detector` trait to the individual
+  `Finding`.
+- §7 — `GitRepo` no longer produces `dirty` or `branch`; both are removed from
+  the inventory rather than left as unimplemented spec lines.
+- §8 — parallelism is `std::thread::scope` with a shared work cursor, not
+  rayon and not static chunks. `git` is invoked **twice** per repository, not
+  once. The measured practical ceiling is **~150 projects**.
 
 ## Context
 
@@ -195,17 +204,49 @@ Critically, this **fails closed when the cache is missing**: no record → treat
 | `PyRequirements` | `requirements*.txt` | frameworks (`Likely` — no version pinning guarantee) |
 | `GoMod` | `go.mod` | runtime (`go` directive), frameworks |
 | `ComposerJson` | `composer.json` | runtime (`require.php`), frameworks, description |
-| `GitRepo` | `.git` | `repo.remote`, branch, last-commit timestamp, dirty flag |
+| `GitRepo` | `.git` | `repo.remote`, last-commit timestamp |
 | `VercelConfig` | `vercel.json`, `.vercel/project.json` | `deploy.url` (`Likely`), service `vercel` |
 | `NetlifyConfig` | `netlify.toml` | service `netlify`, `deploy.url` (`Likely`) |
 | `FlyConfig` | `fly.toml` | service `fly`, `deploy.url` (`Likely` — derived from app name) |
 | `EnvExample` | `.env.example`, `.env.sample` | `deploy.env_required` (key names only) |
 
+**Amendment (§7): `branch` and `dirty` are not detected.** Neither appears in
+the manifest schema nor in the columns `vibe list` shows, so neither has a
+consumer in v1 — and both are expensive. `git status` walks the working tree.
+Every way of obtaining the branch costs either a third subprocess or a
+ref-count-dependent format string: `git log --format=%D` was measured at 44ms
+(0 refs), 439ms (2k refs) and 4,567ms (50k refs packed), because `%D` makes git
+load and match every ref. They return the day a command displays them.
+
+**Amendment (§2): `Specificity` is carried per `Finding`, not per `Detector`.**
+One detector legitimately makes claims of differing authority — `package.json`
+declaring `engines.node` is a manifest statement, while inferring a framework
+from a config file's presence is not.
+
 `DetectorSet::builtin()` is a fixed list. **No plugin loading in v1** — no dynamic libraries, no user-defined detectors. That is a real limitation (someone will want a Deno or Elixir detector on day two) and the mitigation is that the trait is small enough that a PR adding one is ~80 lines plus a fixture. A declarative, TOML-defined detector format is the v2 conversation.
 
 ### 8. Budget enforcement, and what happens when it is exceeded
 
-The 2-second/50-repo budget is met by: one directory walk per project with aggressive pruning; `interest()`-gating so most detectors never run; a memoized read cache; **one** `git` invocation per repo (batched, `--no-optional-locks`); and rayon parallelism across projects with a bounded pool.
+The 2-second/50-repo budget is met by: one directory walk per project with aggressive pruning; `interest()`-gating so most detectors never run; a memoized read cache; `git` invocations that pass `--no-optional-locks`; and parallelism across projects with a bounded pool.
+
+**Amendment (§8), from measurement rather than design:**
+
+- **`std::thread::scope`, not rayon.** A fixed-size fan-out over coarse work
+  items does not justify a dependency.
+- **A shared work cursor, not static chunks.** Four heavy repositories among
+  fifty measured a 747ms median spread across chunks and 1177ms (max 1936ms)
+  clustered in one. Clustering is the *likely* arrangement, because project
+  directories are scanned in path order and related projects share a prefix.
+- **Two `git` invocations per repository, not one.** `remote get-url` and
+  `log -1 --format=%cI`. Folding them into one is the cheapest remaining
+  headroom and is deliberately not taken yet; the previous attempt to do so
+  introduced a ref-count-dependent cost.
+- **The practical ceiling is ~150 projects.** Cost is ~13.2ms/project and stays
+  linear to at least 500, because the bottleneck is a fixed per-repository
+  subprocess cost. With no `.git` present at all, 50 projects index in 34ms —
+  the walking this section optimises is ~4% of the total.
+- **CI cannot guard this with wall-clock.** Subprocess count per repository is
+  the deterministic proxy, asserted in `tests/scan_budget.rs`.
 
 When a detector exceeds `ctx.deadline` or a `git` call times out, its fields become `Unknown { Timeout { detector } }` and the scan report counts them. **A detector under time pressure returns nothing, never a partial guess.** `vibe scan` finishing in 1.9s with four fields honestly marked unknown is the correct outcome; finishing in 1.9s with four invented values is the failure this whole ADR exists to prevent.
 

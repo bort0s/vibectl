@@ -89,7 +89,8 @@ pub fn write_scan_human(
     show_suggestions: bool,
 ) -> std::io::Result<()> {
     if report.projects.is_empty() {
-        return writeln!(out, "No projects found in {}.", report.roots.join(", "));
+        writeln!(out, "No projects found in {}.", report.roots.join(", "))?;
+        return write_depth_note(out, report);
     }
 
     for p in &report.projects {
@@ -150,6 +151,30 @@ pub fn write_scan_human(
             out,
             "{suggestions} value(s) found but not written — re-run with --suggestions"
         )?;
+    }
+    write_depth_note(out, report)
+}
+
+/// Say where the walk stopped looking.
+///
+/// "No projects found" after declining to descend is the same substitution the
+/// detectors are forbidden from making — absence of a look reported as absence
+/// of a thing.
+fn write_depth_note(out: &mut impl Write, report: &vibe_core::ScanReport) -> std::io::Result<()> {
+    let n = report.depth_limited.len();
+    if n == 0 {
+        return Ok(());
+    }
+    writeln!(
+        out,
+        "{n} director{} not searched below the depth limit —          a project there would not have been found. Raise --depth to look.",
+        if n == 1 { "y was" } else { "ies were" }
+    )?;
+    for dir in report.depth_limited.iter().take(3) {
+        writeln!(out, "  {dir}")?;
+    }
+    if n > 3 {
+        writeln!(out, "  ...and {} more", n - 3)?;
     }
     Ok(())
 }

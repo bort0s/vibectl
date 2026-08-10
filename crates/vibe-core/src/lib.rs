@@ -32,6 +32,7 @@
 
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+pub mod agents;
 pub mod cache;
 pub mod config;
 pub mod detect;
@@ -47,6 +48,7 @@ pub mod scan;
 pub mod view;
 pub mod walk;
 
+pub use agents::{AgentState, LockLoad, Lockfile};
 pub use cache::{Cache, CacheLoad};
 pub use config::Config;
 pub use detect::{Detection, Detector, DetectorId, Evidence, FieldPath, Specificity, Suggestion};

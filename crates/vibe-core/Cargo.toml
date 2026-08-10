@@ -11,6 +11,7 @@ categories.workspace = true
 keywords.workspace = true
 
 [dependencies]
+blake3 = { workspace = true }
 directories = { workspace = true }
 ignore = { workspace = true }
 serde = { workspace = true }

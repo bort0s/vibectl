@@ -19,10 +19,18 @@ keywords = ["registry", "projects", "scaffolding", "cli"]
 vibe-core = { version = "0.1.0", path = "crates/vibe-core" }
 
 anyhow = "1.0.104"
+# Content hashing for the agent lockfile. NOT on the originally approved
+# dependency list - flagged as a deviation. The lockfile's only job is telling
+# "we wrote this" from "the user edited it", which needs a real content hash:
+# size+mtime cannot see an edit that preserves length, and getting that wrong
+# means overwriting someone's work. `blake3` is chosen over `sha2` for speed on
+# many small files; the algorithm prefix in the lockfile means either can be
+# migrated to later.
+blake3 = { version = "1.8.2", default-features = false, features = ["std"] }
 clap = { version = "4.6.6", features = ["derive"] }
 comfy-table = "7.2.1"
 directories = "6.0.0"
-ignore = "0.4.33"
+ignore = "0.4"
 minijinja = "2.23.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

@@ -1,0 +1,100 @@
+use serde::Serialize;
+
+use crate::manifest::SchemaVersion;
+use crate::model::{Status, Visibility};
+
+/// The read projection of a `.vibe/project.toml`.
+///
+/// This type **cannot produce TOML**. There is no `Display`, no `to_toml`, and
+/// its `Serialize` impl is wired only to the `--json` contract. Writes go
+/// through [`crate::ManifestDocument`]. See the module docs and ADR-0002 §5 for
+/// why the asymmetry is the whole design.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct Manifest {
+    pub schema_version: SchemaVersion,
+    pub project: Project,
+    pub stack: Stack,
+    pub repo: Repo,
+    pub deploy: Deploy,
+    pub context: Context,
+    /// Keys present in the file that this build does not understand.
+    ///
+    /// Reporting only — never a round-trip channel. The keys survive a write
+    /// because nothing ever rebuilds the document, not because they are
+    /// replayed from here. Surfacing them is how `vibe show` can tell the user
+    /// "3 keys this build does not understand" instead of silently ignoring
+    /// them.
+    pub unknown: Vec<UnknownKey>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct Project {
+    pub name: String,
+    pub description: Option<String>,
+    pub status: Status,
+    /// Orthogonal to [`Project::status`]: "off my desk", not "abandoned".
+    /// Absent in the file means `false`, which is why every pre-existing
+    /// manifest parses unchanged (ADR-0002 §6).
+    pub archived: bool,
+    /// An ISO-8601 `YYYY-MM-DD` string, parsed leniently and kept as written.
+    ///
+    /// Deliberately not TOML's native date type: half of these manifests are
+    /// hand-written or agent-written, and a quoted string is what people
+    /// actually type. An unparseable value is preserved verbatim rather than
+    /// rejected.
+    pub created: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct Stack {
+    pub runtime: Option<String>,
+    pub frameworks: Vec<String>,
+    pub services: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct Repo {
+    pub remote: Option<String>,
+    pub visibility: Option<Visibility>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct Deploy {
+    pub url: Option<String>,
+    pub env_required: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct Context {
+    pub decisions: Vec<String>,
+    pub next: Vec<String>,
+}
+
+/// A key found in the manifest that this build has no meaning for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct UnknownKey {
+    /// Dotted path from the document root, e.g. `deploy.regions`.
+    pub dotted_path: String,
+    pub kind: ValueKind,
+}
+
+/// The TOML shape of a value, recorded for reporting without interpreting it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum ValueKind {
+    String,
+    Integer,
+    Float,
+    Boolean,
+    Datetime,
+    Array,
+    Table,
+}

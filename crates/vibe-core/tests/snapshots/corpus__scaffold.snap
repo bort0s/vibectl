@@ -1,0 +1,22 @@
+---
+source: crates/vibe-core/tests/corpus.rs
+expression: d.render()
+---
+# Managed by vibe. Hand-edits and comments are preserved.
+# Empty fields mean 'not determined' — vibe does not guess.
+schema_version = "1.0"
+
+[project]
+name = "macroring"
+description = ""
+status = "active"
+created = "2026-03-12"
+
+[stack]
+runtime = ""
+frameworks = []
+services = []
+
+[context]
+decisions = []
+next = []

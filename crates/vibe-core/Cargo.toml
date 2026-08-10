@@ -11,8 +11,18 @@ categories.workspace = true
 keywords.workspace = true
 
 [dependencies]
+directories = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+toml_edit = { workspace = true }
 
 [dev-dependencies]
+insta = { workspace = true }
+proptest = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+# Negative control only — see the note in the workspace manifest.
+toml = { workspace = true }
 
 [lints]
 workspace = true

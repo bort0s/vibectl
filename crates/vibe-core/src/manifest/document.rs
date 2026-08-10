@@ -1,0 +1,358 @@
+use std::path::{Path, PathBuf};
+
+use toml_edit::{Array, DocumentMut, Item, Table, Value};
+
+use crate::error::CoreError;
+use crate::manifest::parse;
+use crate::manifest::version::SchemaVersion;
+use crate::model::{Manifest, Status, Visibility};
+use crate::plan::FileOp;
+
+/// The complete, closed set of mutations any command may perform on a manifest.
+///
+/// Closed on purpose. A command cannot express "write this arbitrary key", so
+/// there is no code path that can invent a field, and adding one is a visible
+/// change to this enum rather than a line buried in a command implementation.
+///
+/// The variants that carry detection results — `SetStackRuntime`,
+/// `SetRepoRemote`, `SetDeployUrl` — are deliberately **absent in P1**. They
+/// take a `Detected<T>` (ADR-0003), the detection engine does not exist yet,
+/// and shipping them as `Option<String>` now would mean a breaking change to a
+/// public enum the moment P2 lands. Adding variants later is additive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FieldEdit {
+    SetDescription(Option<String>),
+    SetProjectStatus(Status),
+    /// Orthogonal to status, and the inverse of itself: `vibe unarchive` is
+    /// `SetArchived(false)`. Un-archiving restores the exact prior state
+    /// because archiving never overwrote it (ADR-0002 §6).
+    SetArchived(bool),
+    SetRepoVisibility(Visibility),
+    ReplaceStackFrameworks(Vec<String>),
+    ReplaceStackServices(Vec<String>),
+    ReplaceDeployEnvRequired(Vec<String>),
+    ReplaceContextDecisions(Vec<String>),
+    ReplaceContextNext(Vec<String>),
+    SetSchemaVersion(SchemaVersion),
+}
+
+/// Why a manifest was rewritten. Surfaced in `--dry-run` output so a schema
+/// migration is a visible line rather than an invisible side effect of an
+/// unrelated command.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+#[non_exhaustive]
+pub enum EditReason {
+    Created,
+    FieldsUpdated,
+    SchemaMigration {
+        from: SchemaVersion,
+        to: SchemaVersion,
+    },
+}
+
+/// A live `toml_edit` document plus the bytes it was read from.
+///
+/// The only type in this crate that can produce TOML.
+#[derive(Debug, Clone)]
+pub struct ManifestDocument {
+    path: PathBuf,
+    doc: DocumentMut,
+    original: String,
+}
+
+impl ManifestDocument {
+    /// Read a manifest from disk.
+    pub fn open(path: &Path) -> Result<Self, CoreError> {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(CoreError::ManifestNotFound {
+                    path: path.to_path_buf(),
+                });
+            }
+            Err(source) => {
+                return Err(CoreError::Io {
+                    path: path.to_path_buf(),
+                    source,
+                });
+            }
+        };
+        Self::from_text(path, &text)
+    }
+
+    /// Parse a manifest from text. The `path` is used for error reporting and
+    /// for the resulting [`FileOp`]; it is not read.
+    pub fn from_text(path: impl Into<PathBuf>, text: &str) -> Result<Self, CoreError> {
+        let path = path.into();
+        let doc = text
+            .parse::<DocumentMut>()
+            .map_err(|source| CoreError::ManifestSyntax {
+                path: path.clone(),
+                source: Box::new(source),
+            })?;
+        Ok(Self {
+            path,
+            doc,
+            original: text.to_owned(),
+        })
+    }
+
+    /// Build a fresh manifest for `vibe new`.
+    ///
+    /// Constructed through `toml_edit` rather than by interpolating a string
+    /// template: a project name or description containing a quote or a newline
+    /// would produce invalid TOML from a template, and the escaping rules are
+    /// the serializer's job, not ours.
+    #[must_use]
+    pub fn scaffold(path: impl Into<PathBuf>, name: &str, created: &str) -> Self {
+        let mut doc = DocumentMut::new();
+
+        doc["schema_version"] = toml_edit::value(SchemaVersion::CURRENT.to_string());
+
+        let mut project = Table::new();
+        project["name"] = toml_edit::value(name);
+        project["description"] = toml_edit::value("");
+        project["status"] = toml_edit::value(Status::Active.to_string());
+        project["created"] = toml_edit::value(created);
+        doc["project"] = Item::Table(project);
+
+        let mut stack = Table::new();
+        stack["runtime"] = toml_edit::value("");
+        stack["frameworks"] = Item::Value(Value::Array(Array::new()));
+        stack["services"] = Item::Value(Value::Array(Array::new()));
+        doc["stack"] = Item::Table(stack);
+
+        let mut context = Table::new();
+        context["decisions"] = Item::Value(Value::Array(Array::new()));
+        context["next"] = Item::Value(Value::Array(Array::new()));
+        doc["context"] = Item::Table(context);
+
+        // A header comment on the first key. Written through the decor API so
+        // it is part of the document rather than a string concatenation that
+        // the next render would drop.
+        if let Some(mut key) = doc.key_mut("schema_version") {
+            key.leaf_decor_mut().set_prefix(
+                "# Managed by vibe. Hand-edits and comments are preserved.\n\
+                 # Empty fields mean 'not determined' — vibe does not guess.\n",
+            );
+        }
+
+        let original = doc.to_string();
+        Self {
+            path: path.into(),
+            doc,
+            // A scaffolded document has no prior bytes on disk. Seeding
+            // `original` with the rendered form means `into_op` correctly
+            // reports "no change" if a caller scaffolds and edits nothing.
+            original,
+        }
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The bytes this document was read from.
+    #[must_use]
+    pub fn original(&self) -> &str {
+        &self.original
+    }
+
+    /// The document as TOML. Byte-identical to [`Self::original`] until an edit
+    /// is applied.
+    #[must_use]
+    pub fn render(&self) -> String {
+        self.doc.to_string()
+    }
+
+    /// The typed read projection.
+    ///
+    /// Fails with [`CoreError::SchemaMajorMismatch`] when the major version is
+    /// not this build's: a best-effort read across a major boundary produces
+    /// confidently-wrong output, which for a tool whose fifth constraint is
+    /// "detection is honest" is the worse failure (ADR-0002 §3).
+    pub fn parse(&self) -> Result<Manifest, CoreError> {
+        parse::parse(&self.path, &self.doc)
+    }
+
+    /// Apply one targeted mutation.
+    ///
+    /// Every edit addresses a single key in the live document. Keys nobody
+    /// addressed are untouched *by construction* — this is the mechanism that
+    /// makes unknown-key survival a property rather than a promise.
+    pub fn apply(&mut self, edit: FieldEdit) -> Result<(), CoreError> {
+        match edit {
+            FieldEdit::SetDescription(Some(v)) => {
+                self.set_str("project", "description", &v)?;
+            }
+            FieldEdit::SetDescription(None) => {
+                self.remove("project", "description")?;
+            }
+            FieldEdit::SetProjectStatus(s) => {
+                self.set_str("project", "status", &s.to_string())?;
+            }
+            FieldEdit::SetArchived(b) => {
+                self.set_bool("project", "archived", b)?;
+            }
+            FieldEdit::SetRepoVisibility(v) => {
+                self.set_str("repo", "visibility", &v.to_string())?;
+            }
+            FieldEdit::ReplaceStackFrameworks(items) => {
+                self.set_array("stack", "frameworks", &items)?;
+            }
+            FieldEdit::ReplaceStackServices(items) => {
+                self.set_array("stack", "services", &items)?;
+            }
+            FieldEdit::ReplaceDeployEnvRequired(items) => {
+                self.set_array("deploy", "env_required", &items)?;
+            }
+            FieldEdit::ReplaceContextDecisions(items) => {
+                self.set_array("context", "decisions", &items)?;
+            }
+            FieldEdit::ReplaceContextNext(items) => {
+                self.set_array("context", "next", &items)?;
+            }
+            FieldEdit::SetSchemaVersion(v) => {
+                let new = Value::from(v.to_string());
+                let doc: &mut Table = &mut self.doc;
+                set_value_preserving_decor(doc, "schema_version", new);
+            }
+        }
+        Ok(())
+    }
+
+    /// The write op for this document, or `None` if rendering it produces the
+    /// bytes it started from.
+    ///
+    /// Returning `None` for a no-op is what makes `vibe archive` on an
+    /// already-archived project a no-op rather than an error, and what keeps
+    /// `--dry-run` from showing a diff with nothing in it.
+    #[must_use]
+    pub fn into_op(self, reason: EditReason) -> Option<FileOp> {
+        let after = self.doc.to_string();
+        if after == self.original {
+            return None;
+        }
+        Some(FileOp::UpdateFile {
+            path: self.path,
+            before: self.original,
+            after,
+            reason,
+        })
+    }
+
+    /// The op that creates this document as a new file.
+    #[must_use]
+    pub fn into_create_op(self) -> FileOp {
+        FileOp::CreateFile {
+            path: self.path,
+            contents: self.doc.to_string(),
+        }
+    }
+
+    // --- addressed mutation helpers -------------------------------------
+
+    fn table_mut(&mut self, table: &'static str) -> Result<&mut Table, CoreError> {
+        let path = self.path.clone();
+        let item = self
+            .doc
+            .entry(table)
+            .or_insert_with(|| Item::Table(Table::new()));
+        // Read the kind before taking the mutable borrow: the error needs to
+        // describe what was there, and `as_table_mut` holds the borrow for the
+        // rest of the expression.
+        let found = item_kind_name(item);
+        item.as_table_mut().ok_or(CoreError::ManifestFieldType {
+            path,
+            field: table.to_owned(),
+            expected: "a table",
+            found,
+        })
+    }
+
+    fn set_str(&mut self, table: &'static str, key: &str, v: &str) -> Result<(), CoreError> {
+        let tbl = self.table_mut(table)?;
+        set_value_preserving_decor(tbl, key, Value::from(v));
+        Ok(())
+    }
+
+    fn set_bool(&mut self, table: &'static str, key: &str, v: bool) -> Result<(), CoreError> {
+        let tbl = self.table_mut(table)?;
+        set_value_preserving_decor(tbl, key, Value::from(v));
+        Ok(())
+    }
+
+    fn set_array(
+        &mut self,
+        table: &'static str,
+        key: &str,
+        items: &[String],
+    ) -> Result<(), CoreError> {
+        let tbl = self.table_mut(table)?;
+        match tbl.get_mut(key).and_then(Item::as_array_mut) {
+            // Mutating the existing array in place keeps the array's own decor
+            // — its position, the whitespace around it, and any comment before
+            // the key. Per-element formatting inside a *replaced* array is not
+            // preserved, which is the documented and intended boundary: an edit
+            // may reformat the value it edits, and may not touch anything else.
+            Some(arr) => {
+                arr.clear();
+                for s in items {
+                    arr.push(s.as_str());
+                }
+            }
+            None => {
+                let mut arr = Array::new();
+                for s in items {
+                    arr.push(s.as_str());
+                }
+                tbl.insert(key, Item::Value(Value::Array(arr)));
+            }
+        }
+        Ok(())
+    }
+
+    fn remove(&mut self, table: &'static str, key: &str) -> Result<(), CoreError> {
+        let tbl = self.table_mut(table)?;
+        tbl.remove(key);
+        Ok(())
+    }
+}
+
+/// Replace a scalar while keeping the whitespace and comments around it.
+///
+/// `toml_edit::value()` builds a fresh `Value` with default decor, which would
+/// silently reflow `name = "x"   # why` into `name = "y"`. Lifting the old
+/// decor onto the new value is what makes an edit surgical.
+fn set_value_preserving_decor(tbl: &mut Table, key: &str, mut new: Value) {
+    match tbl.get_mut(key).and_then(Item::as_value_mut) {
+        Some(existing) => {
+            let decor = existing.decor().clone();
+            *new.decor_mut() = decor;
+            *existing = new;
+        }
+        None => {
+            tbl.insert(key, Item::Value(new));
+        }
+    }
+}
+
+pub(crate) fn item_kind_name(item: &Item) -> &'static str {
+    match item {
+        Item::None => "nothing",
+        Item::Value(v) => match v {
+            Value::String(_) => "a string",
+            Value::Integer(_) => "an integer",
+            Value::Float(_) => "a float",
+            Value::Boolean(_) => "a boolean",
+            Value::Datetime(_) => "a datetime",
+            Value::Array(_) => "an array",
+            Value::InlineTable(_) => "a table",
+        },
+        Item::Table(_) => "a table",
+        Item::ArrayOfTables(_) => "an array of tables",
+    }
+}

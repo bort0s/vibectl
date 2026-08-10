@@ -1,0 +1,331 @@
+//! The plan/apply mutation model.
+//!
+//! Nothing in this crate writes to the filesystem except [`apply`], and the
+//! only thing it accepts is a [`WritePlan`]. `--dry-run` is therefore not a
+//! flag anything here knows about — it is the caller building a plan and
+//! declining to apply it. A write path that forgot to honour `--dry-run` is
+//! not possible, because there is no write path that does not go through a
+//! plan.
+//!
+//! # What is deliberately absent
+//!
+//! - **There is no `FileOp::Delete`.** The "never destructive" constraint is
+//!   enforced by the variant not existing, so a destructive command is
+//!   unrepresentable rather than merely discouraged.
+//! - **[`WritePlan`] is `Serialize` but not `Deserialize`.** A plan contains
+//!   file contents and (from P5) subprocess invocations. Deserialising one
+//!   would mean `apply` accepts arbitrary file writes and arbitrary process
+//!   execution as *data* — from a webview, in a desktop build. Nothing in v1
+//!   needs the inverse direction, and the derive is far cheaper to withhold now
+//!   than to remove later (ADR-0005 §1).
+//! - **There is no `RunCommand` op yet.** It arrives in P5 shaped as a closed
+//!   set of validated git operations, not `{ program, args }` — a `{git, gh}`
+//!   program allowlist over free-form argv is not a containment boundary
+//!   (ADR-0005 §10).
+
+use std::path::{Component, Path, PathBuf};
+
+use serde::{Serialize, Serializer};
+
+use crate::error::{CoreError, display_path};
+use crate::manifest::EditReason;
+use crate::report::{Event, Reporter};
+
+/// Serialise a path as a lossy string rather than failing.
+///
+/// `serde`'s own `PathBuf` impl *errors* on non-UTF-8, which would make
+/// `--json` fail outright on a path it could still usefully describe. The
+/// sibling `path_lossy` flag that ADR-0005 §4 specifies is emitted by
+/// [`crate::ErrorPayload`] today; wiring it through every plan op arrives with
+/// the full `--json` DTOs in P3.
+fn lossy_path<S: Serializer>(p: &Path, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&display_path(p).0)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum PlanIntent {
+    New,
+    Sync,
+    Render,
+    Archive,
+}
+
+/// A single filesystem change. Additive only, by construction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum FileOp {
+    CreateDir {
+        #[serde(serialize_with = "lossy_path")]
+        path: PathBuf,
+    },
+    CreateFile {
+        #[serde(serialize_with = "lossy_path")]
+        path: PathBuf,
+        contents: String,
+    },
+    /// Carries both sides so a caller can render a real diff without re-reading
+    /// the file, and so `apply` can verify the file has not moved underneath
+    /// the plan.
+    UpdateFile {
+        #[serde(serialize_with = "lossy_path")]
+        path: PathBuf,
+        before: String,
+        after: String,
+        reason: EditReason,
+    },
+}
+
+impl FileOp {
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        match self {
+            FileOp::CreateDir { path }
+            | FileOp::CreateFile { path, .. }
+            | FileOp::UpdateFile { path, .. } => path,
+        }
+    }
+}
+
+/// Everything a write command intends to do, and nothing it has done.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+#[must_use]
+pub struct WritePlan {
+    pub intent: PlanIntent,
+    /// Every op must resolve inside this directory. Recorded on the plan rather
+    /// than passed to `apply` separately so a plan carries its own containment
+    /// boundary and cannot be applied against a wider one.
+    #[serde(serialize_with = "lossy_path")]
+    pub root: PathBuf,
+    pub ops: Vec<FileOp>,
+}
+
+impl WritePlan {
+    pub fn new(intent: PlanIntent, root: impl Into<PathBuf>, ops: Vec<FileOp>) -> Self {
+        Self {
+            intent,
+            root: root.into(),
+            ops,
+        }
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.ops.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "outcome")]
+#[non_exhaustive]
+pub enum ApplyOutcome {
+    Completed,
+    /// The caller cancelled. A *success* outcome: work already done stands, and
+    /// `after_ops` lets a consumer say "created 3 of 7 files, re-run to finish"
+    /// rather than showing an error dialog (ADR-0005 §2).
+    Cancelled {
+        after_ops: usize,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct ApplyReport {
+    pub applied: Vec<String>,
+    pub skipped: Vec<SkippedOp>,
+    pub outcome: ApplyOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct SkippedOp {
+    pub path: String,
+    pub reason: SkipReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum SkipReason {
+    /// A `CreateDir` whose directory already exists. Creating a directory is
+    /// idempotent; this is not a failure.
+    DirectoryAlreadyExists,
+}
+
+/// Verify one op path against the plan's root and the containment rules.
+///
+/// Rules, in the order they are cheapest to check:
+///
+/// 1. **Absolute.** Plans carry resolved paths; a relative one means the plan
+///    was built against an ambient working directory that `apply` may not share.
+/// 2. **No `..` or `.` components.** Normalisation happens at plan time.
+/// 3. **No `.git` component, ever.** `.git/hooks/*` executes with no config and
+///    no argument, so an additive write there is code execution — this is what
+///    makes "the worst case is an unintended additive write" true rather than
+///    wishful (ADR-0005 §10 rule 5).
+/// 4. **Lexically inside `root`.**
+/// 5. **The deepest existing ancestor canonicalises to somewhere inside the
+///    canonicalised root.** Catches a symlinked intermediate directory that
+///    exists at check time.
+///
+/// Rule 5 is *not* TOCTOU-proof: between this check and the write, a parent can
+/// be swapped for a symlink or a directory junction. Closing that needs
+/// `openat`-style handle-relative I/O, which v1 does not attempt. Rule 3 is
+/// what bounds the consequence.
+pub fn validate_path(path: &Path, root: &Path) -> Result<(), CoreError> {
+    let escapes = || CoreError::PathEscapesRoot {
+        path: path.to_path_buf(),
+        root: root.to_path_buf(),
+    };
+
+    if !path.is_absolute() || !root.is_absolute() {
+        return Err(escapes());
+    }
+
+    for comp in path.components() {
+        match comp {
+            Component::ParentDir | Component::CurDir => return Err(escapes()),
+            Component::Normal(name) if name.eq_ignore_ascii_case(".git") => {
+                return Err(CoreError::PathInsideGitDir {
+                    path: path.to_path_buf(),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    if !path.starts_with(root) {
+        return Err(escapes());
+    }
+
+    let real_root = canonical_existing_ancestor(root);
+    let real_path = canonical_existing_ancestor(path);
+    match (real_root, real_path) {
+        (Some(r), Some(p)) if !p.starts_with(&r) => Err(escapes()),
+        _ => Ok(()),
+    }
+}
+
+/// Canonicalise the deepest ancestor that exists.
+///
+/// `canonicalize` fails on a path that does not exist yet, which is every path
+/// a `CreateFile` names. Walking up to the first existing ancestor is what lets
+/// the check run before the write rather than after it.
+fn canonical_existing_ancestor(path: &Path) -> Option<PathBuf> {
+    let mut cur = Some(path);
+    while let Some(p) = cur {
+        if let Ok(real) = p.canonicalize() {
+            return Some(real);
+        }
+        cur = p.parent();
+    }
+    None
+}
+
+/// Execute a plan.
+///
+/// Every op is validated and every precondition checked **before any op runs**,
+/// so a plan that cannot complete fails without having written anything. It is
+/// not transactional at the filesystem level: a crash midway leaves a partial —
+/// but always additive — result, and re-running re-plans against the new
+/// reality (ADR-0001, Consequences).
+pub fn apply(plan: &WritePlan, rep: &dyn Reporter) -> Result<ApplyReport, CoreError> {
+    let started = std::time::Instant::now();
+
+    for op in &plan.ops {
+        validate_path(op.path(), &plan.root)?;
+        check_precondition(op)?;
+    }
+
+    rep.event(Event::ApplyStarted {
+        ops: plan.ops.len(),
+    });
+
+    let mut applied = Vec::new();
+    let mut skipped = Vec::new();
+    let mut outcome = ApplyOutcome::Completed;
+
+    for (index, op) in plan.ops.iter().enumerate() {
+        if rep.should_cancel() {
+            outcome = ApplyOutcome::Cancelled { after_ops: index };
+            break;
+        }
+        let display = display_path(op.path()).0;
+        match op {
+            FileOp::CreateDir { path } => {
+                if path.is_dir() {
+                    skipped.push(SkippedOp {
+                        path: display,
+                        reason: SkipReason::DirectoryAlreadyExists,
+                    });
+                    continue;
+                }
+                std::fs::create_dir_all(path).map_err(|source| CoreError::Io {
+                    path: path.clone(),
+                    source,
+                })?;
+                applied.push(display.clone());
+            }
+            FileOp::CreateFile { path, contents }
+            | FileOp::UpdateFile {
+                path,
+                after: contents,
+                ..
+            } => {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|source| CoreError::Io {
+                        path: parent.to_path_buf(),
+                        source,
+                    })?;
+                }
+                std::fs::write(path, contents).map_err(|source| CoreError::Io {
+                    path: path.clone(),
+                    source,
+                })?;
+                applied.push(display.clone());
+            }
+        }
+        rep.event(Event::OpApplied { path: display });
+    }
+
+    rep.event(Event::ApplyFinished {
+        applied: applied.len(),
+        elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+    });
+
+    Ok(ApplyReport {
+        applied,
+        skipped,
+        outcome,
+    })
+}
+
+fn check_precondition(op: &FileOp) -> Result<(), CoreError> {
+    match op {
+        FileOp::CreateDir { .. } => Ok(()),
+        FileOp::CreateFile { path, .. } => {
+            if path.exists() {
+                Err(CoreError::TargetExists { path: path.clone() })
+            } else {
+                Ok(())
+            }
+        }
+        // The file must still hold exactly what the plan diffed against.
+        // Anything else means the world moved after planning, and applying
+        // `after` would silently discard whatever changed it.
+        FileOp::UpdateFile { path, before, .. } => match std::fs::read_to_string(path) {
+            Ok(current) if &current == before => Ok(()),
+            Ok(_) => Err(CoreError::PlanStale { path: path.clone() }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(CoreError::ManifestNotFound { path: path.clone() })
+            }
+            Err(source) => Err(CoreError::Io {
+                path: path.clone(),
+                source,
+            }),
+        },
+    }
+}

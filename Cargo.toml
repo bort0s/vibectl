@@ -33,6 +33,11 @@ toml_edit = { version = "0.25.13", features = ["serde"] }
 insta = "1.48.0"
 proptest = "1.11.0"
 tempfile = "3.27.0"
+# Dev-only, and only ever as a negative control. `toml` is the naive
+# serde-round-trip path this project deliberately does not use; the round-trip
+# property tests assert that it loses comments and unknown keys where
+# `toml_edit` does not. It must never become a non-dev dependency.
+toml = "1.1.4"
 
 [workspace.lints.rust]
 # `deny`, not `forbid`: forbid cannot be lowered by an inner `#[allow]`, and

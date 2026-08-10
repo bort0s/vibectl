@@ -1,0 +1,288 @@
+//! Errors carry *data*, never a human-facing remediation sentence.
+//!
+//! `vibectl` owns "did you mean", "run `vibe scan` first", and colour. This
+//! crate owns paths, spans, key names and exit statuses. `anyhow` appears only
+//! in the CLI, so a `?` here cannot accidentally erase structure (ADR-0001 §4).
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use serde::Serialize;
+
+use crate::manifest::SchemaVersion;
+
+/// Every failure this crate can produce.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum CoreError {
+    #[error("no manifest at {}", .path.display())]
+    ManifestNotFound { path: PathBuf },
+
+    #[error("manifest at {} is not valid TOML", .path.display())]
+    ManifestSyntax {
+        path: PathBuf,
+        #[source]
+        source: Box<toml_edit::TomlError>,
+    },
+
+    #[error(
+        "manifest at {} uses schema {found}, this build reads {supported_major}.x",
+        .path.display()
+    )]
+    SchemaMajorMismatch {
+        path: PathBuf,
+        found: SchemaVersion,
+        supported_major: u16,
+    },
+
+    #[error("manifest at {} has an unreadable schema_version `{found}`", .path.display())]
+    SchemaVersionUnreadable { path: PathBuf, found: String },
+
+    #[error("manifest at {} is missing required field `{field}`", .path.display())]
+    ManifestMissingField { path: PathBuf, field: String },
+
+    #[error(
+        "manifest at {}: field `{field}` should be {expected}, found {found}",
+        .path.display()
+    )]
+    ManifestFieldType {
+        path: PathBuf,
+        field: String,
+        expected: &'static str,
+        found: &'static str,
+    },
+
+    #[error("{} already exists", .path.display())]
+    TargetExists { path: PathBuf },
+
+    #[error("{} changed on disk between plan and apply", .path.display())]
+    PlanStale { path: PathBuf },
+
+    #[error("{} is outside the plan's root {}", .path.display(), .root.display())]
+    PathEscapesRoot { path: PathBuf, root: PathBuf },
+
+    /// Rule 5 of ADR-0005 §10. `.git/hooks/*` executes with no configuration
+    /// and no argument, so a write landing there converts an additive file
+    /// write into code execution. `vibe` has no legitimate reason to write
+    /// inside `.git/`, ever.
+    #[error("{} is inside a .git directory, which vibe never writes to", .path.display())]
+    PathInsideGitDir { path: PathBuf },
+
+    #[error("io error at {}", .path.display())]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+impl CoreError {
+    /// A stable identifier, safe to branch on. Unlike the `Display` text, this
+    /// does not change when wording improves.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            CoreError::ManifestNotFound { .. } => "VIBE_E_MANIFEST_NOT_FOUND",
+            CoreError::ManifestSyntax { .. } => "VIBE_E_MANIFEST_SYNTAX",
+            CoreError::SchemaMajorMismatch { .. } => "VIBE_E_SCHEMA_MAJOR_MISMATCH",
+            CoreError::SchemaVersionUnreadable { .. } => "VIBE_E_SCHEMA_UNREADABLE",
+            CoreError::ManifestMissingField { .. } => "VIBE_E_MANIFEST_MISSING_FIELD",
+            CoreError::ManifestFieldType { .. } => "VIBE_E_MANIFEST_FIELD_TYPE",
+            CoreError::TargetExists { .. } => "VIBE_E_TARGET_EXISTS",
+            CoreError::PlanStale { .. } => "VIBE_E_PLAN_STALE",
+            CoreError::PathEscapesRoot { .. } => "VIBE_E_PATH_ESCAPES_ROOT",
+            CoreError::PathInsideGitDir { .. } => "VIBE_E_PATH_INSIDE_GIT_DIR",
+            CoreError::Io { .. } => "VIBE_E_IO",
+        }
+    }
+
+    /// The path this error is about, if any.
+    #[must_use]
+    pub fn path(&self) -> Option<&Path> {
+        match self {
+            CoreError::ManifestNotFound { path }
+            | CoreError::ManifestSyntax { path, .. }
+            | CoreError::SchemaMajorMismatch { path, .. }
+            | CoreError::SchemaVersionUnreadable { path, .. }
+            | CoreError::ManifestMissingField { path, .. }
+            | CoreError::ManifestFieldType { path, .. }
+            | CoreError::TargetExists { path }
+            | CoreError::PlanStale { path }
+            | CoreError::PathEscapesRoot { path, .. }
+            | CoreError::PathInsideGitDir { path }
+            | CoreError::Io { path, .. } => Some(path),
+        }
+    }
+
+    /// The serializable projection. [`CoreError`] itself is deliberately not
+    /// `Serialize`: its `#[source]` chain holds `std::io::Error` and
+    /// `toml_edit::TomlError`, neither of which belongs on a wire (ADR-0001 §4).
+    #[must_use]
+    pub fn to_wire(&self) -> ErrorPayload {
+        let mut params = BTreeMap::new();
+        match self {
+            CoreError::SchemaMajorMismatch {
+                found,
+                supported_major,
+                ..
+            } => {
+                params.insert("found".to_owned(), found.to_string());
+                params.insert("found_major".to_owned(), found.major.to_string());
+                params.insert("found_minor".to_owned(), found.minor.to_string());
+                params.insert("supported_major".to_owned(), supported_major.to_string());
+            }
+            CoreError::SchemaVersionUnreadable { found, .. } => {
+                params.insert("found".to_owned(), found.clone());
+            }
+            CoreError::ManifestMissingField { field, .. } => {
+                params.insert("field".to_owned(), field.clone());
+            }
+            CoreError::ManifestFieldType {
+                field,
+                expected,
+                found,
+                ..
+            } => {
+                params.insert("field".to_owned(), field.clone());
+                params.insert("expected".to_owned(), (*expected).to_owned());
+                params.insert("found".to_owned(), (*found).to_owned());
+            }
+            CoreError::PathEscapesRoot { root, .. } => {
+                params.insert("root".to_owned(), root.display().to_string());
+            }
+            // `io::ErrorKind` travels as a stable discriminant because the
+            // prose in the chain is OS-locale-dependent on Windows —
+            // FormatMessage returns localised strings, so a consumer that keys
+            // off the message is broken on an Italian machine (ADR-0005 §6).
+            CoreError::Io { source, .. } => {
+                params.insert("io_kind".to_owned(), format!("{:?}", source.kind()));
+            }
+            _ => {}
+        }
+
+        let (path, path_lossy) = match self.path() {
+            Some(p) => {
+                let (s, lossy) = display_path(p);
+                (Some(s), lossy)
+            }
+            None => (None, false),
+        };
+
+        ErrorPayload {
+            code: self.code(),
+            message: self.to_string(),
+            path,
+            path_lossy,
+            params,
+            chain: error_chain(self),
+        }
+    }
+}
+
+/// The wire shape of a [`CoreError`]: a stable `code`, named `params` for
+/// interpolation, and prose carried *alongside* rather than instead.
+///
+/// A consumer renders its own sentence from `code` + `params`; the `message` is
+/// a fallback, not a contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct ErrorPayload {
+    pub code: &'static str,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// True when `path` lost bytes converting to UTF-8. Skipped when false, so
+    /// it is invisible to `jq` in the overwhelmingly common case.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub path_lossy: bool,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub chain: Vec<String>,
+}
+
+/// Render a path for display, reporting whether the conversion was lossy.
+///
+/// Lossiness is confined to *labels*. Nothing addresses a project by this
+/// string — that is what `ProjectId` (derived from raw path bytes) is for, so
+/// two paths differing only in non-UTF-8 bytes can never collapse into
+/// operating on the wrong project. See ADR-0005 §4.
+pub(crate) fn display_path(p: &Path) -> (String, bool) {
+    match p.to_str() {
+        Some(s) => (s.to_owned(), false),
+        None => (p.to_string_lossy().into_owned(), true),
+    }
+}
+
+fn error_chain(err: &dyn std::error::Error) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = err.source();
+    while let Some(e) = cur {
+        out.push(e.to_string());
+        cur = e.source();
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schema_mismatch_carries_both_numbers_as_params() {
+        let err = CoreError::SchemaMajorMismatch {
+            path: PathBuf::from("/p/.vibe/project.toml"),
+            found: SchemaVersion::new(3, 0),
+            supported_major: 2,
+        };
+        let wire = err.to_wire();
+
+        assert_eq!(wire.code, "VIBE_E_SCHEMA_MAJOR_MISMATCH");
+        assert_eq!(wire.params["found"], "3.0");
+        assert_eq!(wire.params["supported_major"], "2");
+        // The prose names both numbers and the action, per ADR-0002 §3.
+        assert!(
+            wire.message.contains("schema 3.0") && wire.message.contains("2.x"),
+            "message should name both versions, got: {}",
+            wire.message
+        );
+    }
+
+    #[test]
+    fn io_errors_carry_a_stable_kind_not_just_localised_prose() {
+        let err = CoreError::Io {
+            path: PathBuf::from("/nope"),
+            source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
+        };
+        let wire = err.to_wire();
+        assert_eq!(wire.params["io_kind"], "PermissionDenied");
+        assert_eq!(wire.chain, vec!["denied".to_owned()]);
+    }
+
+    #[test]
+    fn every_variant_has_a_distinct_code() {
+        let all = [
+            CoreError::ManifestNotFound { path: "a".into() },
+            CoreError::SchemaVersionUnreadable {
+                path: "a".into(),
+                found: "x".into(),
+            },
+            CoreError::ManifestMissingField {
+                path: "a".into(),
+                field: "f".into(),
+            },
+            CoreError::TargetExists { path: "a".into() },
+            CoreError::PlanStale { path: "a".into() },
+            CoreError::PathEscapesRoot {
+                path: "a".into(),
+                root: "b".into(),
+            },
+            CoreError::PathInsideGitDir { path: "a".into() },
+        ];
+        let mut codes: Vec<_> = all.iter().map(CoreError::code).collect();
+        codes.sort_unstable();
+        let before = codes.len();
+        codes.dedup();
+        assert_eq!(before, codes.len(), "duplicate error codes: {codes:?}");
+    }
+}

@@ -22,9 +22,43 @@
 //!    in the language prevents adding it here, so this half of the boundary is
 //!    asserted by a CI step that inspects `cargo tree -p vibe-core`.
 //!
-//! # Status
+//! # Mutation model
 //!
-//! Pre-alpha. The workspace skeleton is in place (P0); manifest types land in
-//! P1. There is no public API yet.
+//! Nothing in this crate writes to the filesystem except [`Registry::apply`],
+//! and the only thing it accepts is a [`WritePlan`] produced by a `plan_*`
+//! method. `--dry-run` is therefore not a flag this crate knows about: it is
+//! the caller declining to make the second call. See `docs/adr/0001` and
+//! `docs/adr/0005`.
 
 #![deny(clippy::print_stdout, clippy::print_stderr)]
+
+pub mod config;
+pub mod error;
+pub mod manifest;
+pub mod model;
+pub mod plan;
+pub mod registry;
+pub mod report;
+
+pub use config::Config;
+pub use error::{CoreError, ErrorPayload};
+pub use manifest::{FieldEdit, ManifestDocument, SchemaVersion};
+pub use model::{Manifest, Status, Visibility};
+pub use plan::{ApplyOutcome, ApplyReport, FileOp, PlanIntent, WritePlan};
+pub use registry::{NewRequest, Registry};
+pub use report::{CollectingReporter, Diagnostic, Event, NullReporter, Reporter, Severity};
+
+/// Types that cross a `spawn_blocking` boundary in a desktop consumer must be
+/// `Send + Sync + 'static`. ADR-0005 §8 requires this to be a compile-time
+/// assertion rather than an assumption, because the day it stops being true is
+/// the day someone adds an `Rc` field and nothing complains until a frontend
+/// exists to complain.
+const _: fn() = || {
+    fn assert_send_sync_static<T: Send + Sync + 'static>() {}
+    assert_send_sync_static::<Registry>();
+    assert_send_sync_static::<Config>();
+    assert_send_sync_static::<WritePlan>();
+    assert_send_sync_static::<ApplyReport>();
+    assert_send_sync_static::<Manifest>();
+    assert_send_sync_static::<CoreError>();
+};

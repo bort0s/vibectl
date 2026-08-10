@@ -4,15 +4,23 @@
 //! # Crate contract
 //!
 //! This crate is the reusable engine: manifest types, parsing, project
-//! detection, and the render engine. Two rules define its boundary, and both
-//! are enforced mechanically rather than by convention:
+//! detection, and the render engine. Two rules define its boundary. Both are
+//! checked in CI; neither is fully enforced by `cargo build` alone, so the
+//! exact coverage is worth stating.
 //!
 //! 1. **No terminal I/O.** Nothing here writes to stdout or stderr. Results and
-//!    diagnostics are *returned*, never printed. The `deny` attributes below
-//!    make a stray `println!` a compile error. This is what allows a future
+//!    diagnostics are *returned*, never printed — which is what allows a future
 //!    Tauri frontend to consume the same code paths the CLI uses.
-//! 2. **No argument parsing.** `clap` is a dependency of the `vibectl` crate
-//!    only. This crate knows nothing about how it was invoked.
+//!
+//!    The `deny` attributes below fail the build **under `cargo clippy`**, not
+//!    under a plain `cargo build`: these are clippy lints, and rustc ignores
+//!    them. CI runs clippy with `-D warnings`, so the rule holds there. They
+//!    also only cover the `print!`/`println!` macro family — an explicit
+//!    `writeln!(std::io::stdout(), ..)` slips past them and is caught by review
+//!    alone.
+//! 2. **No argument parsing.** `clap` belongs to the `vibectl` crate. Nothing
+//!    in the language prevents adding it here, so this half of the boundary is
+//!    asserted by a CI step that inspects `cargo tree -p vibe-core`.
 //!
 //! # Status
 //!

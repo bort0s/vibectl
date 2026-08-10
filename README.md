@@ -51,7 +51,9 @@ would be strange if it didn't, and is kept deliberately minimal.
 | `vibe archive <name>` | Take a project off your desk. Never deletes anything. |
 | `vibe unarchive <name>` | Put it back. |
 
-`--json` on every read command. `--dry-run` on every write command.
+`--json` on every read command, and on any `--dry-run` — a plan is a proposal to
+be inspected before it runs, so it is machine-readable too. `--dry-run` on every
+write command.
 
 `archive` is orthogonal to `status`: it sets `archived = true` and leaves
 `status` alone, so a *shipped* project can be filed away without being relabelled

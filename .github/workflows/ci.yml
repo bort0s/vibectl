@@ -106,23 +106,34 @@ jobs:
         # silently resolving to newer dependencies than the committed lockfile.
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
-      - name: Verify vibe-core has no CLI or terminal dependencies
-        # ADR-0001 makes `vibe-core` reusable from a future Tauri frontend by
-        # keeping argument parsing and terminal rendering out of it. Clippy's
-        # print_stdout/print_stderr denials in lib.rs catch the `println!`
-        # family but nothing stops someone adding `clap` to the crate, so the
-        # dependency half of that boundary is asserted here instead.
+      - name: Verify vibe-core's dependency boundary
+        # Two invariants, both convention until something checks them:
+        #
+        # 1. ADR-0001 keeps argument parsing and terminal rendering out of
+        #    `vibe-core` so a future Tauri frontend can consume it. Clippy's
+        #    print_stdout/print_stderr denials catch the `println!` family;
+        #    nothing stops someone adding `clap`.
+        # 2. `toml` is the naive serde round-trip this project deliberately
+        #    does not use. It is a dev-dependency purely as the negative
+        #    control that proves the round-trip properties are non-trivial.
+        #    If it ever reaches the real dependency tree, the comment saying
+        #    "dev-only" has become a lie. `-e normal` excludes dev-deps, and
+        #    the `^...$` anchors mean `toml_edit` is not matched by `toml`.
         if: matrix.os == 'ubuntu-latest'
         run: |
           set -euo pipefail
-          banned='^(clap|clap_builder|comfy-table|anyhow)$'
+          banned='^(clap|clap_builder|comfy-table|anyhow|toml)$'
           found=$(cargo tree --locked -p vibe-core -e normal --prefix none \
                   | awk '{print $1}' | sort -u | grep -E "$banned" || true)
           if [ -n "$found" ]; then
-            echo "::error::vibe-core must not depend on CLI/terminal crates. Found:"
+            echo "::error::vibe-core must not depend on these crates. Found:"
             echo "$found"
             exit 1
           fi
+          # Guard the guard: toml_edit must still be present and must not have
+          # been caught by the `toml` pattern.
+          cargo tree --locked -p vibe-core -e normal --prefix none \
+            | awk '{print $1}' | grep -qx 'toml_edit'
           echo "vibe-core dependency boundary OK"
 
   test:

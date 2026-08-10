@@ -218,6 +218,17 @@ Two supporting rules:
   `deploy.regions`, `context.risks`, `ai.summary`" — never for round-tripping.
   This is also what makes the minor-newer path in §3 safe: the keys are visible
   to the user and preserved on disk, not silently swallowed.
+
+  **An unknown *table* is reported as one entry and is not recursed into.** A
+  future `[ai]` section reports as `ai`, not as `ai.model`, `ai.summary`,
+  `ai.generated_at`. The user can act on "this build does not understand `ai`"
+  — upgrade, or ignore it — and cannot act on a list of sub-keys belonging to a
+  feature this build does not have. The named case to revisit is `vibe show`:
+  if it ever grows a mode that dumps a manifest for a human to audit key by
+  key, per-key detail becomes useful there and this decision should be
+  reopened rather than rediscovered. Preservation on write is unaffected
+  either way — it comes from never rebuilding the document, not from this
+  list.
 - **Unknown *values* degrade, they do not fail.** A `status = "hibernating"`
   written by a future build parses as `Status::Other("hibernating".into())`,
   displays verbatim, and is never rewritten. Only an explicit `vibe

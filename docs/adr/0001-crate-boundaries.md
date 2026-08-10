@@ -5,7 +5,12 @@
 Accepted (2026-08-10). **Amended by
 [ADR-0005](0005-core-api-amendments-for-desktop-consumption.md)**, which
 resolves the Tauri assumptions flagged at the end of this document and changes
-the `WritePlan`, `ScanReport`, `ApplyReport`, and `ProjectId` shapes. Read 0005
+the `WritePlan`, `FileOp`, `ScanReport`, `ApplyReport`, and `ProjectId` shapes.
+In particular **`FileOp::RunCommand` is not `{ program, args }` as shown in §3
+below** — ADR-0005 §10 replaces it with a closed set of validated operations,
+because a `{git, gh}` program allowlist over free-form argv is not a containment
+boundary. The schema error variant in §4 is also superseded: see
+[ADR-0002](0002-schema-versioning.md) §3, revised. Read 0005 and the revised 0002
 alongside this one before implementing.
 
 ## Context
@@ -31,11 +36,22 @@ Note that "no stdout I/O" does **not** mean "no I/O." Core reads the filesystem 
 Enforced mechanically, not by discipline, in `vibe-core/src/lib.rs`:
 
 ```rust
-#![forbid(unsafe_code)]
 #![deny(clippy::print_stdout, clippy::print_stderr, clippy::dbg_macro, clippy::exit)]
 ```
 
-CI runs clippy with `-D warnings`. A `print!` in core fails the build.
+`unsafe_code = "deny"` is set once in `[workspace.lints.rust]` rather than
+`forbid`-ed here. `forbid` cannot be lowered by an inner `#[allow]`, and because
+`[lints] workspace = true` is an all-or-nothing inheritance switch, a crate that
+ever needed an escape hatch would have to abandon workspace inheritance and copy
+the entire table. Some derive macros also expand to `#[allow(unsafe_code)]`,
+which is a hard error under `forbid`. `deny` is equally strict by default.
+
+CI runs clippy with `-D warnings`, so a `print!` in core fails the build **there**.
+It does not fail a plain `cargo build`: these are clippy lints and rustc ignores
+them. They also cover only the `print!` macro family — an explicit
+`writeln!(std::io::stdout(), ..)` is not caught by any lint and is a review
+obligation. The dependency half of the boundary (no `clap`, no `comfy-table`, no
+`anyhow` in core) is asserted by a CI step over `cargo tree -p vibe-core`.
 
 ### 2. Progress and diagnostics: a `Reporter` sink injected by the caller
 
@@ -119,6 +135,9 @@ pub enum CoreError {
     ManifestNotFound { path: PathBuf },
     #[error("manifest at {path} is not valid TOML")]
     ManifestSyntax { path: PathBuf, span: Option<Range<usize>>, #[source] source: toml_edit::TomlError },
+    // Superseded by ADR-0002 §3 (revised): schema_version is major.minor, and
+    // only a *major* mismatch is refused. Now:
+    //   SchemaMajorMismatch { path, found: (u16, u16), supported_major: u16 }
     #[error("manifest at {path} declares schema_version {found}, this build supports {supported}")]
     SchemaTooNew { path: PathBuf, found: u32, supported: u32 },
     #[error("`{program}` is not on PATH")]

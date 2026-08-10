@@ -40,11 +40,10 @@ serializable preview, the `Registry` retains the real plan, and `apply_by_id()`
 looks it up. Removing a public trait impl later is a breaking change; declining
 to add it costs nothing.
 
-Independently, `apply()` validates at the existing precondition site that every
-op path resolves under a configured root or the plan's declared target
-directory, and that every `RunCommand.program` is in a fixed `{git, gh}`
-allowlist. This turns "we never generate a bad plan" from a convention into an
-assertion, which is worth having for the CLI regardless of any frontend.
+Dropping the derive removes the *delivery mechanism* for a hostile plan. It does
+not make `apply()` safe to hand a plan it did not construct, and the first draft
+of this ADR wrongly implied that a `{git, gh}` program allowlist would. See
+**§10** for the actual containment rules.
 
 ### 2. Cancellation is a success outcome, not an error
 
@@ -163,6 +162,92 @@ concurrent scans sharing one lock.
   the *main thread* and freezes the window for the whole scan;
   `#[tauri::command(async)]` moves it to a tokio worker, which is better and
   still wrong. This is a docs problem, not an API problem.
+
+### 10. Subprocess and filesystem containment in `apply()`
+
+An earlier draft of §1 proposed validating `RunCommand.program` against a
+`{git, gh}` allowlist. **That closes nothing.** `git` invoked with arbitrary argv
+*is* an arbitrary-execution primitive, and the allowlist would have been a
+placeholder wearing the costume of a mitigation:
+
+```
+git -c core.sshCommand='sh -c "…"' fetch
+git -c alias.x='!sh -c "…"' x
+git --exec-path=/tmp/evil <anything>
+git clone --upload-pack='sh -c "…"' …
+```
+
+`gh` is worse, because `gh alias set` and `gh extension install` execute arbitrary
+binaries *by design* — that is the documented feature, not an abuse of it. And
+argv filtering is bypassed entirely through the inherited environment:
+`GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`, `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_n` /
+`GIT_CONFIG_VALUE_n` reach the same code paths without appearing in any argument.
+
+The containment is therefore four rules, all enforced in `apply()` at the site
+where preconditions are already re-verified.
+
+**1. The allowlist keys on the `(program, subcommand)` pair, not the program.**
+Each pair carries a validated argument schema of fixed positional shape. There is
+no passthrough, no user-supplied flag vector, and no variadic tail. The v1 set is
+small and closed:
+
+```rust
+enum GitOp {
+    Init  { cwd: PathBuf },                       // git init
+    Add   { cwd: PathBuf, paths: Vec<PathBuf> },  // git add -- <paths>
+    Commit{ cwd: PathBuf, message: String },      // git commit -m <msg>
+    RemoteAdd { cwd: PathBuf, name: String, url: GitUrl },
+    Push  { cwd: PathBuf, remote: String, branch: String },
+}
+```
+
+`FileOp::RunCommand` holds one of these, not a `program` plus an `args` vector.
+argv is *constructed* from the variant at apply time. This means a plan cannot
+express an invocation the enum does not have a variant for, which is the same
+technique as ADR-0001's missing `FileOp::Delete`: the dangerous thing is
+unrepresentable rather than merely rejected.
+
+**2. Categorical argument rejection runs before schema validation.** Any argument
+matching `-c`, `--exec-path`, `--upload-pack`, `--receive-pack`, `--config-env`,
+or `--namespace` is rejected outright, as is any argument beginning with `-` in a
+positional slot. This is belt-and-braces given rule 1 — with constructed argv
+these strings can only arrive inside a *value* (a branch name, a remote URL) —
+and that is exactly why it is worth having: it catches the case where a future
+variant threads a user-controlled string into a position that turns out to be
+flag-parsed. A `--` separator precedes every path list.
+
+**3. The child environment is constructed, never inherited.** `Command::env_clear()`
+followed by an explicit allowlist. `PATH` and `HOME` (plus `USERPROFILE`,
+`APPDATA`, `LOCALAPPDATA`, `SYSTEMROOT` and `PATHEXT` on Windows, which `gh`
+needs to locate its config and which the process needs to resolve executables at
+all). **No `GIT_*` or `GH_*` passthrough whatsoever**, with one deliberate
+exception carried explicitly and only when present: `GITHUB_TOKEN`, which the
+spec designates as the fallback when `gh` is absent. Terminal and locale
+variables are not forwarded, which also makes subprocess output stable to parse.
+
+**4. `CreateFile` containment canonicalizes the parent, not the path.**
+`canonicalize()` fails on a path that does not yet exist, which is every path a
+`CreateFile` op names. So: canonicalize the deepest existing ancestor, verify
+*that* is contained within a configured root or the plan's declared target
+directory, and verify the remaining components contain no `..` and no absolute
+prefix. Directory ops are checked the same way as they are created, so a plan
+that creates `a/b/` then writes `a/b/c` re-checks at each step.
+
+**Residual risk, stated rather than papered over:** this is TOCTOU-vulnerable.
+Between the containment check and the write, the parent directory can be replaced
+with a symlink (Unix) or a directory junction / reparse point (Windows), redirecting
+the write outside the root. Closing it properly needs `openat`-style handle-relative
+I/O (`O_NOFOLLOW` / `FILE_FLAG_OPEN_REPARSE_POINT`), which is platform-specific
+`unsafe`-adjacent work that v1 is not taking on. The exposure is bounded by the
+fact that an attacker who can win that race already has write access to the user's
+project tree, and by the absence of any `Delete` op — the worst outcome is an
+additive write to an unintended location. This is recorded as a known limitation,
+not as a solved problem.
+
+**Why now and not P5/P6:** the same reason the `Deserialize` derive was dropped.
+Rule 1 in particular changes the *shape* of `FileOp::RunCommand`, and narrowing a
+public enum from `{program, args}` to a closed operation set is breaking once
+anything depends on it. Capability is cheap to withhold and expensive to remove.
 
 ## Rejected
 

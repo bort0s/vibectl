@@ -68,12 +68,22 @@ pub const DEFAULT_DISCOVERY_DEPTH: usize = 3;
 pub struct FileIndex {
     /// Relative paths with forward slashes, e.g. `.vercel/project.json`.
     files: BTreeSet<String>,
-    /// Base names present anywhere in the index, for cheap interest gating.
-    names: BTreeSet<String>,
+    /// Base names of files **directly at the project root**.
+    ///
+    /// Root-level, not any-depth, and the distinction is load-bearing. Every
+    /// stack detector reads a fixed root-relative path (`package.json`,
+    /// `Cargo.toml`, …), so gating them on a name found *anywhere* fires a
+    /// detector that then reads a file which does not exist. In a Go+Node
+    /// monorepo with `web/package.json`, that produced
+    /// `runtime = Unknown{Unreadable, path: "package.json"}` — a specific,
+    /// actionable-looking failure about a file the tool invented. Reporting a
+    /// fabricated read error is worse than reporting nothing.
+    root_names: BTreeSet<String>,
     /// Extensions present, without the dot.
     extensions: BTreeSet<String>,
-    /// Directory names present, including pruned ones such as `.git`.
-    dirs: BTreeSet<String>,
+    /// Directory names directly at the project root, including pruned ones
+    /// such as `.git`.
+    root_dirs: BTreeSet<String>,
     /// True when the entry cap was hit, so callers know the index is partial
     /// rather than assuming absence means absence.
     truncated: bool,
@@ -84,12 +94,46 @@ impl FileIndex {
     pub fn build(root: &Path) -> Self {
         let mut index = FileIndex::default();
 
+        // Root entries are indexed first and unconditionally, before the
+        // budgeted walk. Every detector reads a root-relative path, so if the
+        // entry cap were reached while walking an `assets/` directory that
+        // sorts before `go.mod`, the project's own manifest would be missing
+        // from the index and the field would report `no_evidence` — the disk
+        // was not silent, the walk simply never got there. A directory listing
+        // of one directory is not worth budgeting.
+        if let Ok(entries) = std::fs::read_dir(root) {
+            for entry in entries.flatten() {
+                let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                    index.root_dirs.insert(name);
+                } else {
+                    if let Some(ext) = std::path::Path::new(&name)
+                        .extension()
+                        .and_then(|e| e.to_str())
+                    {
+                        index.extensions.insert(ext.to_owned());
+                    }
+                    index.files.insert(name.clone());
+                    index.root_names.insert(name);
+                }
+            }
+        }
+
         let walker = ignore::WalkBuilder::new(root)
             // `.vibe`, `.git`, `.env.example` and `.vercel/` are all hidden, and
             // all load-bearing. The default of skipping hidden entries would
             // make the tool blind to its own manifest.
             .hidden(false)
-            .git_ignore(true)
+            // `.gitignore` is deliberately NOT honoured. `vercel link` appends
+            // `.vercel` to it and the Netlify CLI does the same with
+            // `.netlify`, so respecting it made the deploy detectors blind on
+            // exactly the projects that are actually deployed — and reported
+            // that blindness as `no_evidence`, which claims the disk was
+            // silent when it was not. The expensive directories are pruned by
+            // name below regardless, and `MAX_INDEXED_ENTRIES` bounds the rest.
+            .git_ignore(false)
             .git_global(false)
             .parents(false)
             .require_git(false)
@@ -114,11 +158,14 @@ impl FileIndex {
             let rel_str = rel.to_string_lossy().replace('\\', "/");
 
             let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
-            if let Some(name) = entry.file_name().to_str() {
-                if is_dir {
-                    index.dirs.insert(name.to_owned());
-                } else {
-                    index.names.insert(name.to_owned());
+            let at_root = !rel_str.contains('/');
+            if at_root {
+                if let Some(name) = entry.file_name().to_str() {
+                    if is_dir {
+                        index.root_dirs.insert(name.to_owned());
+                    } else {
+                        index.root_names.insert(name.to_owned());
+                    }
                 }
             }
             if !is_dir {
@@ -134,21 +181,23 @@ impl FileIndex {
         // descending into it would be both pointless and slow.
         for pruned in PRUNE_DIRS {
             if root.join(pruned).is_dir() {
-                index.dirs.insert((*pruned).to_owned());
+                index.root_dirs.insert((*pruned).to_owned());
             }
         }
 
         index
     }
 
+    /// A file with this name sits directly in the project root.
     #[must_use]
     pub fn has_file(&self, name: &str) -> bool {
-        self.names.contains(name)
+        self.root_names.contains(name)
     }
 
+    /// A directory with this name sits directly in the project root.
     #[must_use]
     pub fn has_dir(&self, name: &str) -> bool {
-        self.dirs.contains(name)
+        self.root_dirs.contains(name)
     }
 
     #[must_use]
@@ -156,26 +205,19 @@ impl FileIndex {
         self.extensions.contains(ext)
     }
 
-    /// Relative paths whose base name matches, in deterministic order.
+    /// Root-level file names starting with `prefix` and ending with `suffix`,
+    /// in deterministic order. For `requirements*.txt`.
+    ///
+    /// Root-level for the same reason as [`Self::has_file`], and with a second
+    /// consequence: `docs/requirements.txt` is a Sphinx build dependency, not a
+    /// statement about the project's runtime. Matching it at any depth made
+    /// every Go repository with Sphinx docs report a runtime conflict between
+    /// `go` and `python`.
     #[must_use]
-    pub fn paths_named(&self, name: &str) -> Vec<&str> {
-        self.files
+    pub fn root_files_matching(&self, prefix: &str, suffix: &str) -> Vec<&str> {
+        self.root_names
             .iter()
-            .filter(|p| p.rsplit('/').next() == Some(name))
-            .map(String::as_str)
-            .collect()
-    }
-
-    /// Relative paths whose base name starts with `prefix` and ends with
-    /// `suffix`, in deterministic order. For `requirements*.txt`.
-    #[must_use]
-    pub fn paths_matching(&self, prefix: &str, suffix: &str) -> Vec<&str> {
-        self.files
-            .iter()
-            .filter(|p| {
-                let base = p.rsplit('/').next().unwrap_or(p);
-                base.starts_with(prefix) && base.ends_with(suffix)
-            })
+            .filter(|base| base.starts_with(prefix) && base.ends_with(suffix))
             .map(String::as_str)
             .collect()
     }
@@ -187,7 +229,7 @@ impl FileIndex {
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.files.is_empty() && self.dirs.is_empty()
+        self.files.is_empty() && self.root_dirs.is_empty()
     }
 
     #[must_use]

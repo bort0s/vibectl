@@ -139,8 +139,17 @@ impl Detector for NodePackageJson {
         // is not cosmetic: a polyglot repo would then resolve silently in
         // favour of whichever language happened to be claimed at a higher
         // level, instead of being reported as the conflict it is. The
-        // approximation is carried by `Specificity::Manifest`, which a
-        // lockfile outranks.
+        // approximation is carried by `Specificity::Manifest`.
+        //
+        // Known limitation, stated because the previous version of this comment
+        // claimed a backstop that does not exist: no detector currently emits
+        // `StackRuntime` at `Specificity::Lockfile`, so nothing corrects this
+        // value downward. `engines.node` is a compatibility *floor* advertised
+        // to consumers, not the runtime in use, and a library holding `>=14`
+        // while its authors run 22 will be reported as `node@14`. Reading the
+        // resolved version out of four lockfile formats is what fixes it
+        // properly; until then this is the most authoritative statement the
+        // repository makes about itself.
         if let Some(range) = pkg.engines.as_ref().and_then(|e| e.node.as_deref()) {
             if let Some(major) = major_from_range(range) {
                 out.push(text_finding(
@@ -417,20 +426,50 @@ impl Detector for PyProject {
             )),
         }
 
-        for (name, label) in PY_FRAMEWORKS {
-            if text.contains(name) {
-                out.push(text_finding(
-                    FieldPath::StackFramework,
-                    *label,
-                    Confidence::Likely,
-                    Specificity::Manifest,
-                    Evidence::from_file(path, "project.dependencies", *name),
-                    PY_ID,
-                ));
+        // Parse `project.dependencies` rather than scanning the whole file.
+        // A substring search matched `pytest` inside `[tool.pytest.ini_options]`
+        // and `pydantic` inside `plugins = ["pydantic.mypy"]`, then cited both
+        // to `project.dependencies` — a table containing neither. A citation
+        // that points somewhere the value is not is worse than no citation,
+        // because it survives review.
+        let deps = doc
+            .get("project")
+            .and_then(|p| p.get("dependencies"))
+            .and_then(toml_edit::Item::as_array);
+        if let Some(deps) = deps {
+            for entry in deps.iter().filter_map(toml_edit::Value::as_str) {
+                let Some(name) = requirement_name(entry) else {
+                    continue;
+                };
+                if let Some((_, label)) = PY_FRAMEWORKS.iter().find(|(dep, _)| *dep == name) {
+                    out.push(text_finding(
+                        FieldPath::StackFramework,
+                        *label,
+                        Confidence::Certain,
+                        Specificity::Manifest,
+                        Evidence::from_file(path, "project.dependencies", entry),
+                        PY_ID,
+                    ));
+                }
             }
         }
 
         Ok(out)
+    }
+}
+
+/// The bare package name from a PEP 508 requirement: `fastapi[all]>=0.110` and
+/// `Django ~= 5.0 ; python_version < "3.12"` both yield their package name.
+fn requirement_name(spec: &str) -> Option<&str> {
+    let name = spec
+        .trim()
+        .split([' ', '=', '>', '<', '!', '~', '[', ';', ',', '('])
+        .next()?
+        .trim();
+    if name.is_empty() || name.starts_with('#') {
+        None
+    } else {
+        Some(name)
     }
 }
 
@@ -484,7 +523,7 @@ impl Detector for PyRequirements {
     fn detect(&self, ctx: &DetectCtx<'_>) -> Result<Vec<Finding>, DetectError> {
         let paths: Vec<String> = ctx
             .files
-            .paths_matching("requirements", ".txt")
+            .root_files_matching("requirements", ".txt")
             .into_iter()
             .map(str::to_owned)
             .collect();
@@ -750,6 +789,11 @@ impl Detector for NodeLockfile {
         ];
         let mut out = Vec::new();
         for (file, label) in managers {
+            // `has_file` is root-level, so a lockfile belonging to a nested
+            // example or fixture directory no longer makes a claim about this
+            // project. A Rust crate with `examples/wasm-demo/package-lock.json`
+            // was reporting `npm` as one of its services, cited to a
+            // root-level lockfile that did not exist.
             if ctx.files.has_file(file) {
                 out.push(text_finding(
                     FieldPath::StackService,

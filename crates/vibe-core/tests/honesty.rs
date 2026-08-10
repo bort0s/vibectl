@@ -395,3 +395,184 @@ fn two_scans_of_an_unchanged_tree_are_identical() {
     // make `vibe sync` produce a diff on every run.
     assert_eq!(one.projects, two.projects);
 }
+
+// --- regressions from the adversarial review ----------------------------
+//
+// Every case below produced a confident wrong answer, a fabricated citation,
+// or an invented failure before it was fixed. They are grouped here because
+// they share one root cause: a detector's *interest* matched something its
+// *read* never touched.
+
+#[test]
+fn a_monorepo_does_not_invent_a_root_manifest_it_never_had() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("mono");
+    std::fs::create_dir_all(root.join(".git")).expect("mkdir");
+    write(
+        &root,
+        "web/package.json",
+        r#"{"name":"web","engines":{"node":">=22"},"dependencies":{"react":"^19.0.0"}}"#,
+    );
+    write(&root, "api/go.mod", "module example.com/api\n\ngo 1.23\n");
+
+    let p = scan_one(dir.path(), false).expect("project");
+
+    // Previously: Unknown{Unreadable, path: "package.json"} — a specific,
+    // actionable-looking failure about a file that never existed. Reporting a
+    // fabricated read error sends the user hunting for a corrupt file.
+    let reason = p.detection.runtime.reason();
+    assert!(
+        !matches!(reason, Some(UnknownReason::Unreadable { .. })),
+        "a manifest in a subdirectory must not produce a root read error: {reason:?}"
+    );
+    assert!(
+        p.detection.unreadable.is_empty(),
+        "nothing was unreadable here: {:?}",
+        p.detection.unreadable
+    );
+}
+
+#[test]
+fn a_gitignored_vercel_directory_is_still_seen() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("shop");
+    std::fs::create_dir_all(&root).expect("mkdir");
+    write(&root, "package.json", r#"{"name":"shop"}"#);
+    write(&root, ".vercel/project.json", r#"{"name":"my-shop"}"#);
+    // `vercel link` writes exactly this.
+    write(&root, ".gitignore", ".vercel\nnode_modules\n");
+
+    let p = scan_one(dir.path(), false).expect("project");
+
+    // Honouring .gitignore made the deploy detectors blind on precisely the
+    // projects that are deployed, and reported it as `no_evidence` — a claim
+    // that the disk was silent when it was not.
+    assert!(
+        p.detection.services.contains(&"vercel".to_owned()),
+        "services: {:?}",
+        p.detection.services
+    );
+    assert_eq!(
+        p.detection.deploy_url.value().map(String::as_str),
+        Some("https://my-shop.vercel.app")
+    );
+}
+
+#[test]
+fn a_nested_lockfile_does_not_become_a_service_of_the_parent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("engine");
+    std::fs::create_dir_all(&root).expect("mkdir");
+    write(&root, "Cargo.toml", "[package]\nname = \"engine\"\n");
+    write(
+        &root,
+        "examples/wasm-demo/package.json",
+        r#"{"name":"wasm-demo","dependencies":{"vite":"^5.0.0"}}"#,
+    );
+    write(
+        &root,
+        "examples/wasm-demo/package-lock.json",
+        r#"{"lockfileVersion":3}"#,
+    );
+
+    let p = scan_one(dir.path(), false).expect("project");
+
+    assert_eq!(
+        p.detection.runtime.value().map(String::as_str),
+        Some("rust")
+    );
+    assert!(
+        !p.detection.services.contains(&"npm".to_owned()),
+        "an example's lockfile is not a service of the crate: {:?}",
+        p.detection.services
+    );
+    assert!(
+        !p.detection.frameworks.contains(&"vite@5".to_owned()),
+        "nor are its dependencies the crate's frameworks: {:?}",
+        p.detection.frameworks
+    );
+}
+
+#[test]
+fn docs_requirements_txt_does_not_make_a_go_project_polyglot() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("srv");
+    std::fs::create_dir_all(&root).expect("mkdir");
+    write(&root, "go.mod", "module example.com/srv\n\ngo 1.23\n");
+    // Every project with Sphinx or MkDocs docs has this file.
+    write(&root, "docs/requirements.txt", "sphinx==7.2.6\n");
+
+    let p = scan_one(dir.path(), false).expect("project");
+    assert_eq!(
+        p.detection.runtime.value().map(String::as_str),
+        Some("go@1.23"),
+        "a docs build dependency is not the project's runtime"
+    );
+}
+
+#[test]
+fn tool_config_tables_are_not_read_as_dependencies() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("acme");
+    std::fs::create_dir_all(&root).expect("mkdir");
+    write(
+        &root,
+        "pyproject.toml",
+        r#"[project]
+name = "acme-cli"
+requires-python = ">=3.9"
+dependencies = ["click"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+plugins = ["pydantic.mypy"]
+"#,
+    );
+
+    let p = scan_one(dir.path(), false).expect("project");
+
+    // A substring scan over the whole file claimed both, and cited both to
+    // `project.dependencies` — a table containing neither.
+    assert!(
+        p.detection.frameworks.is_empty(),
+        "only `click` is a dependency, and it is not in the framework list: {:?}",
+        p.detection.frameworks
+    );
+}
+
+#[test]
+fn breaking_a_manifest_never_raises_confidence() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("svc");
+    std::fs::create_dir_all(&root).expect("mkdir");
+    write(
+        &root,
+        "package.json",
+        r#"{"name":"svc","engines":{"node":">=20"}}"#,
+    );
+    write(
+        &root,
+        "pyproject.toml",
+        "[project\nname = \"svc\"\nrequires-python = \">=3.12\"\n",
+    );
+
+    let p = scan_one(dir.path(), false).expect("project");
+
+    // The value may still resolve — one readable manifest is real evidence.
+    // What must not happen is the failure vanishing: with the pyproject
+    // readable this is a conflict, so corrupting it must not silently produce
+    // a confident single answer with nothing to show for the loss.
+    assert!(
+        !p.detection.unreadable.is_empty(),
+        "the unreadable pyproject.toml must be reported even though runtime resolved"
+    );
+    let u = &p.detection.unreadable[0];
+    assert_eq!(u.path, "pyproject.toml");
+    assert!(
+        u.affects.contains(&vibe_core::FieldPath::StackRuntime),
+        "and it must say which fields it leaves less certain: {:?}",
+        u.affects
+    );
+}

@@ -95,7 +95,16 @@ impl Detector for NetlifyConfig {
         &[FieldPath::StackService, FieldPath::DeployUrl]
     }
 
-    fn detect(&self, _ctx: &DetectCtx<'_>) -> Result<Vec<Finding>, DetectError> {
+    fn detect(&self, ctx: &DetectCtx<'_>) -> Result<Vec<Finding>, DetectError> {
+        // Cite whichever file actually matched. Emitting a fixed
+        // `netlify.toml` citation meant a project detected via `.netlify/`
+        // alone was justified by a file that is not in the directory — a
+        // citation that survives review precisely because it looks right.
+        let source = if ctx.files.has_file("netlify.toml") {
+            "netlify.toml"
+        } else {
+            ".netlify"
+        };
         // Deliberately no URL. `netlify.toml` does not record the site name —
         // that lives in `.netlify/state.json`, which is gitignored and usually
         // absent. Constructing `https://<directory-name>.netlify.app` would be
@@ -106,11 +115,7 @@ impl Detector for NetlifyConfig {
             "netlify",
             Confidence::Certain,
             Specificity::Config,
-            Evidence::from_file(
-                std::path::Path::new("netlify.toml"),
-                "$",
-                "netlify config present",
-            ),
+            Evidence::from_file(std::path::Path::new(source), "$", "netlify config present"),
             NETLIFY_ID,
         )])
     }

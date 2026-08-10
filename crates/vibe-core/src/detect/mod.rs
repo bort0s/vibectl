@@ -148,7 +148,7 @@ impl Interest {
         match self {
             Interest::FileName(n) => index.has_file(n),
             Interest::FileNamePattern { prefix, suffix } => {
-                !index.paths_matching(prefix, suffix).is_empty()
+                !index.root_files_matching(prefix, suffix).is_empty()
             }
             Interest::DirName(n) => index.has_dir(n),
         }

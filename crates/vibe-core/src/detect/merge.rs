@@ -55,6 +55,25 @@ pub struct Detection {
     pub last_commit: Detected<String>,
     /// Found, but not written: weak values and unresolved conflicts.
     pub suggestions: Vec<Suggestion>,
+    /// Sources that exist but could not be read.
+    ///
+    /// Reported whether or not the affected fields ended up with a value. A
+    /// failure that is only consulted when a field is otherwise empty produces
+    /// a perverse result: corrupting one of two competing manifests removes it
+    /// from the conflict, and an honest `Unknown{Conflict}` silently becomes a
+    /// confident single answer. Breaking a file must never *raise* the tool's
+    /// confidence.
+    pub unreadable: Vec<UnreadableSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct UnreadableSource {
+    pub detector: DetectorId,
+    pub path: String,
+    pub why: String,
+    /// The fields this failure leaves less certain than they appear.
+    pub affects: Vec<FieldPath>,
 }
 
 pub fn merge(findings: &[Finding], failures: &[DetectorFailure]) -> Detection {
@@ -72,6 +91,20 @@ pub fn merge(findings: &[Finding], failures: &[DetectorFailure]) -> Detection {
     let frameworks = resolve_set(FieldPath::StackFramework, findings, &mut suggestions);
     let services = resolve_set(FieldPath::StackService, findings, &mut suggestions);
     let env_required = resolve_set(FieldPath::DeployEnvRequired, findings, &mut suggestions);
+
+    let mut unreadable: Vec<UnreadableSource> = failures
+        .iter()
+        .filter_map(|f| match &f.error {
+            DetectError::Unreadable { path, why } => Some(UnreadableSource {
+                detector: f.detector,
+                path: path.clone(),
+                why: why.clone(),
+                affects: f.fields.to_vec(),
+            }),
+            _ => None,
+        })
+        .collect();
+    unreadable.sort_by(|a, b| a.path.cmp(&b.path).then(a.detector.cmp(&b.detector)));
 
     suggestions.sort_by(|a, b| {
         a.field
@@ -93,6 +126,7 @@ pub fn merge(findings: &[Finding], failures: &[DetectorFailure]) -> Detection {
         branch,
         last_commit,
         suggestions,
+        unreadable,
     }
 }
 

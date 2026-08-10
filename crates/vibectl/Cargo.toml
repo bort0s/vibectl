@@ -1,0 +1,24 @@
+[package]
+name = "vibectl"
+description = "A registry for the half-finished projects you already have. Scan, index, and keep them documented."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+categories.workspace = true
+keywords.workspace = true
+
+# The crate publishes as `vibectl` (the root `vibe` name is taken on crates.io),
+# but the binary users invoke is `vibe`.
+[[bin]]
+name = "vibe"
+path = "src/main.rs"
+
+[dependencies]
+vibe-core = { workspace = true }
+
+[dev-dependencies]
+
+[lints]
+workspace = true

@@ -48,9 +48,15 @@ would be strange if it didn't, and is kept deliberately minimal.
 | `vibe show <name>` | Full manifest dump, ready to paste at an agent |
 | `vibe sync [<name>]` | Re-read git / `package.json` / etc., update manifests |
 | `vibe render <target>` | Generate `CLAUDE.md`, `AGENTS.md`, or `README.md` |
-| `vibe archive <name>` | Mark a project dead. Never deletes anything. |
+| `vibe archive <name>` | Take a project off your desk. Never deletes anything. |
+| `vibe unarchive <name>` | Put it back. |
 
 `--json` on every read command. `--dry-run` on every write command.
+
+`archive` is orthogonal to `status`: it sets `archived = true` and leaves
+`status` alone, so a *shipped* project can be filed away without being relabelled
+*dead*, and `unarchive` restores the exact prior state rather than guessing one.
+`vibe list` hides archived projects unless you pass `--all`.
 
 ## The manifest
 
@@ -91,8 +97,8 @@ These are constraints, not aspirations. They are why the tool is shaped this way
 
 1. **Works 100% without an API key.** AI enrichment is strictly optional and
    additive. A tool whose adoption depends on an API key is a tool nobody adopts.
-2. **Never destructive.** No command deletes your files. `archive` sets a status
-   field. Every write can be previewed with `--dry-run`.
+2. **Never destructive.** No command deletes your files. `archive` sets a flag.
+   Every write can be previewed with `--dry-run`.
 3. **Cross-platform.** Linux, macOS, and Windows are all first-class; the test
    suite runs on all three.
 4. **Scan is fast.** 50 repositories in under two seconds. `node_modules`,

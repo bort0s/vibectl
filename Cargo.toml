@@ -8,6 +8,7 @@ edition = "2024"
 rust-version = "1.85.0"
 license = "MIT OR Apache-2.0"
 authors = ["The vibectl Authors"]
+repository = "https://github.com/bort0s/vibectl"
 categories = ["command-line-utilities", "development-tools"]
 keywords = ["registry", "projects", "scaffolding", "cli"]
 

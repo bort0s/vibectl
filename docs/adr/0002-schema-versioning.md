@@ -304,6 +304,27 @@ In both cases the test was correct-looking, passed, and proved nothing. In both
 cases the negative control found it in one run. **The negative control is not a
 nice-to-have here; it is the only thing that has ever detected this.**
 
+**A negative control must demonstrate that the sabotaged guard was *reached*.**
+A test that fails before the guard executes proves nothing about the guard.
+Build the fixture so the operation succeeds to completion when the guard is
+removed.
+
+Added after the fourth appearance of this family, and the sharpest one. The
+first three were *weak assertions* — sentinels on keys nothing wrote. The fourth
+was different and worse: `agents update` refusing a store directory that is not
+ours. The assertion was correct, the guard was sabotaged, and the test still
+failed — but it failed because the fixture's `git fetch` errored out on its own,
+several steps *before* the sabotaged check would have mattered. The test proved
+nothing while looking exactly like proof, and would have kept passing if the
+guard had been deleted outright.
+
+Rebuilding the fixture so every step downstream of the check succeeds — giving
+the victim repository a working `origin` of its own — showed the sabotaged
+build running `reset --hard` on a user's repository to completion. That is what
+the control is for, and the distinction between the two fixtures is the whole
+lesson: **a negative control is an experiment, and an experiment that terminates
+early has not been run.**
+
 The corollary, from `W_SCHEMA_MINOR_NEWER`: a warning defined and never emitted
 is a policy that exists only in this document. A test asserting a diagnostic is
 reported must check that something *produces* it, not merely that a consumer

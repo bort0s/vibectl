@@ -2,7 +2,8 @@
 
 ## Status
 
-Proposed (2026-08-10). Design only; no implementation.
+Accepted (2026-08-10). Implemented, with the deviations recorded in
+**§9**. **Amends [ADR-0005](0005-core-api-amendments-for-desktop-consumption.md) §10.**
 
 ## Context
 
@@ -145,7 +146,7 @@ them leaves, and there is no ordering that leaves nothing:
 
 | Crash point | State on disk | Recoverable? |
 | --- | --- | --- |
-| After agent file, before lockfile | Agent file exists, no lock entry | **Yes.** Reports as `PresentUnowned` (§5). `add` again writes an identical file, hashes it, records it. |
+| After agent file, before lockfile | Agent file exists, no lock entry | **Yes.** Reports as `PresentUnowned` (§5). `add` again finds the content byte-identical to the store's and adopts it — see §9g, which is what makes this row true given §5's refusal to adopt. |
 | After lockfile, before agent file | Lock entry exists, no file | **No, silently.** Reports as `Missing`. But we have recorded a `content_hash` for a file we never wrote — so if the user later creates a file at that path by hand, it compares unequal and reports as `Modified`. We would be claiming ownership of, and offering to overwrite, a file we never created. |
 
 The second is worse in kind, not degree: the first loses *a record*, the second
@@ -154,7 +155,8 @@ lockfile — the ownership assertion — is only ever written about a file we ha
 confirmed on disk.
 
 The recovery path is therefore: **an agent file with no lock entry is unowned,
-and `add` is idempotent.** Running `vibe agents add <name>` again after a crash
+and `add` is idempotent on an exact content match** (§9g — §5 otherwise refuses to
+adopt an unowned file, and the exception is what keeps this paragraph true). Running `vibe agents add <name>` again after a crash
 writes the same bytes, hashes them, and records the entry. Because the content
 is identical, this is safe even in the case where the crash happened after a
 *successful* file write — there is no state where re-running `add` destroys
@@ -331,6 +333,177 @@ command works fully offline. No command initiates network I/O except `update`.
 - **Publishing or authoring agents.** `vibe` installs; it does not create.
 - **Multiple stores.** One upstream, configurable. A second one is a v2
   conversation and would need precedence rules this design does not have.
+
+### 9. What implementation changed, and why
+
+Recorded here rather than left as code comments, because each item is a
+decision the design above does not make.
+
+#### 9a. `clone` produced ADR-0005 §10 **rule 4**
+
+`clone` is the first invocation in this project where a **user-chosen string
+reaches `git`'s argument vector**. Every prior call passed argv written as a
+literal. The closed `(program, subcommand)` enum was designed for exactly this
+and had never met it.
+
+It handles the flag-injection half by construction: no variant accepts a flag,
+so `--upload-pack=…` and `-c core.sshCommand=…` are unrepresentable, and `--`
+precedes the URL as a second lock.
+
+It does **not** handle the `ext::` remote-helper half, and neither does anything
+else in rules 1–3, because those rules are all argv-*shaped* and the URL slot is
+by definition the one that must carry a user string. That gap is now
+**ADR-0005 §10 rule 4**, which is where the full diagnosis and the verified
+reproduction live. The rule is stated there rather than here because **it does
+not belong to this feature** — the store is the first place a URL reaches argv
+and will not be the last. `[repo] remote` is next.
+
+The validator therefore lives in `vibe_core::url`, and every op that puts a URL
+in argv takes the validated type rather than a `String`.
+
+**One recorded widening of rule 4 as drafted.** Rule 4 permits `https://`,
+`ssh://` and the scp-like form. The implementation additionally permits an
+**absolute local filesystem path**, because §1 of this ADR promises the store
+works "against any host, or a local path, or a fork", and because without it the
+store cannot be tested at all without a network — which would leave every
+containment property asserted against strings rather than against `git`.
+
+`file://` stays rejected, and the asymmetry is not arbitrary: a `file://` URL
+goes through `git`'s URL and transport machinery, while a bare absolute path
+takes the local-clone path and is never parsed as a URL. Keeping the *scheme*
+allowlist closed is the property worth having, and a value that is unambiguously
+a filesystem path — absolute, with no `://` and no `::` — cannot name a
+transport whatever `git` does with it.
+
+#### 9b. Store git operations do not travel inside a `WritePlan`
+
+ADR-0005 §10 sketches `FileOp::RunCommand` holding a `GitOp`. The store's
+operations deliberately do not.
+
+A `WritePlan` carries a project root, and `apply`'s rules 5–6 check every op
+path against it — including rule 6, which rejects any path with a `.git`
+component. `git clone` writes `<dest>/.git/**`. Routing it through `apply` would
+buy nothing (the check is on the op's *declared* path, never on what the
+subprocess goes on to write) and would cost either an exception to rule 6 or a
+weakening of it. **Rule 6 is worth exactly as much as its lack of an exception
+list.**
+
+So the containment that applies to the store is rules 1–4 — closed enum,
+categorical argument rejection, constructed environment, validated URL — all
+enforced at the exec layer. Project-tree writes (`.claude/agents/*.md`,
+`.vibe/agents.lock`, `.vibe/project.toml`) still go through `WritePlan` and get
+rules 5–6 as well.
+
+**Only the `WritePlan` routing is bypassed, and that is the whole of it.** Every
+store op is still built by the closed enum; its argv is still *constructed*
+rather than passed through; it still runs under `env_clear()` plus rule 3's
+allowlist; and it still takes a validated `GitUrl`. Stated explicitly because
+this is the one way the deviation could quietly widen — "the store ops are
+outside the plan" must never be read as "the store ops are outside the rules.
+
+#### 9c. `SSH_AUTH_SOCK` is scoped per-op, like `GITHUB_TOKEN`
+
+Rule 3's allowlist has no ssh agent socket, so a private store over `ssh://`
+would work only with a passphrase-less key. The socket is forwarded, but **only
+to the ops that reach the network** (`Clone`, `Fetch`) — rule 3a's reasoning
+applied to a variable the ADR does not name. An agent socket is a credential
+channel: anything that can see the variable can ask the agent to sign. A local
+`reset --hard` has no use for it.
+
+`GITHUB_TOKEN` is injected for **no** store op. Rule 3a left open which ops can
+consume one; for the store the answer is none, because `git` has no concept of
+it and both bridges are unacceptable (a `credential.helper` is blocked by rule
+2; a token in the remote URL is written into `.git/config` by `clone`). A
+private store is reached over `ssh://`.
+
+#### 9d. `update` proves the directory is the store before `reset --hard`
+
+`GitOp::ResetToFetchHead` is the only destructive operation this crate performs
+outside a `WritePlan`. A mistyped store path aimed at one of the user's real
+repositories would discard their uncommitted work, so `update` compares the
+`origin` remote to the configured upstream and refuses on any mismatch —
+including no `origin` at all. A non-empty directory that is not a repository is
+refused too, rather than cloned into or cleared.
+
+Refusing is the only safe answer: a typo and a deliberate re-point are
+indistinguishable, and one of the two readings is destructive.
+
+#### 9e. `FileOp::RemoveOwnedAgent`, which is not `FileOp::Delete`
+
+`remove` has to delete a file, and ADR-0001 makes destructiveness
+unrepresentable by having no `Delete` variant. That property is kept.
+
+`RemoveOwnedAgent` can express only "delete this file, whose content hashes to
+exactly this", and is only ever *built* for a path §5's table has already said
+is ours. The hash is the plan/apply staleness contract — the same role
+`UpdateFile.before` plays — not the ownership proof; ownership is decided
+earlier, by the state table. A general `Delete` remains unrepresentable.
+
+#### 9f. A sixth subcommand: `agents list`
+
+§5 names five commands. A sixth, `list`, was added: it prints what the store
+offers, marking what the project already declares. Without it `add` requires the
+user to already know the exact name, and the design's refusal to suggest
+near-matches (trade-off #2) makes that worse rather than better — an honest
+"the store does not have this" is only actionable if the user can see what the
+store *does* have. It is offline and read-only.
+
+#### 9g. §4 and §5 contradicted each other; resolved by adopting on exact content match
+
+§4 gives the crash-recovery path as "**an agent file with no lock entry is
+unowned, and `add` is idempotent** — running `vibe agents add <name>` again after
+a crash writes the same bytes, hashes them, and records the entry."
+
+§5 says `add` **refuses** a `PresentUnowned` file and will not adopt it. §4's own
+table says the post-crash state *is* `PresentUnowned`. The two sections
+prescribed opposite behaviour for the same state, and implementation hit it.
+
+**This could not be fixed by correcting §4's wording, because that sentence is
+what justifies the write ordering.** The ordering argument is: file first,
+lockfile second, because file-without-entry merely loses a record and `add` is
+idempotent, so re-running fixes it. If `add` refuses every `PresentUnowned`,
+then file-without-entry is *not* recoverable — the user is left holding a file
+`vibe` will neither adopt nor overwrite — and §4's ordering loses its
+justification entirely.
+
+The resolution, which keeps both:
+
+> `add` refuses `PresentUnowned` **except** when the file's content hash equals
+> the store's current content for that name. On exact match it adopts the file
+> and writes the lockfile entry.
+
+This is not a guess. Byte-identical content means writing the file again would
+be a no-op, so adopting it changes nothing about what is on disk; the lock entry
+only records a state that already exists. Idempotence is restored, the ordering
+argument holds, and no guessing is introduced — a file whose content differs by
+one byte is still refused.
+
+`sync` routes `PresentUnowned` through the same path, so it recovers the crash
+state too. That makes this arm report a refusal rather than the "ignores
+entirely" §5's table specifies: a declared agent whose file we will not touch is
+worth saying out loud.
+
+**Residual, written down rather than discovered.** A hand-written file that
+happens to be byte-identical to the store's version becomes owned, and `remove`
+would then delete it. Acceptable — byte-identical to the store means the content
+is recoverable from the store by definition — but it is a real transfer of
+ownership that the user did not explicitly perform.
+
+#### 9h. A refusal leaves the world as it found it
+
+Found as a bug and generalised into a rule. `agents remove` on a file it refused
+to delete was still removing the name from `[agents] installed`, which demoted
+the file from `PresentUnowned` (reported, so the user can decide) to `Foreign`
+(not listed at all). The refusal made the situation *worse* than the state it
+declined to change, by making a visible problem invisible.
+
+> **A command that refuses part of a request must leave every part of the world
+> it refused exactly as it found it.** Half-applying a refused operation is worse
+> than either applying or refusing it, because the resulting state is one the
+> user did not ask for and no command reports.
+
+This is the next thing to check whenever a refusal path is added — §9g's
+adoption path is where it applies next.
 
 ## Consequences
 

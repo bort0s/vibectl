@@ -3,6 +3,11 @@
 ## Status
 
 Accepted (2026-08-10). **Amends [ADR-0001](0001-crate-boundaries.md).**
+**§10 rule 4 added 2026-08-10**, after implementation found that rules 1–3 —
+all argv-shaped — cannot cover the positional URL slot. The old rules 4 and 5
+became 5 and 6. See [ADR-0006 §9](0006-agent-management.md) for the rest of what
+implementation changed: why the store's `git` calls are not `FileOp::RunCommand`,
+and the per-op scoping of `SSH_AUTH_SOCK`.
 
 ## Context
 
@@ -183,8 +188,10 @@ argv filtering is bypassed entirely through the inherited environment:
 `GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`, `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_n` /
 `GIT_CONFIG_VALUE_n` reach the same code paths without appearing in any argument.
 
-The containment is therefore four rules, all enforced in `apply()` at the site
-where preconditions are already re-verified.
+The containment is therefore six rules. Rules 1–4 govern the subprocess and are
+enforced where the invocation is constructed; rules 5–6 govern the filesystem and
+are enforced in `apply()` at the site where preconditions are already
+re-verified.
 
 **1. The allowlist keys on the `(program, subcommand)` pair, not the program.**
 Each pair carries a validated argument schema of fixed positional shape. There is
@@ -252,7 +259,77 @@ ADR fixes only the containment rule; P5 decides the mechanism, and if the answer
 turns out to be "the fallback cannot push", that is a graceful degradation the
 spec already permits.
 
-**4. `CreateFile` containment canonicalizes the parent, not the path.**
+**4. Any URL reaching argv is validated against a scheme allowlist before
+construction.** Permit `https://`, `ssh://`, and the scp-like `user@host:path`
+form. Reject everything else — explicitly including any `<transport>::` form,
+`file://`, and any value beginning with `-`. Rules 1–3 filter argv *shape* and
+cannot cover a slot whose purpose is to carry a user string; this rule filters
+the value.
+
+*Added 2026-08-10, after implementation found the hole. Rules 5 and 6 below were
+numbered 4 and 5 before this was inserted; every reference has been updated.*
+
+The diagnosis matters more than the fix. **Rules 1–3 are all argv-shaped**: they
+decide which flags may appear and what the environment contains. The positional
+URL slot is by definition the one place that must accept a user string, so no
+argv filter can ever cover it — `--` protects the value from being *read* as a
+flag and does nothing whatever about what it *means*. The rules were not wrong;
+they were the wrong kind of rule for that slot.
+
+The concrete hole, verified against git 2.54 rather than reasoned about:
+
+```
+git clone -- 'ext::touch /tmp/pwned'
+```
+
+`<transport>::<address>` makes `git` exec a remote helper named
+`git-remote-<transport>`, and the built-in `ext::` helper's documented purpose is
+to run an arbitrary command. It is neither a program nor a flag, so rule 1's
+closed enum, rule 2's argument filter and the `--` separator all see nothing.
+
+Two details make this worth a categorical rejection, and the second is the one a
+future reader will otherwise assume was covered:
+
+1. Modern `git` refuses `ext::` **by default**, so the naive check looks
+   reassuring and a shallow test passes.
+2. It is re-enabled by the **per-user** `~/.gitconfig`. **`GIT_CONFIG_NOSYSTEM=1`
+   covers `/etc/gitconfig` only — while `HOME` is necessarily on rule 3's
+   allowlist, because `git` cannot find its own configuration without it.** That
+   is the specific hole. Under the exact constructed environment rule 3
+   prescribes, with `protocol.ext.allow = always` in a user config, the command
+   runs.
+
+**The allowlist is closed, not a denylist.** A denylist is precisely what would
+have missed this: nobody writes down a transport they have not heard of.
+
+**This rule does not belong to whichever feature hits it first.** The agent store
+is the first place a user-chosen URL reaches argv and will not be the last:
+`[repo] remote` in `.vibe/project.toml` is user-controlled, travels in a
+*committed* file — so it arrives from repositories you clone, not only from your
+own typing — and reaches argv the moment P5 wires up `gh` or `git push`. The
+validator therefore lives in one place (`vibe_core::url`), and **any operation
+that puts a URL in argv takes the validated type, never a `String`.** That is the
+enforcement: skipping it requires changing a type signature, which is a visible
+diff rather than an omission. Like the two-file window in ADR-0006 §4, this has
+to be re-established for every new op that carries a URL; it does not follow
+from the rule existing.
+
+**Deliberately not taken: neutralising config-based transport re-enablement.**
+Pointing `GIT_CONFIG_GLOBAL` at a null path would close the `~/.gitconfig` route
+directly. It is declined because it also disables credential helpers, proxies and
+`insteadOf`, which a private store or a corporate network may need — a real
+functional loss for a defence that is secondary to the allowlist.
+
+If it is ever adopted, the tension it creates must be resolved in the ADR rather
+than left implicit, because "we made an exception to rule 2" is how a rule dies.
+The resolution is: **rules 2 and 3 ban passthrough of user-influenced values; a
+fixed set of constants we construct ourselves is a different thing.** That
+distinction is already load-bearing — rule 3 sets `GIT_CONFIG_NOSYSTEM=1`
+positively, which is a constructed `GIT_*` constant under a rule that otherwise
+forbids all `GIT_*`. So `GIT_CONFIG_GLOBAL` would need no new principle, only the
+functional trade-off above.
+
+**5. `CreateFile` containment canonicalizes the parent, not the path.**
 `canonicalize()` fails on a path that does not yet exist, which is every path a
 `CreateFile` op names. So: canonicalize the deepest existing ancestor, verify
 *that* is contained within a configured root or the plan's declared target
@@ -260,9 +337,9 @@ directory, and verify the remaining components contain no `..` and no absolute
 prefix. Directory ops are checked the same way as they are created, so a plan
 that creates `a/b/` then writes `a/b/c` re-checks at each step.
 
-**5. No write may land under `.git/`, checked after parent canonicalization.**
+**6. No write may land under `.git/`, checked after parent canonicalization.**
 
-Rules 1–3 close the argument vector and the environment. They do not close the
+Rules 1–4 close the argument vector, the environment, and the URL value. They do not close the
 *repository*, and containment-to-the-project-root is not containment when `.git/`
 is inside the project root:
 
@@ -282,8 +359,8 @@ reject the target too). `vibe` writes `.vibe/project.toml`, `README.md`,
 ever, so a categorical rejection costs exactly nothing and needs no exception
 list to maintain.
 
-**Residual risk, restated now that rule 5 exists.** The parent-canonicalization
-in rule 4 is TOCTOU-vulnerable: between the check and the write, the parent can
+**Residual risk, restated now that rule 6 exists.** The parent-canonicalization
+in rule 5 is TOCTOU-vulnerable: between the check and the write, the parent can
 be swapped for a symlink (Unix) or a directory junction / reparse point
 (Windows), redirecting the write outside the root. Closing it properly needs
 `openat`-style handle-relative I/O (`O_NOFOLLOW` /
@@ -293,7 +370,7 @@ work v1 is not taking on.
 The bound on that risk is **not** "there is no `Delete` op, so the worst case is
 an additive write." That reasoning was wrong: it holds only while an additive
 write is harmless, and an additive write to `.git/hooks/post-commit` is
-execution. The correct statement is that rule 5 is what makes the bound true —
+execution. The correct statement is that rule 6 is what makes the bound true —
 with the two paths that turn an additive write into execution categorically
 rejected, an attacker who wins the race gets a file written somewhere
 unintended, in a tree they already had write access to in order to win the race

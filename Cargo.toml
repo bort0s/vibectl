@@ -5,6 +5,19 @@ members = ["crates/vibe-core", "crates/vibectl"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+# `rust-version` is a CLAIM, not a check — ours and every dependency's.
+#
+# `resolver = "3"` selects dependency versions against this field, so
+# MSRV-aware resolution is only as trustworthy as upstream's declaration. It can
+# be wrong: `ignore` 0.4.30 declares 1.85 and uses let-chains, which are 1.88.
+# Resolution happily picked it and the build failed on the pinned toolchain.
+#
+# **The only evidence MSRV holds is a green `MSRV (1.85.0)` job**, which compiles
+# on that exact toolchain. It has already caught this twice: once as a
+# deliberate negative control at P0, and once for real when adding a dependency
+# refreshed the lock. A future dependency bump that turns it red is reporting a
+# fact, not being fussy — pin the dependency or raise this number deliberately,
+# but do not disable the job.
 rust-version = "1.85.0"
 license = "MIT OR Apache-2.0"
 authors = ["The vibectl Authors"]
@@ -30,6 +43,12 @@ blake3 = { version = "1.8.2", default-features = false, features = ["std"] }
 clap = { version = "4.6.6", features = ["derive"] }
 comfy-table = "7.2.1"
 directories = "6.0.0"
+# Pinned in Cargo.lock to 0.4.23. DO NOT unpin as stale housekeeping.
+#
+# 0.4.33 requires rustc 1.88 and declares it. 0.4.30 declares 1.85 and uses
+# let-chains anyway, so it does NOT build on 1.85 — MSRV-aware resolution
+# trusted the metadata and picked it, and only compiling on the pinned
+# toolchain revealed it. See the note on rust-version below.
 ignore = "0.4"
 minijinja = "2.23.0"
 serde = { version = "1.0.229", features = ["derive"] }

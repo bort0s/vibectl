@@ -325,6 +325,26 @@ the control is for, and the distinction between the two fixtures is the whole
 lesson: **a negative control is an experiment, and an experiment that terminates
 early has not been run.**
 
+**A negative control must also fire *deterministically*.** One whose firing
+depends on winning a race can stop proving anything without ever failing, which
+is the same outcome as the guard never being reached, arrived at from the other
+direction — and worse, because it arrives as a green check.
+
+Added after the fifth appearance, found by review rather than by a failure. The
+`ext::` control in `agents_store.rs` pointed the remote helper at
+`touch <marker>` and asserted the marker existed. But `touch` is a child `git`
+spawns and then kills the moment the helper fails to speak the protocol, so the
+assertion was really *"`touch` won that race"*. On a loaded runner it need not,
+and the test would then report **pass** — silently returning `GitUrl::parse`'s
+`::` rejection to a guard against a hazard nobody had demonstrated.
+
+The repair is the general one: assert on something the system under test does
+**synchronously and reports itself**, not on a side effect that has to win.
+Naming a program that cannot exist (`ext::vibe-nonexistent-helper-probe`) makes
+`git` print what it *tried to spawn* — the execution primitive itself — with
+nothing needing to run or exist. Where an assertion genuinely cannot be made
+deterministic, it must **fail loudly when it could not run**, never pass quietly.
+
 The corollary, from `W_SCHEMA_MINOR_NEWER`: a warning defined and never emitted
 is a policy that exists only in this document. A test asserting a diagnostic is
 reported must check that something *produces* it, not merely that a consumer

@@ -32,8 +32,15 @@ fn git_available() -> bool {
 
 /// Run `git` in a directory with a constructed environment, for building
 /// fixtures. Not the code under test — the code under test is `GitOp`.
+///
+/// **The exit status is asserted, not returned and ignored.** A fixture step
+/// that fails silently does not produce a passing test; it produces a *failing*
+/// one that accuses the wrong subsystem. A `git commit` that never ran makes
+/// the hooks control below report "the probes never fired", which reads as a
+/// finding about hooks and is nothing of the kind. `agents_cli.rs` already
+/// asserts this; this helper was the inconsistent one.
 fn git(cwd: &Path, args: &[&str]) -> std::process::Output {
-    Command::new("git")
+    let out = Command::new("git")
         .args(args)
         .current_dir(cwd)
         .env("GIT_AUTHOR_NAME", "t")
@@ -41,7 +48,16 @@ fn git(cwd: &Path, args: &[&str]) -> std::process::Output {
         .env("GIT_COMMITTER_NAME", "t")
         .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
         .output()
-        .expect("git runs")
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "fixture step `git {}` failed in {}: {}{}",
+        args.join(" "),
+        cwd.display(),
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout),
+    );
+    out
 }
 
 /// A local repository that looks like an agent store.
@@ -108,57 +124,109 @@ fn store_at(path: &Path, upstream: &Path) -> StoreConfig {
 ///    `GIT_CONFIG_NOSYSTEM=1` does *not* suppress that — it covers
 ///    `/etc/gitconfig` only. `HOME` is on rule 3's allowlist because `git`
 ///    needs it, so the config is reachable.
+///
+/// # Why this asserts on a spawn attempt rather than on a created file
+///
+/// The first version pointed `ext::` at `touch <marker>` and asserted the
+/// marker existed. That made the assertion *"`touch` won the race against `git`
+/// killing a helper that speaks no protocol"* — and a control whose firing
+/// depends on winning a race is not a control. When it stopped firing it would
+/// go **green**, silently returning `GitUrl::parse`'s `::` rejection to a guard
+/// against a hazard nobody demonstrated: the same outcome as a guard that is
+/// never reached, arrived at from the other direction.
+///
+/// So the assertion moved to something `git` does synchronously and reports
+/// itself. Verified on git 2.45.1:
+///
+/// ```text
+/// allowed:  error: cannot spawn vibe-nonexistent-helper-probe: No such file …
+///           fatal: Can't run specified command
+/// refused:  fatal: transport 'ext' not allowed
+/// ```
+///
+/// Naming a program that cannot exist is the point: `git` reports *what it
+/// tried to spawn*, which is the execution primitive itself, and it does so
+/// without anything having to run, exist, or win anything. The contrast against
+/// the same URL with the config absent is what proves the per-user config is
+/// the enabling condition.
 #[test]
 fn negative_control_a_remote_helper_url_really_does_execute_a_command() {
     if !git_available() {
         return;
     }
+    // Cannot exist on any machine, so `git`'s own error names it.
+    const PROBE: &str = "vibe-nonexistent-helper-probe";
+
     let tmp = tempfile::tempdir().unwrap();
-    let home = tmp.path().join("home");
-    std::fs::create_dir_all(&home).unwrap();
+
+    // `git` the way this crate runs it: env_clear plus the rule 3 allowlist.
+    let clone_under_rule_3 = |home: &Path, label: &str| -> String {
+        let mut cmd = Command::new("git");
+        cmd.args(["clone", "--", &format!("ext::{PROBE} --x"), label])
+            .current_dir(tmp.path())
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", home)
+            // Every hardening variable this crate sets. None of them help.
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("LC_ALL", "C");
+        if cfg!(windows) {
+            for key in ["SYSTEMROOT", "COMSPEC", "PATHEXT", "USERPROFILE"] {
+                if let Some(v) = std::env::var_os(key) {
+                    cmd.env(key, v);
+                }
+            }
+        }
+        let out = cmd.output().expect("git runs");
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stderr),
+            String::from_utf8_lossy(&out.stdout)
+        )
+    };
+
+    // The hazard: a per-user config re-enables the transport.
+    let enabled = tmp.path().join("home-enabled");
+    std::fs::create_dir_all(&enabled).unwrap();
     std::fs::write(
-        home.join(".gitconfig"),
+        enabled.join(".gitconfig"),
         "[protocol \"ext\"]\n\tallow = always\n",
     )
     .unwrap();
 
-    let marker = tmp.path().join("EXECUTED");
-    // A program that creates a file, named without a shell: git splits the
-    // `ext::` command on whitespace without shell quoting, so a `sh -c "…"`
-    // payload would be mangled and prove nothing. `touch` is what git-for-
-    // windows ships in its POSIX toolchain, so it resolves on both platforms.
-    let payload = format!("ext::touch {}", marker.display());
+    // The control: byte-identical invocation, no such config.
+    let plain = tmp.path().join("home-plain");
+    std::fs::create_dir_all(&plain).unwrap();
 
-    let mut cmd = Command::new("git");
-    cmd.args(["clone", "--", &payload, "victim"])
-        .current_dir(tmp.path())
-        .env_clear()
-        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-        .env("HOME", &home)
-        // Every hardening variable this crate sets. None of them help.
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("LC_ALL", "C");
-    if cfg!(windows) {
-        for key in ["SYSTEMROOT", "COMSPEC", "PATHEXT", "USERPROFILE"] {
-            if let Some(v) = std::env::var_os(key) {
-                cmd.env(key, v);
-            }
-        }
-    }
-    let _ = cmd.output().expect("git runs");
+    let with_config = clone_under_rule_3(&enabled, "victim-enabled");
+    let without_config = clone_under_rule_3(&plain, "victim-plain");
 
     assert!(
-        marker.exists(),
-        "the ext:: hole did not reproduce on this machine/git version. That is \
-         not a reason to relax GitUrl::parse - it is a reason to check why, \
-         because the rejection is cheap and the hole has been real."
+        with_config.contains(PROBE),
+        "git never tried to spawn the program the URL named, so the ext:: hole \
+         did not reproduce on this git version. That is not a reason to relax \
+         GitUrl::parse - it is a reason to find out why, because the rejection \
+         is cheap and the hole has been real.\n\
+         with config: {with_config}\nwithout config: {without_config}"
+    );
+    assert!(
+        !without_config.contains(PROBE),
+        "git tried to spawn the URL's program with NO per-user config enabling \
+         the transport. That is a wider hole than the one recorded, not a \
+         narrower one.\nwithout config: {without_config}"
     );
 
     // And the guard closes it, at the point where the string is accepted rather
-    // than at the point where git runs.
-    let err = GitUrl::parse(&payload).expect_err("must be refused");
-    assert_eq!(err.code(), "VIBE_E_GIT_URL_REJECTED");
+    // than at the point where git runs — the exact URL just shown to be an
+    // execution primitive, plus the `touch` form the earlier draft used.
+    for refused in [
+        format!("ext::{PROBE} --x"),
+        "ext::touch /tmp/pwned".to_owned(),
+    ] {
+        let err = GitUrl::parse(&refused).expect_err("must be refused");
+        assert_eq!(err.code(), "VIBE_E_GIT_URL_REJECTED");
+    }
 }
 
 /// Rule 1 stated as a property of the type rather than of any call site: a

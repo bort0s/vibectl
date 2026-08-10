@@ -22,6 +22,31 @@ fn root_of(dir: &tempfile::TempDir) -> PathBuf {
     dir.path().canonicalize().expect("canonicalize tempdir")
 }
 
+/// Restores the process working directory on drop, including on panic.
+///
+/// `set_current_dir` is **process-global**, and this binary runs its tests on
+/// several threads. Restoring the directory as a test's last statement is not
+/// restoration: any panic before that line leaves the whole process sitting in
+/// a `TempDir` that is deleted during unwind, so every later `current_dir()`
+/// returns `ENOENT` and a wall of secondary failures buries the first cause.
+/// A guard makes the restore unconditional.
+struct CwdGuard(PathBuf);
+
+impl CwdGuard {
+    fn enter(to: &std::path::Path) -> Self {
+        let guard = CwdGuard(std::env::current_dir().expect("cwd"));
+        std::env::set_current_dir(to).expect("chdir");
+        guard
+    }
+}
+
+impl Drop for CwdGuard {
+    fn drop(&mut self) {
+        // Already unwinding if this is a panic; a failure here must not mask it.
+        let _ = std::env::set_current_dir(&self.0);
+    }
+}
+
 // --- rule 6: nothing may land under .git/ -------------------------------
 
 #[test]
@@ -371,8 +396,7 @@ fn a_write_plan_serialises_but_cannot_be_deserialised() {
 fn every_plan_constructor_produces_absolute_paths() {
     let dir = tmp();
     let root = root_of(&dir);
-    let previous = std::env::current_dir().expect("cwd");
-    std::env::set_current_dir(&root).expect("chdir");
+    let _cwd = CwdGuard::enter(&root);
 
     let registry =
         Registry::open(Config::default()).with_runner(std::sync::Arc::new(vibe_core::NoRunner));
@@ -410,6 +434,5 @@ fn every_plan_constructor_produces_absolute_paths() {
             assert!(op.path().is_absolute(), "op path: {:?}", op.path());
         }
     }
-
-    std::env::set_current_dir(previous).expect("restore cwd");
+    // No explicit restore: `_cwd` does it on the way out, panic or not.
 }

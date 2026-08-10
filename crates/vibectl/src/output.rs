@@ -167,7 +167,7 @@ fn write_depth_note(out: &mut impl Write, report: &vibe_core::ScanReport) -> std
     }
     writeln!(
         out,
-        "{n} director{} not searched below the depth limit —          a project there would not have been found. Raise --depth to look.",
+        "{n} director{} not searched below the depth limit. A project there would not have been found; raise --depth to look.",
         if n == 1 { "y was" } else { "ies were" }
     )?;
     for dir in report.depth_limited.iter().take(3) {

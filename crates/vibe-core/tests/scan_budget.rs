@@ -91,13 +91,31 @@ fn make_repo(root: &Path, name: &str) {
         vec!["init", "-q"],
         vec!["config", "user.email", "t@example.invalid"],
         vec!["config", "user.name", "t"],
+        // No detached `git maintenance run --auto` per commit. This fixture
+        // builds 50 repositories, so that is 50 background processes competing
+        // with the very subprocess budget being measured. See the longer note
+        // in `scan_never_writes.rs`, where the same behaviour was an
+        // intermittent red.
+        vec!["config", "gc.auto", "0"],
+        vec!["config", "maintenance.auto", "false"],
         vec!["add", "package.json"],
         vec!["commit", "-q", "-m", "initial"],
     ] {
-        let _ = std::process::Command::new("git")
+        // Asserted, not discarded: a fixture whose `git init` failed produces a
+        // repository with no commit, and the failure then surfaces as "every
+        // repo has a commit, so every one should report it" — which accuses the
+        // scanner of a bug the fixture caused.
+        let out = std::process::Command::new("git")
             .args(&args)
             .current_dir(&dir)
-            .output();
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "fixture step `git {}` failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 }
 

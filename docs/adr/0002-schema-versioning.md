@@ -369,6 +369,32 @@ spreads. The general form — **assert the mechanism is present under the
 condition and absent without it** — applies to any control whose value depends
 on a precondition someone wrote down once and nobody has checked since.
 
+**A fixture must not leave anything running.** The two rules above are about the
+control failing to prove what it claims. This one is about the harness producing
+a *finding* — an observation about itself, reported as an observation about the
+subject.
+
+`scan_never_writes` snapshots a repository, scans it, and asserts nothing
+changed. It failed intermittently on `macos-latest` with
+`scan modified …/.git/objects/maintenance.lock` — and the scan had not touched
+it. `git commit` spawns a **detached** `git maintenance run --auto`, which holds
+that lock and removes it when it finishes, asynchronously, after `commit` has
+returned. The fixture snapshotted while the lock existed; it was gone by the
+second snapshot; the assertion named the scan. `vibe scan` was innocent, and
+every hypothesis about *it* was chasing the fixture's exhaust.
+
+Two things to take from it:
+
+1. **Disable asynchrony at the source, do not filter it out.** Teaching the
+   snapshot to ignore `*.lock` would have removed the detection along with the
+   noise, because a lock file appearing under `.git/` is exactly what that test
+   exists to notice. The fixture sets `gc.auto=0` and `maintenance.auto=false`
+   instead, so the race cannot occur.
+2. **The platform was a red herring, and admitting that mattered.** The failure
+   was not macOS-specific in kind; `macos-latest` is the slowest runner, so the
+   window between the two snapshots was widest there. "macOS is special" would
+   have been a premise, and a wrong one, built from a sample of two.
+
 The corollary, from `W_SCHEMA_MINOR_NEWER`: a warning defined and never emitted
 is a policy that exists only in this document. A test asserting a diagnostic is
 reported must check that something *produces* it, not merely that a consumer

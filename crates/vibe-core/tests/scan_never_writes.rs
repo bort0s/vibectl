@@ -145,13 +145,36 @@ fn scanning_a_real_git_repository_changes_nothing_either() {
         vec!["init", "-q"],
         vec!["config", "user.email", "t@example.invalid"],
         vec!["config", "user.name", "t"],
+        // **The fixture must not run anything asynchronously.** `git commit`
+        // spawns a *detached* `git maintenance run --auto`, which takes
+        // `.git/objects/maintenance.lock` and removes it when it finishes —
+        // after `commit` has already returned. The snapshot below then catches
+        // the lock in `before`, misses it in `after`, and reports
+        // `scan modified …/maintenance.lock` about a file the fixture's own
+        // background process deleted. That is a harness side effect wearing the
+        // costume of a finding about the subject, and it was an intermittent
+        // red on macos-latest — the slowest runner, so the widest window.
+        //
+        // Disabled at the source rather than filtered out of the snapshot: a
+        // lock file appearing under `.git` is precisely what this test exists
+        // to notice, so teaching it to ignore lock files would remove the
+        // detection along with the noise.
+        vec!["config", "gc.auto", "0"],
+        vec!["config", "maintenance.auto", "false"],
         vec!["add", "package.json"],
         vec!["commit", "-q", "-m", "initial"],
     ] {
-        let _ = std::process::Command::new("git")
+        let out = std::process::Command::new("git")
             .args(&args)
             .current_dir(&repo)
-            .output();
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "fixture step `git {}` failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     // `.git` included: a git subcommand with a side effect — an index refresh,

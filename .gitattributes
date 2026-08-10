@@ -1,0 +1,15 @@
+# Normalize everything to LF in the repository, regardless of contributor OS.
+#
+# This is not cosmetic. Two things depend on it:
+#   - `cargo fmt --check` in CI compares against LF-formatted output.
+#   - insta snapshot tests (P4) would otherwise produce CRLF-vs-LF diffs that
+#     fail only on the Windows leg of the matrix.
+* text=auto eol=lf
+
+# Snapshots and fixtures are compared byte-for-byte; never let git rewrite them.
+*.snap    -text
+*.snap.new -text
+
+# Binary types git should not try to diff or normalize.
+*.png binary
+*.ico binary

@@ -34,7 +34,12 @@ proptest = "1.11.0"
 tempfile = "3.27.0"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# `deny`, not `forbid`: forbid cannot be lowered by an inner `#[allow]`, and
+# because `[lints] workspace = true` is all-or-nothing, one crate needing an
+# escape hatch would have to abandon workspace inheritance entirely. Some
+# derive macros also expand to `#[allow(unsafe_code)]`, which is a hard error
+# under forbid. deny is equally strict by default and still fails CI.
+unsafe_code = "deny"
 missing_debug_implementations = "warn"
 unreachable_pub = "warn"
 
@@ -48,4 +53,9 @@ dbg_macro = "warn"
 
 [profile.release]
 lto = "thin"
-strip = true
+# "debuginfo", not `true`. Stripping symbols entirely still leaves the panic
+# message and its file:line (those are #[track_caller] string constants), but
+# RUST_BACKTRACE then yields raw addresses, making user bug reports useless.
+# It also inherits into [profile.bench], and P2's "50 repos under 2s" target
+# has to be profiled with symbols present.
+strip = "debuginfo"

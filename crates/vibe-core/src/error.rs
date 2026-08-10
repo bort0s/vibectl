@@ -61,7 +61,7 @@ pub enum CoreError {
     #[error("{} is outside the plan's root {}", .path.display(), .root.display())]
     PathEscapesRoot { path: PathBuf, root: PathBuf },
 
-    /// Rule 5 of ADR-0005 §10. `.git/hooks/*` executes with no configuration
+    /// Rule 6 of ADR-0005 §10. `.git/hooks/*` executes with no configuration
     /// and no argument, so a write landing there converts an additive file
     /// write into code execution. `vibe` has no legitimate reason to write
     /// inside `.git/`, ever.
@@ -74,6 +74,55 @@ pub enum CoreError {
         #[source]
         source: std::io::Error,
     },
+
+    /// A configured upstream URL that must not reach `git`'s argument vector.
+    ///
+    /// `why` is a fixed string rather than free prose because it is the one
+    /// piece a user needs to act on, and the set of reasons is closed. See
+    /// [`crate::agents::GitUrl`].
+    #[error("refusing to use `{url}` as a store URL: {why}")]
+    GitUrlRejected { url: String, why: &'static str },
+
+    /// The configured store directory is a git repository pointing somewhere
+    /// else.
+    ///
+    /// `update` does a `reset --hard`, so this is the check that stops a
+    /// mistyped store path from throwing away the user's real work. Refusing is
+    /// the only safe answer: we cannot tell a typo from a deliberate re-point,
+    /// and one of those two readings is destructive.
+    #[error(
+        "{} is a git repository for `{}`, not the configured store `{expected}`",
+        .path.display(),
+        .found.as_deref().unwrap_or("(no origin remote)")
+    )]
+    StoreNotOurs {
+        path: PathBuf,
+        found: Option<String>,
+        expected: String,
+    },
+
+    /// The store directory exists and is not a git repository at all.
+    #[error("{} exists but is not a git repository", .path.display())]
+    StoreNotARepository { path: PathBuf },
+
+    /// A `git` invocation failed. `status` travels separately from the prose
+    /// because the prose is whatever `git` wrote to stderr (ADR-0005 §6).
+    #[error("git {} failed", .argv.first().map_or("", String::as_str))]
+    ToolFailed {
+        argv: Vec<String>,
+        status: Option<i32>,
+        stderr: String,
+    },
+
+    /// `git` could not be run. A fact about this machine, not about the store —
+    /// the same distinction `SyncNotes::not_attempted` draws.
+    #[error("git could not be run: {why}")]
+    GitUnavailable { why: String },
+
+    /// An ownership-dependent operation was asked for while the lockfile was
+    /// unreadable. Carries the note so a caller need not re-derive it.
+    #[error("{why}")]
+    OwnershipUnknown { why: String },
 }
 
 impl CoreError {
@@ -93,6 +142,12 @@ impl CoreError {
             CoreError::PathEscapesRoot { .. } => "VIBE_E_PATH_ESCAPES_ROOT",
             CoreError::PathInsideGitDir { .. } => "VIBE_E_PATH_INSIDE_GIT_DIR",
             CoreError::Io { .. } => "VIBE_E_IO",
+            CoreError::GitUrlRejected { .. } => "VIBE_E_GIT_URL_REJECTED",
+            CoreError::StoreNotOurs { .. } => "VIBE_E_STORE_NOT_OURS",
+            CoreError::StoreNotARepository { .. } => "VIBE_E_STORE_NOT_A_REPOSITORY",
+            CoreError::ToolFailed { .. } => "VIBE_E_TOOL_FAILED",
+            CoreError::GitUnavailable { .. } => "VIBE_E_GIT_UNAVAILABLE",
+            CoreError::OwnershipUnknown { .. } => "VIBE_E_OWNERSHIP_UNKNOWN",
         }
     }
 
@@ -110,7 +165,13 @@ impl CoreError {
             | CoreError::PlanStale { path }
             | CoreError::PathEscapesRoot { path, .. }
             | CoreError::PathInsideGitDir { path }
+            | CoreError::StoreNotOurs { path, .. }
+            | CoreError::StoreNotARepository { path }
             | CoreError::Io { path, .. } => Some(path),
+            CoreError::GitUrlRejected { .. }
+            | CoreError::ToolFailed { .. }
+            | CoreError::GitUnavailable { .. }
+            | CoreError::OwnershipUnknown { .. } => None,
         }
     }
 
@@ -156,6 +217,26 @@ impl CoreError {
             // off the message is broken on an Italian machine (ADR-0005 §6).
             CoreError::Io { source, .. } => {
                 params.insert("io_kind".to_owned(), format!("{:?}", source.kind()));
+            }
+            CoreError::GitUrlRejected { url, why } => {
+                params.insert("url".to_owned(), url.clone());
+                params.insert("why".to_owned(), (*why).to_owned());
+            }
+            CoreError::StoreNotOurs {
+                found, expected, ..
+            } => {
+                params.insert("expected".to_owned(), expected.clone());
+                if let Some(f) = found {
+                    params.insert("found".to_owned(), f.clone());
+                }
+            }
+            // `status` is the structured discriminant a consumer branches on;
+            // `stderr` is git's prose and is carried alongside, never instead.
+            CoreError::ToolFailed { status, argv, .. } => {
+                if let Some(code) = status {
+                    params.insert("status".to_owned(), code.to_string());
+                }
+                params.insert("argv".to_owned(), argv.join(" "));
             }
             _ => {}
         }

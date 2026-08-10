@@ -9,6 +9,7 @@
 // where it keeps the Tauri-facing API surface honest; here it is pure noise.
 #![allow(unreachable_pub)]
 
+mod agents;
 mod cli;
 mod cmd;
 mod exit;
@@ -20,7 +21,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use cli::{Cli, Command, NewArgs, ScanArgs};
+use cli::{AgentsCommand, Cli, Command, NewArgs, ScanArgs};
 use exit::Exit;
 use vibe_core::{Config, NewRequest, Registry, ScanRequest};
 
@@ -46,6 +47,14 @@ fn run(cli: &Cli) -> Result<Exit, vibe_core::CoreError> {
         Command::Sync(args) => cmd::sync(args),
         Command::Archive(args) => cmd::archive(args, true),
         Command::Unarchive(args) => cmd::archive(args, false),
+        Command::Agents(sub) => match sub {
+            AgentsCommand::Update(args) => agents::update(args),
+            AgentsCommand::List(args) => agents::list(args),
+            AgentsCommand::Status(args) => agents::status(args),
+            AgentsCommand::Add(args) => agents::add(args),
+            AgentsCommand::Remove(args) => agents::remove(args),
+            AgentsCommand::Sync(args) => agents::sync(args),
+        },
     }
 }
 

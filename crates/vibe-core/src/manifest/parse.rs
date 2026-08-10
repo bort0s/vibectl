@@ -28,12 +28,16 @@ const TOP_LEVEL_KEYS: &[&str] = &[
     "repo",
     "deploy",
     "context",
+    "agents",
 ];
 const PROJECT_KEYS: &[&str] = &["name", "description", "status", "archived", "created"];
 const STACK_KEYS: &[&str] = &["runtime", "frameworks", "services"];
 const REPO_KEYS: &[&str] = &["remote", "visibility"];
 const DEPLOY_KEYS: &[&str] = &["url", "env_required"];
 const CONTEXT_KEYS: &[&str] = &["decisions", "next"];
+/// Schema 1.1. A 1.2 build will add keys here; whatever it adds is reported as
+/// unknown and preserved verbatim on write, like every other table.
+const AGENTS_KEYS: &[&str] = &["installed"];
 
 pub(crate) fn parse(path: &Path, doc: &DocumentMut) -> Result<Manifest, CoreError> {
     let schema_version = read_schema_version(path, doc)?;
@@ -54,6 +58,7 @@ pub(crate) fn parse(path: &Path, doc: &DocumentMut) -> Result<Manifest, CoreErro
     let repo_tbl = table(path, doc, "repo")?;
     let deploy_tbl = table(path, doc, "deploy")?;
     let context_tbl = table(path, doc, "context")?;
+    let agents_tbl = table(path, doc, "agents")?;
 
     for (tbl, name, known) in [
         (project_tbl, "project", PROJECT_KEYS),
@@ -61,6 +66,7 @@ pub(crate) fn parse(path: &Path, doc: &DocumentMut) -> Result<Manifest, CoreErro
         (repo_tbl, "repo", REPO_KEYS),
         (deploy_tbl, "deploy", DEPLOY_KEYS),
         (context_tbl, "context", CONTEXT_KEYS),
+        (agents_tbl, "agents", AGENTS_KEYS),
     ] {
         if let Some(t) = tbl {
             collect_unknown(t, name, known, &mut unknown);
@@ -107,6 +113,13 @@ pub(crate) fn parse(path: &Path, doc: &DocumentMut) -> Result<Manifest, CoreErro
         next: opt_str_array(path, context_tbl, "context", "next")?,
     };
 
+    // An absent table and an empty array are the same declaration: nothing.
+    // Every manifest written before 1.1 is the first case, and it must not be
+    // an error — that is half of what makes the bump a minor one.
+    let agents = crate::model::Agents {
+        installed: opt_str_array(path, agents_tbl, "agents", "installed")?,
+    };
+
     Ok(Manifest {
         schema_version,
         project,
@@ -114,6 +127,7 @@ pub(crate) fn parse(path: &Path, doc: &DocumentMut) -> Result<Manifest, CoreErro
         repo,
         deploy,
         context,
+        agents,
         unknown,
     })
 }

@@ -13,5 +13,7 @@ mod manifest;
 mod status;
 
 pub use detected::{Candidate, Confidence, Detected, UnknownReason};
-pub use manifest::{Context, Deploy, Manifest, Project, Repo, Stack, UnknownKey, ValueKind};
+pub use manifest::{
+    Agents, Context, Deploy, Manifest, Project, Repo, Stack, UnknownKey, ValueKind,
+};
 pub use status::{Status, Visibility};

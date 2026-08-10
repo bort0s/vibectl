@@ -59,6 +59,21 @@ impl ProcessRunner for CountingRunner {
             .push(args.iter().map(|s| (*s).to_owned()).collect());
         self.inner.run_git(cwd, args)
     }
+
+    /// Counted like any other invocation, so a detector that starts reaching
+    /// for a store op cannot slip past the scan budget by using the other
+    /// entry point.
+    fn run_git_op(
+        &self,
+        op: &vibe_core::agents::GitOp,
+    ) -> Result<CommandOutput, vibe_core::detect::DetectError> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        self.argv
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(op.argv());
+        self.inner.run_git_op(op)
+    }
 }
 
 fn git_available() -> bool {

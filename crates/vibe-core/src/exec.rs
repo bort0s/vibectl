@@ -13,6 +13,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::agents::GitOp;
 use crate::detect::DetectError;
 
 /// The captured result of a subprocess.
@@ -43,6 +44,19 @@ pub trait ProcessRunner: Send + Sync + std::fmt::Debug {
     /// Whether `git` can be run at all. A missing `git` is a degradation, not
     /// an error: everything that does not need it still works.
     fn git_available(&self) -> bool;
+
+    /// Run one of the closed store operations.
+    ///
+    /// Separate from [`ProcessRunner::run_git`] on purpose. `run_git` takes a
+    /// free `&[&str]`, which is safe only because every caller is a detector
+    /// passing argv this crate wrote as a literal. The store's `clone` is the
+    /// first invocation carrying a string the *user* chose, and the answer to
+    /// that is the closed enum, not a longer filter — so it gets an entry point
+    /// that cannot be handed an argument vector at all (ADR-0005 §10 rule 1).
+    ///
+    /// It also gets a different timeout: a clone is minutes where a detector
+    /// query is budgeted in milliseconds.
+    fn run_git_op(&self, op: &GitOp) -> Result<CommandOutput, DetectError>;
 }
 
 /// Arguments that turn a read-only `git` query into arbitrary execution.
@@ -72,6 +86,18 @@ fn reject_dangerous_args(args: &[&str]) -> Result<(), DetectError> {
         }
     }
     Ok(())
+}
+
+/// The same check, exposed so [`crate::agents::GitOp`]'s tests can assert that
+/// no variant is *capable* of emitting a forbidden argument.
+///
+/// That direction matters more than the runtime check does. The runtime check
+/// catches a bad argument on its way out; this asserts the enum has nowhere to
+/// put one, which is the difference between rejecting the dangerous thing and
+/// making it unrepresentable.
+#[cfg(test)]
+pub(crate) fn assert_argv_is_clean(args: &[&str]) -> Result<(), DetectError> {
+    reject_dangerous_args(args)
 }
 
 /// Environment variables a child process legitimately needs.
@@ -110,9 +136,42 @@ fn child_env() -> BTreeMap<OsString, OsString> {
     env
 }
 
+/// The child environment for one store operation.
+///
+/// Extends [`child_env`] with the ssh agent socket, and **only for the ops that
+/// reach the network**. This is ADR-0005 §10 rule 3a's reasoning applied to a
+/// variable the ADR does not name: `SSH_AUTH_SOCK` is a credential channel, not
+/// a configuration setting — anything that can see the variable can ask the
+/// agent to sign with the user's keys. A `git reset --hard` in a local
+/// directory has no use for that, so it does not get it.
+///
+/// Without this, cloning a private store over `ssh://` works only with a
+/// passphrase-less key that `git` finds via `HOME`. That is a real degradation
+/// and forwarding the socket to `clone` and `fetch` is the narrowest fix.
+fn op_env(op: &GitOp) -> BTreeMap<OsString, OsString> {
+    let mut env = child_env();
+    if op.needs_network() {
+        for key in ["SSH_AUTH_SOCK", "SSH_AGENT_PID"] {
+            if let Some(val) = std::env::var_os(key) {
+                env.insert(OsString::from(key), val);
+            }
+        }
+    }
+    // No `GITHUB_TOKEN` branch, deliberately: no store op returns true from
+    // `needs_credential`, and `git` cannot consume the token anyway. See the
+    // method's docs.
+    debug_assert!(!op.needs_credential());
+    env
+}
+
 #[derive(Debug, Clone)]
 pub struct SystemRunner {
     timeout: Duration,
+    /// The budget for an operation that talks to a remote. Separate because a
+    /// clone of a real repository takes longer than every other `git` call in
+    /// this crate put together, and applying the detector budget to it would
+    /// make `vibe agents update` fail on any store worth having.
+    network_timeout: Duration,
 }
 
 impl Default for SystemRunner {
@@ -121,6 +180,7 @@ impl Default for SystemRunner {
             // Generous for a local query, short enough that one wedged
             // repository cannot consume the scan budget.
             timeout: Duration::from_millis(1500),
+            network_timeout: Duration::from_secs(300),
         }
     }
 }
@@ -128,34 +188,37 @@ impl Default for SystemRunner {
 impl SystemRunner {
     #[must_use]
     pub fn with_timeout(timeout: Duration) -> Self {
-        Self { timeout }
-    }
-}
-
-impl ProcessRunner for SystemRunner {
-    fn git_available(&self) -> bool {
-        Command::new("git")
-            .arg("--version")
-            .env_clear()
-            .envs(child_env())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .stdin(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
+        Self {
+            timeout,
+            ..Self::default()
+        }
     }
 
-    fn run_git(&self, cwd: &Path, args: &[&str]) -> Result<CommandOutput, DetectError> {
-        reject_dangerous_args(args)?;
+    #[must_use]
+    pub fn with_network_timeout(mut self, timeout: Duration) -> Self {
+        self.network_timeout = timeout;
+        self
+    }
 
+    /// Spawn `git`, drain both pipes, and enforce a deadline.
+    ///
+    /// The one place this crate creates a `git` process. Both public entry
+    /// points funnel here so `env_clear()` cannot be forgotten on one of them.
+    fn spawn(
+        &self,
+        cwd: &Path,
+        args: &[String],
+        env: &BTreeMap<OsString, OsString>,
+        timeout: Duration,
+    ) -> Result<CommandOutput, DetectError> {
         let mut argv = vec!["git".to_owned()];
-        argv.extend(args.iter().map(|s| (*s).to_owned()));
+        argv.extend(args.iter().cloned());
 
         let mut child = Command::new("git")
             .args(args)
             .current_dir(cwd)
             .env_clear()
-            .envs(child_env())
+            .envs(env)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -184,7 +247,7 @@ impl ProcessRunner for SystemRunner {
             buf
         });
 
-        let deadline = Instant::now() + self.timeout;
+        let deadline = Instant::now() + timeout;
         let status = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break Some(status),
@@ -220,6 +283,43 @@ impl ProcessRunner for SystemRunner {
     }
 }
 
+impl ProcessRunner for SystemRunner {
+    fn git_available(&self) -> bool {
+        Command::new("git")
+            .arg("--version")
+            .env_clear()
+            .envs(child_env())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .stdin(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    }
+
+    fn run_git(&self, cwd: &Path, args: &[&str]) -> Result<CommandOutput, DetectError> {
+        reject_dangerous_args(args)?;
+        let owned: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
+        self.spawn(cwd, &owned, &child_env(), self.timeout)
+    }
+
+    fn run_git_op(&self, op: &GitOp) -> Result<CommandOutput, DetectError> {
+        let argv = op.argv();
+        // Belt and braces. Rule 1 already makes a forbidden argument
+        // unrepresentable, so this can only fire if a future variant threads a
+        // user string into a slot that turns out to be flag-parsed — which is
+        // precisely the case ADR-0005 §10 rule 2 says the check exists for.
+        let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+        reject_dangerous_args(&refs)?;
+
+        let timeout = if op.needs_network() {
+            self.network_timeout
+        } else {
+            self.timeout
+        };
+        self.spawn(op.cwd(), &argv, &op_env(op), timeout)
+    }
+}
+
 /// A runner that refuses everything, for tests and for the case where `git` is
 /// not installed.
 #[derive(Debug, Clone, Copy, Default)]
@@ -231,6 +331,12 @@ impl ProcessRunner for NoRunner {
     }
 
     fn run_git(&self, _cwd: &Path, _args: &[&str]) -> Result<CommandOutput, DetectError> {
+        Err(DetectError::NotAttempted {
+            why: "git is not available".to_owned(),
+        })
+    }
+
+    fn run_git_op(&self, _op: &GitOp) -> Result<CommandOutput, DetectError> {
         Err(DetectError::NotAttempted {
             why: "git is not available".to_owned(),
         })

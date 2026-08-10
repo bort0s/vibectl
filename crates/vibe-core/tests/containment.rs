@@ -22,7 +22,7 @@ fn root_of(dir: &tempfile::TempDir) -> PathBuf {
     dir.path().canonicalize().expect("canonicalize tempdir")
 }
 
-// --- rule 5: nothing may land under .git/ -------------------------------
+// --- rule 6: nothing may land under .git/ -------------------------------
 
 #[test]
 fn a_write_into_a_git_directory_is_refused() {

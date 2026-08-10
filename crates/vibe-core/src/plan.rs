@@ -12,6 +12,15 @@
 //! - **There is no `FileOp::Delete`.** The "never destructive" constraint is
 //!   enforced by the variant not existing, so a destructive command is
 //!   unrepresentable rather than merely discouraged.
+//!
+//!   [`FileOp::RemoveOwnedAgent`] is not that variant, and the distinction is
+//!   worth being precise about rather than waving at. A general `Delete` takes
+//!   a path and removes whatever is there; `RemoveOwnedAgent` can only express
+//!   "delete this file, whose content hashes to exactly this" — and the op is
+//!   only ever *built* for a path the ADR-0006 §5 state table has already said
+//!   is ours. `vibe agents remove` needs to delete a file it installed; it does
+//!   not need, and cannot express, deleting anything else. The dangerous
+//!   capability stays unrepresentable.
 //! - **[`WritePlan`] is `Serialize` but not `Deserialize`.** A plan contains
 //!   file contents and (from P5) subprocess invocations. Deserialising one
 //!   would mean `apply` accepts arbitrary file writes and arbitrary process
@@ -50,6 +59,9 @@ pub enum PlanIntent {
     Sync,
     Render,
     Archive,
+    AgentsAdd,
+    AgentsRemove,
+    AgentsSync,
 }
 
 /// A single filesystem change. Additive only, by construction.
@@ -76,6 +88,30 @@ pub enum FileOp {
         after: String,
         reason: EditReason,
     },
+    /// Delete an agent file this tool installed.
+    ///
+    /// **This is not `FileOp::Delete`, and the difference is the whole point.**
+    /// The module docs say a destructive command is unrepresentable rather than
+    /// discouraged, and that stays true: there is still no op that deletes an
+    /// arbitrary path. `vibe agents remove` needs to delete *one specific kind
+    /// of file* — one we wrote, that is still exactly as we wrote it — so it
+    /// gets a variant that can express only that, and carries the proof.
+    ///
+    /// `observed_hash` is the content the plan saw, not the content the
+    /// lockfile recorded. The two differ for a `Modified` agent, which
+    /// ADR-0006 §5 says `remove` still deletes because it is ours; what the
+    /// hash guards is the window between planning and applying. It is the same
+    /// contract as [`FileOp::UpdateFile`]'s `before`: if the file is not what
+    /// the plan diffed against, the world moved and the plan is stale.
+    ///
+    /// Ownership itself is decided *before* the op is built, by the state
+    /// table. An op reaching `apply` has already been through
+    /// [`crate::AgentState::is_ours_to_touch`].
+    RemoveOwnedAgent {
+        #[serde(serialize_with = "lossy_path")]
+        path: PathBuf,
+        observed_hash: String,
+    },
 }
 
 impl FileOp {
@@ -84,7 +120,8 @@ impl FileOp {
         match self {
             FileOp::CreateDir { path }
             | FileOp::CreateFile { path, .. }
-            | FileOp::UpdateFile { path, .. } => path,
+            | FileOp::UpdateFile { path, .. }
+            | FileOp::RemoveOwnedAgent { path, .. } => path,
         }
     }
 }
@@ -153,6 +190,9 @@ pub enum SkipReason {
     /// A `CreateDir` whose directory already exists. Creating a directory is
     /// idempotent; this is not a failure.
     DirectoryAlreadyExists,
+    /// A `RemoveOwnedAgent` whose file was gone by the time it ran. The
+    /// intended end state holds.
+    AlreadyAbsent,
 }
 
 /// Verify one op path against the plan's root and the containment rules.
@@ -165,7 +205,7 @@ pub enum SkipReason {
 /// 3. **No `.git` component, ever.** `.git/hooks/*` executes with no config and
 ///    no argument, so an additive write there is code execution — this is what
 ///    makes "the worst case is an unintended additive write" true rather than
-///    wishful (ADR-0005 §10 rule 5).
+///    wishful (ADR-0005 §10 rule 6).
 /// 4. **Lexically inside `root`.**
 /// 5. **The deepest existing ancestor canonicalises to somewhere inside the
 ///    canonicalised root.** Catches a symlinked intermediate directory that
@@ -287,6 +327,27 @@ pub fn apply(plan: &WritePlan, rep: &dyn Reporter) -> Result<ApplyReport, CoreEr
                 })?;
                 applied.push(display.clone());
             }
+            FileOp::RemoveOwnedAgent { path, .. } => {
+                match std::fs::remove_file(path) {
+                    Ok(()) => applied.push(display.clone()),
+                    // Already gone between the precondition check and here.
+                    // The intended end state holds, so this is not a failure —
+                    // and a re-run after a crash must not fail on the step that
+                    // already succeeded.
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        skipped.push(SkippedOp {
+                            path: display.clone(),
+                            reason: SkipReason::AlreadyAbsent,
+                        });
+                    }
+                    Err(source) => {
+                        return Err(CoreError::Io {
+                            path: path.clone(),
+                            source,
+                        });
+                    }
+                }
+            }
         }
         rep.event(Event::OpApplied { path: display });
     }
@@ -322,6 +383,26 @@ fn check_precondition(op: &FileOp) -> Result<(), CoreError> {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 Err(CoreError::ManifestNotFound { path: path.clone() })
             }
+            Err(source) => Err(CoreError::Io {
+                path: path.clone(),
+                source,
+            }),
+        },
+        // The same staleness contract as `UpdateFile`, by content hash rather
+        // than by full text: a deletion has no `after` to diff against, and the
+        // file being deleted is one whose bytes we already had to hash to
+        // decide ownership. A file that changed after planning is not the file
+        // the user agreed to delete.
+        FileOp::RemoveOwnedAgent {
+            path,
+            observed_hash,
+        } => match std::fs::read(path) {
+            Ok(current) if &crate::agents::content_hash(&current) == observed_hash => Ok(()),
+            Ok(_) => Err(CoreError::PlanStale { path: path.clone() }),
+            // Already gone. Deleting is idempotent in the direction that
+            // matters, and erroring here would make a re-run after a crash fail
+            // on the step that already succeeded.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(source) => Err(CoreError::Io {
                 path: path.clone(),
                 source,

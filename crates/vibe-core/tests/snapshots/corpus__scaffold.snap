@@ -4,7 +4,7 @@ expression: d.render()
 ---
 # Managed by vibe. Hand-edits and comments are preserved.
 # Empty fields mean 'not determined' — vibe does not guess.
-schema_version = "1.0"
+schema_version = "1.1"
 
 [project]
 name = "macroring"

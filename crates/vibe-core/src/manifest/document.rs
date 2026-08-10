@@ -39,6 +39,18 @@ pub enum FieldEdit {
     ReplaceDeployEnvRequired(Vec<String>),
     ReplaceContextDecisions(Vec<String>),
     ReplaceContextNext(Vec<String>),
+    /// The `[agents] installed` array (schema 1.1).
+    ///
+    /// Replace, not merge, and the asymmetry with `sync`'s set-valued fields is
+    /// deliberate. `ReplaceStackFrameworks` unions because detection is
+    /// *guessing* and must never drop a framework a person typed. `installed`
+    /// is not detected — it is declared, so `vibe agents remove` has to be able
+    /// to shorten it. Unioning here would make removal impossible.
+    ///
+    /// This addresses exactly one key. Keys a future minor puts beside it in
+    /// `[agents]` are untouched by construction, which is the property
+    /// `tests/agents_forward_compat.rs` exists to hold onto.
+    ReplaceAgentsInstalled(Vec<String>),
     SetSchemaVersion(SchemaVersion),
 }
 
@@ -234,6 +246,9 @@ impl ManifestDocument {
             }
             FieldEdit::ReplaceContextNext(items) => {
                 self.set_array("context", "next", &items)?;
+            }
+            FieldEdit::ReplaceAgentsInstalled(items) => {
+                self.set_array("agents", "installed", &items)?;
             }
             FieldEdit::SetSchemaVersion(v) => {
                 let new = Value::from(v.to_string());

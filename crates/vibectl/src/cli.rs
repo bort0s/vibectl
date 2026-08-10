@@ -32,6 +32,166 @@ pub enum Command {
     Archive(ArchiveArgs),
     /// Put an archived project back
     Unarchive(ArchiveArgs),
+    /// Manage the agents a project declares
+    #[command(subcommand)]
+    Agents(AgentsCommand),
+}
+
+/// The six agent subcommands.
+///
+/// `update` is the **only** one that touches the network. Every other command
+/// works fully offline against whatever the store already holds, which is what
+/// keeps the tool usable on a plane and keeps a network round-trip off the hot
+/// path of an unrelated command (ADR-0006 §1, §7).
+#[derive(Debug, Subcommand)]
+pub enum AgentsCommand {
+    /// Fetch the agent store. The only command that uses the network.
+    Update(AgentsUpdateArgs),
+    /// Show what the store offers
+    List(AgentsListArgs),
+    /// Show the state of this project's agents
+    Status(AgentsStatusArgs),
+    /// Install agents and declare them in the manifest
+    Add(AgentsAddArgs),
+    /// Remove agents vibe installed, and undeclare them
+    Remove(AgentsRemoveArgs),
+    /// Install every declared agent that is not present
+    Sync(AgentsSyncArgs),
+}
+
+/// Where the store lives and what it points at.
+///
+/// Flattened into every agent subcommand rather than declared once as a global,
+/// so a command cannot exist that reads a *different* store than the one the
+/// user named.
+#[derive(Debug, Args)]
+pub struct StoreFlags {
+    /// Upstream repository to clone the agent store from
+    #[arg(long, value_name = "URL")]
+    pub store_url: Option<String>,
+
+    /// Where the agent store lives on disk
+    #[arg(long, value_name = "DIR")]
+    pub store_path: Option<PathBuf>,
+
+    /// Days before the store's age is mentioned
+    #[arg(long, value_name = "DAYS")]
+    pub stale_after: Option<u64>,
+}
+
+#[derive(Debug, Args)]
+pub struct AgentsUpdateArgs {
+    #[command(flatten)]
+    pub store: StoreFlags,
+
+    #[command(flatten)]
+    pub format: FormatFlags,
+}
+
+#[derive(Debug, Args)]
+pub struct AgentsListArgs {
+    /// Project directory, used only to mark which agents it already declares
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+
+    #[command(flatten)]
+    pub store: StoreFlags,
+
+    #[command(flatten)]
+    pub format: FormatFlags,
+}
+
+#[derive(Debug, Args)]
+pub struct AgentsStatusArgs {
+    /// Project directory
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+
+    #[command(flatten)]
+    pub store: StoreFlags,
+
+    #[command(flatten)]
+    pub format: FormatFlags,
+}
+
+#[derive(Debug, Args)]
+pub struct AgentsAddArgs {
+    /// Agent names, as `vibe agents list` shows them
+    #[arg(required = true)]
+    pub names: Vec<String>,
+
+    /// Project directory
+    #[arg(long, default_value = ".")]
+    pub path: PathBuf,
+
+    #[command(flatten)]
+    pub force: ForceFlag,
+
+    #[command(flatten)]
+    pub store: StoreFlags,
+
+    #[command(flatten)]
+    pub write: WriteFlags,
+
+    #[command(flatten)]
+    pub format: FormatFlags,
+}
+
+#[derive(Debug, Args)]
+pub struct AgentsRemoveArgs {
+    /// Agent names
+    #[arg(required = true)]
+    pub names: Vec<String>,
+
+    /// Project directory
+    #[arg(long, default_value = ".")]
+    pub path: PathBuf,
+
+    #[command(flatten)]
+    pub store: StoreFlags,
+
+    #[command(flatten)]
+    pub write: WriteFlags,
+
+    #[command(flatten)]
+    pub format: FormatFlags,
+}
+
+#[derive(Debug, Args)]
+pub struct AgentsSyncArgs {
+    /// Project directory
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+
+    /// Also rewrite installed agents whose store revision has moved
+    #[arg(long)]
+    pub update: bool,
+
+    #[command(flatten)]
+    pub force: ForceFlag,
+
+    #[command(flatten)]
+    pub store: StoreFlags,
+
+    #[command(flatten)]
+    pub write: WriteFlags,
+
+    #[command(flatten)]
+    pub format: FormatFlags,
+}
+
+/// The flag that overwrites an edited agent.
+///
+/// Its own type, flattened, so the help text stating what is at stake is
+/// written once. Editing an installed agent is the *normal* reason to have
+/// installed one, which makes this the single most likely way for the feature
+/// to destroy user work (ADR-0006 §5).
+#[derive(Debug, Args)]
+pub struct ForceFlag {
+    /// Overwrite agents that were edited after they were installed. The edits
+    /// are lost; there is no merge.
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Debug, Args)]

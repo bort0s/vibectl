@@ -112,7 +112,16 @@ fn new_creates_a_manifest_that_reads_back() {
     assert!(text.contains(r#"name = "macroring""#));
     assert!(text.contains(r#"status = "paused""#));
     assert!(text.contains("Mobile-first PWA for nutrition tracking"));
-    assert!(text.contains(r#"schema_version = "1.0""#));
+    // Whatever this build writes, not a hard-coded number: pinning the literal
+    // here would make every legitimate schema bump look like a regression in a
+    // test that is not about versioning.
+    assert!(text.contains(&format!(
+        r#"schema_version = "{}""#,
+        vibe_core::SchemaVersion::CURRENT
+    )));
+    // A fresh project declares no agents, and says so by omission rather than
+    // by an empty table (schema 1.1).
+    assert!(!text.contains("[agents]"));
     // The generated header survives, because it is part of the document rather
     // than a string prepended at write time.
     assert!(text.contains("# Managed by vibe"));

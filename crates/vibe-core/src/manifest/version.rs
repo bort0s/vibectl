@@ -8,7 +8,13 @@ use serde::Serialize;
 pub const SCHEMA_MAJOR: u16 = 1;
 /// The minor component this build understands. Compared only to decide whether
 /// to warn.
-pub const SCHEMA_MINOR: u16 = 0;
+///
+/// `1.1` added the `[agents]` table. Additive, so it is a minor bump: a 1.0
+/// build reads a 1.1 manifest, ignores the table, preserves it on write, and
+/// warns once — which is the whole reason `installed` lives in the manifest
+/// rather than in a third file (ADR-0006 §2). `tests/agents_forward_compat.rs`
+/// asserts each half of that sentence.
+pub const SCHEMA_MINOR: u16 = 1;
 
 /// `major.minor`, stored in the manifest as a **quoted string**.
 ///

@@ -45,6 +45,7 @@ pub mod plan;
 pub mod registry;
 pub mod report;
 pub mod scan;
+pub mod url;
 pub mod view;
 pub mod walk;
 
@@ -61,6 +62,7 @@ pub use plan::{ApplyOutcome, ApplyReport, FileOp, PlanIntent, WritePlan};
 pub use registry::{NewRequest, Registry};
 pub use report::{CollectingReporter, Diagnostic, Event, NullReporter, Reporter, Severity};
 pub use scan::{ScanOutcome, ScanReport, ScanRequest, ScannedProject};
+pub use url::GitUrl;
 pub use view::{ListReport, ProjectSummary, ProjectView, Query};
 pub use walk::FileIndex;
 

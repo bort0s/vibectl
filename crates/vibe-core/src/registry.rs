@@ -120,6 +120,11 @@ impl Registry {
         &self.config
     }
 
+    #[must_use]
+    pub(crate) fn runner(&self) -> &dyn crate::exec::ProcessRunner {
+        self.exec.as_ref()
+    }
+
     /// Index what already exists on disk.
     ///
     /// Returns a [`ScanReport`] and nothing else. There is no code path from

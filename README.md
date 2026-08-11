@@ -16,8 +16,14 @@ agents) can pick any of them back up without archaeology.
 > `--dry-run` on writes. Manifests round-trip through `toml_edit`, so your
 > comments and any keys this build does not recognise survive editing.
 >
-> Not built yet: `gh` integration in `vibe new` (P5) and optional AI enrichment
-> (P6).
+> `vibe new --git` initialises a repository and commits the scaffold; adding
+> `--private` or `--public` hands the remote to `gh repo create --source=.
+> --push`. The visibility is never assumed, so `--git` on its own stays local
+> even where `gh` is installed — publishing a repository is not something this
+> tool decides for you. Without `gh`, or without a `gh` credential, it says
+> exactly what is left to run.
+>
+> Not built yet: optional AI enrichment (P6).
 
 ## The idea
 

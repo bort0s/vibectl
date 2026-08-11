@@ -354,14 +354,45 @@ pub struct NewArgs {
     /// Opt-in, not the default: a person who wanted a repository in a directory
     /// knows how to make one, and creating one unasked is the tool doing
     /// something that was not requested (ADR-0008 §8).
+    ///
+    /// Local only. Creating the repository on GitHub needs `--private` or
+    /// `--public` as well.
     #[arg(long)]
     pub git: bool,
+
+    /// Also create a private repository on GitHub with `gh`, and push
+    #[arg(long, requires = "git", conflicts_with = "public")]
+    pub private: bool,
+
+    /// Also create a public repository on GitHub with `gh`, and push
+    #[arg(long, requires = "git", conflicts_with = "private")]
+    pub public: bool,
 
     #[command(flatten)]
     pub write: WriteFlags,
 
     #[command(flatten)]
     pub format: FormatFlags,
+}
+
+impl NewArgs {
+    /// The visibility to create the remote with, or `None` for local only.
+    ///
+    /// **Two flags rather than one with a default, and that is the decision.**
+    /// `gh repo create` requires the choice to be stated, and so does this:
+    /// creating a repository on github.com is outward-facing and not undoable
+    /// by `vibe`, so there is no value it can pick that is not the tool
+    /// deciding whether someone's code is published. `--git` on its own is
+    /// therefore a request for a *local* repository and nothing more, even on a
+    /// machine where `gh` is installed and logged in.
+    #[must_use]
+    pub fn remote_visibility(&self) -> Option<vibe_core::RepoVisibility> {
+        match (self.private, self.public) {
+            (true, _) => Some(vibe_core::RepoVisibility::Private),
+            (_, true) => Some(vibe_core::RepoVisibility::Public),
+            _ => None,
+        }
+    }
 }
 
 /// Accepts unknown values rather than rejecting them.

@@ -244,9 +244,17 @@ impl Registry {
     /// `<project>/.git/**`, which containment rule 6 rejects categorically, and
     /// routing it through `apply` would cost an exception to a rule whose value
     /// is not having one (ADR-0006 §9b, ADR-0008 §1).
-    pub fn init_repository(&self, project_dir: &Path) -> Result<crate::RepoReport, CoreError> {
+    /// `remote` is the visibility to create the GitHub repository with, or
+    /// `None` for a local repository only. There is no default: creating a
+    /// remote is outward-facing and this crate does not pick a visibility on
+    /// the user's behalf (ADR-0008 §2).
+    pub fn init_repository(
+        &self,
+        project_dir: &Path,
+        remote: Option<crate::RepoVisibility>,
+    ) -> Result<crate::RepoReport, CoreError> {
         let project_dir = absolutize(project_dir)?;
-        crate::repo::init(&project_dir, self.exec.as_ref(), "Initial commit")
+        crate::repo::init(&project_dir, self.exec.as_ref(), "Initial commit", remote)
     }
 
     /// Execute a plan. The only method in this crate that writes to disk.

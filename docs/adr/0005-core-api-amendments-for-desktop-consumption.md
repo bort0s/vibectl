@@ -248,7 +248,9 @@ adds the token only for those that return `true`. In the v1 set that is
 run with no credential in scope at all.
 
 **Answered by [ADR-0008](0008-git-and-repository-creation.md) §4-§5
-(2026-08-11): none of them, because P5 needs no credential at all.** The
+(2026-08-11): none of them, because P5 needs no credential at all.** `GhOp`
+now exists and `GhOp::RepoCreate::needs_credential()` returns `false` — the op
+this rule expected to be the exception is the one that demonstrates the answer. The
 `gh`-present path lets `gh` own authentication; the `gh`-absent path creates no
 remote and pushes nothing, reporting the exact commands that finish the job. The
 API-create fallback below is designed and deliberately not built - it costs 18

@@ -105,11 +105,16 @@ pub enum CoreError {
     #[error("{} exists but is not a git repository", .path.display())]
     StoreNotARepository { path: PathBuf },
 
-    /// A `git` invocation failed. `status` travels separately from the prose
-    /// because the prose is whatever `git` wrote to stderr (ADR-0005 §6).
-    // argv[0] is the program, so `.first()` rendered "git git failed". The
-    // subcommand is what identifies the operation to a reader.
-    #[error("git {} failed", .argv.get(1).map_or("", String::as_str))]
+    /// A subprocess failed. `status` travels separately from the prose because
+    /// the prose is whatever the tool wrote to stderr (ADR-0005 §6).
+    // Both halves of the pair, not just the subcommand: `argv[0]` was once a
+    // hard-coded "git", which rendered a failed `gh repo create` as
+    // "git repo failed" — a message naming the wrong program entirely.
+    #[error(
+        "{} {} failed",
+        .argv.first().map_or("", String::as_str),
+        .argv.get(1).map_or("", String::as_str)
+    )]
     ToolFailed {
         argv: Vec<String>,
         status: Option<i32>,

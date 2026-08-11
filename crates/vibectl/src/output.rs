@@ -453,8 +453,13 @@ struct RepoMessage<'a> {
     committed: bool,
     identity_missing: bool,
     branch: Option<&'a str>,
-    gh_available: bool,
     project_name: &'a str,
+    /// `None` means no remote was asked for — which is not the same as one
+    /// having failed, and must not render the same.
+    remote_requested: bool,
+    remote_created: bool,
+    remote_blocked: Option<vibe_core::RemoteBlocked>,
+    remote_url: Option<&'a str>,
 }
 
 impl<'a> RepoMessage<'a> {
@@ -466,8 +471,11 @@ impl<'a> RepoMessage<'a> {
             identity_missing: report.commit_blocked
                 == Some(vibe_core::repo::CommitBlocked::NoAuthorIdentity),
             branch: report.branch.as_deref(),
-            gh_available: report.gh_available,
             project_name,
+            remote_requested: report.remote_requested.is_some(),
+            remote_created: report.remote_created,
+            remote_blocked: report.remote_blocked,
+            remote_url: report.remote_url.as_deref(),
         }
     }
 }
@@ -524,17 +532,62 @@ fn write_repo_message(out: &mut impl Write, m: &RepoMessage<'_>) -> std::io::Res
         writeln!(out, "  git commit -m \"Initial commit\"")?;
     }
 
-    if m.gh_available {
+    // Nothing was asked of `gh`, so nothing is said about it — including on a
+    // machine where it is missing. A limitation nobody reached is not a
+    // limitation worth reporting, and `--git` on its own is a request for a
+    // local repository.
+    if !m.remote_requested {
         return Ok(());
     }
 
-    // The honest half.
-    writeln!(
-        out,
-        "\ngh was not found on this machine, so vibe did not create a remote \
-         repository and did not push."
-    )?;
+    if m.remote_created {
+        match m.remote_url {
+            // Read back from `git remote get-url`, never parsed out of `gh`'s
+            // prose: this is what `origin` actually points at.
+            Some(url) => writeln!(out, "Created the remote repository and pushed to {url}.")?,
+            None => writeln!(out, "Created the remote repository and pushed.")?,
+        }
+        return Ok(());
+    }
+
+    // The honest half. Every branch below names a fact about this machine or
+    // this run, and none of them says anything about the project.
+    let reason = match m.remote_blocked {
+        Some(vibe_core::RemoteBlocked::GhMissing) | None => {
+            "gh was not found on this machine, so vibe did not create a remote \
+             repository and did not push."
+                .to_owned()
+        }
+        Some(vibe_core::RemoteBlocked::NotAuthenticated) => {
+            "gh is installed but not authenticated for the environment vibe runs \
+             it in, so no remote repository was created and nothing was pushed. \
+             vibe clears the environment it hands to subprocesses, so a GH_TOKEN \
+             exported in your shell is deliberately not passed on; `gh auth \
+             login` stores a credential gh finds on its own."
+                .to_owned()
+        }
+        Some(vibe_core::RemoteBlocked::NothingToPush) => {
+            "there is no commit to push, so vibe did not create a remote \
+             repository - an empty repository on your account is not a better \
+             outcome than none."
+                .to_owned()
+        }
+        // `RemoteBlocked` is `#[non_exhaustive]`, so this arm is required and
+        // is reachable only from a newer core than this binary. It degrades to
+        // core's own one-line fact rather than to silence: a reason rendered
+        // plainly is worse than a tailored sentence and far better than a
+        // remote that did not appear with no explanation at all.
+        Some(other) => format!(
+            "{}, so vibe did not create a remote repository and did not push.",
+            other.as_str()
+        ),
+    };
+    writeln!(out, "\n{reason}")?;
+
     writeln!(out, "To finish:")?;
+    if m.remote_blocked == Some(vibe_core::RemoteBlocked::NotAuthenticated) {
+        writeln!(out, "  gh auth login")?;
+    }
     writeln!(
         out,
         "  gh repo create <owner>/{} --source=. --push",
@@ -571,6 +624,7 @@ mod repo_message_tests {
         String::from_utf8(buf).expect("utf8")
     }
 
+    /// A local-only run: `--git` with no visibility flag.
     fn base() -> RepoMessage<'static> {
         RepoMessage {
             initialised: true,
@@ -578,13 +632,25 @@ mod repo_message_tests {
             committed: true,
             identity_missing: false,
             branch: Some("trunk"),
-            gh_available: true,
             project_name: "demo",
+            remote_requested: false,
+            remote_created: false,
+            remote_blocked: None,
+            remote_url: None,
+        }
+    }
+
+    /// The same run with a remote asked for and not created.
+    fn wanted_remote(why: vibe_core::RemoteBlocked) -> RepoMessage<'static> {
+        RepoMessage {
+            remote_requested: true,
+            remote_blocked: Some(why),
+            ..base()
         }
     }
 
     #[test]
-    fn with_gh_present_and_a_commit_there_is_nothing_left_to_say() {
+    fn a_local_only_run_says_nothing_about_remotes() {
         let text = render(&base());
         assert!(text.contains("branch trunk"), "{text}");
         assert!(text.contains("Committed the scaffold"), "{text}");
@@ -592,14 +658,16 @@ mod repo_message_tests {
         // advice appears when there is nothing to finish.
         assert!(!text.contains("gh was not found"), "{text}");
         assert!(!text.contains("will not invent one"), "{text}");
+        // And nothing about a remote nobody asked for. `--git` is a request for
+        // a local repository; volunteering what `gh` would have done is nagging
+        // about a problem the user does not have.
+        assert!(!text.to_lowercase().contains("remote"), "{text}");
+        assert!(!text.contains("gh repo create"), "{text}");
     }
 
     #[test]
     fn without_gh_it_names_the_machine_not_the_project() {
-        let text = render(&RepoMessage {
-            gh_available: false,
-            ..base()
-        });
+        let text = render(&wanted_remote(vibe_core::RemoteBlocked::GhMissing));
         assert!(text.contains("gh was not found on this machine"), "{text}");
         assert!(text.contains("gh repo create <owner>/demo"), "{text}");
         assert!(text.contains("git push -u origin trunk"), "{text}");
@@ -613,12 +681,66 @@ mod repo_message_tests {
         }
     }
 
+    /// `gh` present but unusable must not read as `gh` missing. They need
+    /// different commands from the user, and one of them is a consequence of
+    /// vibe's own containment rather than of the machine's tooling.
+    #[test]
+    fn an_unauthenticated_gh_is_not_reported_as_a_missing_one() {
+        let text = render(&wanted_remote(vibe_core::RemoteBlocked::NotAuthenticated));
+        assert!(!text.contains("gh was not found"), "{text}");
+        assert!(text.contains("not authenticated"), "{text}");
+        // The advice that actually fixes it, first.
+        assert!(text.contains("gh auth login"), "{text}");
+        // And the reason it can happen on a machine where `gh auth status` is
+        // green: the environment vibe hands to subprocesses is constructed.
+        assert!(text.contains("GH_TOKEN"), "{text}");
+    }
+
+    #[test]
+    fn nothing_to_push_says_so_rather_than_blaming_gh() {
+        let text = render(&RepoMessage {
+            committed: false,
+            ..wanted_remote(vibe_core::RemoteBlocked::NothingToPush)
+        });
+        assert!(text.contains("no commit to push"), "{text}");
+        assert!(!text.contains("gh was not found"), "{text}");
+        assert!(!text.contains("not authenticated"), "{text}");
+    }
+
+    /// The success path names what `origin` actually points at, read back from
+    /// `git` rather than parsed out of `gh`'s output.
+    #[test]
+    fn a_created_remote_reports_the_url_and_asks_for_nothing() {
+        let text = render(&RepoMessage {
+            remote_requested: true,
+            remote_created: true,
+            remote_url: Some("https://github.com/you/demo.git"),
+            ..base()
+        });
+        assert!(text.contains("https://github.com/you/demo.git"), "{text}");
+        assert!(!text.contains("To finish"), "{text}");
+        assert!(!text.contains("gh repo create"), "{text}");
+
+        // A create whose URL could not be read says less rather than guessing
+        // one, the same rule the branch follows.
+        let unknown = render(&RepoMessage {
+            remote_requested: true,
+            remote_created: true,
+            remote_url: None,
+            ..base()
+        });
+        assert!(
+            unknown.contains("Created the remote repository"),
+            "{unknown}"
+        );
+        assert!(!unknown.contains("github.com"), "{unknown}");
+    }
+
     #[test]
     fn an_unknown_branch_is_never_rendered_as_main() {
         let text = render(&RepoMessage {
             branch: None,
-            gh_available: false,
-            ..base()
+            ..wanted_remote(vibe_core::RemoteBlocked::GhMissing)
         });
         assert!(
             !text.contains("origin main"),

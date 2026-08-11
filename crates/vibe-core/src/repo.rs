@@ -29,6 +29,7 @@ use serde::Serialize;
 
 use crate::error::CoreError;
 use crate::exec::ProcessRunner;
+use crate::gh::{GhOp, RepoVisibility};
 use crate::git::GitOp;
 
 /// The files a fresh scaffold contains, staged in a fixed order.
@@ -72,6 +73,53 @@ impl CommitBlocked {
     }
 }
 
+/// Why the remote was not created, when the user asked for one.
+///
+/// Every variant is a **fact about this machine or this run**, never a property
+/// of the project — the `NotAttempted`-versus-`NoEvidence` distinction applied
+/// to the tool's own capability (ADR-0008 §3). A consumer that renders any of
+/// these as "this project cannot have a remote" has made the mistake in a new
+/// place.
+///
+/// The set is closed and short on purpose. Anything not listed here is a real
+/// failure and surfaces as [`CoreError::ToolFailed`] carrying `gh`'s own
+/// stderr: a catch-all variant would turn every `gh` problem into a silent
+/// "no remote", which is the same swallow [`classify_commit_failure`] refuses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum RemoteBlocked {
+    /// `gh` could not be run on this machine.
+    GhMissing,
+    /// `gh` ran and has no credential it can use.
+    ///
+    /// Includes the case this crate's own containment creates: `gh` reads
+    /// `GH_TOKEN` from the environment, and the environment handed to it is
+    /// constructed rather than inherited, so a machine authenticated *only* by
+    /// an exported token looks unauthenticated here (ADR-0008 §5). Reported
+    /// with the command that fixes it rather than worked around by forwarding
+    /// a credential.
+    NotAuthenticated,
+    /// There is no commit to push, so there is nothing to create a remote for.
+    ///
+    /// Checked before `gh` runs rather than after it fails: `gh repo create
+    /// --push` on a repository with no commits creates the remote and then
+    /// fails at the push, which leaves an empty repository on the user's
+    /// account as the side effect of a command that reported failure.
+    NothingToPush,
+}
+
+impl RemoteBlocked {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RemoteBlocked::GhMissing => "gh was not found on this machine",
+            RemoteBlocked::NotAuthenticated => "gh is not authenticated on this machine",
+            RemoteBlocked::NothingToPush => "there is no commit to push",
+        }
+    }
+}
+
 /// What repository setup actually did, and what it did not.
 ///
 /// Every field is a fact, never a sentence. `vibectl` turns these into the
@@ -104,25 +152,60 @@ pub struct RepoReport {
     /// a consumer that renders it as one has made the `NotAttempted`-versus-
     /// `NoEvidence` mistake in a new place.
     pub gh_available: bool,
+    /// The visibility the caller asked the remote to be created with, or
+    /// `None` if no remote was asked for.
+    ///
+    /// One field rather than a `remote_requested: bool` beside a visibility,
+    /// because the two can disagree and one of the two disagreements is
+    /// "create a repository whose visibility nobody chose".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_requested: Option<RepoVisibility>,
+    /// `gh` created the remote and pushed.
+    pub remote_created: bool,
+    /// Why not, when a remote was asked for and there is not one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_blocked: Option<RemoteBlocked>,
+    /// The remote `origin` actually points at, read back after the fact.
+    ///
+    /// Read with `git remote get-url`, not parsed out of `gh`'s output. `gh`
+    /// prints a URL in prose that changes between releases; `git` reports what
+    /// is in `.git/config`, which is the thing that is actually true. Same rule
+    /// as [`RepoReport::branch`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_url: Option<String>,
 }
 
 impl RepoReport {
     /// Whether the user has anything left to do.
+    ///
+    /// Note what is **not** here: `gh` being absent is only something left to
+    /// do if a remote was asked for. `vibe new --git` on its own is a request
+    /// for a local repository, and reporting a limitation nobody reached would
+    /// be nagging about a problem the user does not have.
     #[must_use]
     pub fn needs_manual_finish(&self) -> bool {
-        !self.gh_available || self.commit_blocked == Some(CommitBlocked::NoAuthorIdentity)
+        self.commit_blocked == Some(CommitBlocked::NoAuthorIdentity)
+            || (self.remote_requested.is_some() && !self.remote_created)
     }
 }
 
-/// Initialise a repository and commit the scaffold.
+/// Initialise a repository, commit the scaffold, and — only if asked — create
+/// the remote.
 ///
 /// Idempotent in the direction that matters: an existing repository is left
 /// alone rather than re-initialised, and a scaffold that is already committed
 /// produces no second commit.
+///
+/// `remote` is `Option<RepoVisibility>` rather than a `bool` plus a default,
+/// and the shape is the decision. Creating a repository on github.com is
+/// outward-facing and not undoable by this tool, so it happens only when the
+/// caller names the visibility — there is no value we could pick that is not us
+/// deciding whether someone's code is published.
 pub fn init(
     project_dir: &Path,
     exec: &dyn ProcessRunner,
     message: &str,
+    remote: Option<RepoVisibility>,
 ) -> Result<RepoReport, CoreError> {
     if !exec.git_available() {
         return Err(CoreError::GitUnavailable {
@@ -182,6 +265,13 @@ pub fn init(
         }
     }
 
+    let gh_available = exec.gh_available();
+    let remote_outcome = match remote {
+        Some(visibility) => create_remote(project_dir, exec, visibility, committed, gh_available)?,
+        // Not asked for, so not attempted, so nothing to report about it.
+        None => RemoteOutcome::default(),
+    };
+
     Ok(RepoReport {
         initialised: !already,
         already_a_repository: already,
@@ -191,8 +281,123 @@ pub fn init(
         // `symbolic-ref` still resolves it, but reading it afterwards is the
         // state the user will actually be pushing.
         branch: current_branch(project_dir, exec),
-        gh_available: gh_available(),
+        gh_available,
+        remote_requested: remote,
+        remote_created: remote_outcome.created,
+        remote_blocked: remote_outcome.blocked,
+        remote_url: remote_outcome.url,
     })
+}
+
+/// What the remote step did. Internal, so [`RepoReport`] stays a flat record.
+#[derive(Debug, Default)]
+struct RemoteOutcome {
+    created: bool,
+    blocked: Option<RemoteBlocked>,
+    url: Option<String>,
+}
+
+/// Hand the whole remote flow to `gh`, or say precisely why it did not run.
+///
+/// One `gh repo create --source=. --push` does the create, the `origin` wiring
+/// and the push, with `gh` owning authentication throughout (ADR-0008 §2).
+/// That is not an efficiency: it is the reason no credential reaches this
+/// crate, because there is no step here that would need one.
+///
+/// The two pre-flight checks run **before** `gh` does, and both are about not
+/// leaving debris on a user's account. A missing `gh` obviously cannot create
+/// anything; a repository with no commit gets created and then fails at the
+/// push, which is a worse outcome than declining.
+///
+/// **They are ordered by what the user has to fix first, not by what is
+/// cheapest to check.** Both can hold at once — a fresh machine often has
+/// neither a git identity nor `gh` — and reporting "gh was not found" to
+/// someone whose actual first blocker is an uncommitted scaffold sends them to
+/// install a tool that would not have run anyway. The chain is: get a commit,
+/// then get `gh`.
+fn create_remote(
+    project_dir: &Path,
+    exec: &dyn ProcessRunner,
+    visibility: RepoVisibility,
+    committed: bool,
+    gh_available: bool,
+) -> Result<RemoteOutcome, CoreError> {
+    let blocked = |why: RemoteBlocked| {
+        Ok(RemoteOutcome {
+            created: false,
+            blocked: Some(why),
+            url: None,
+        })
+    };
+
+    if !committed {
+        return blocked(RemoteBlocked::NothingToPush);
+    }
+    if !gh_available {
+        return blocked(RemoteBlocked::GhMissing);
+    }
+
+    // The name `gh` gives the repository is the directory's own name, which is
+    // the project name `vibe new` created it from. Deriving it here rather than
+    // taking it as an argument keeps the two from drifting: the repository is
+    // named after the directory that is being pushed, always.
+    let Some(name) = project_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|n| !n.is_empty())
+    else {
+        return Err(CoreError::GitUnavailable {
+            why: format!(
+                "cannot name a repository after {} — it has no final path component",
+                project_dir.display()
+            ),
+        });
+    };
+
+    let out = exec
+        .run_gh_op(&GhOp::RepoCreate {
+            cwd: project_dir.to_path_buf(),
+            name,
+            visibility,
+        })
+        .map_err(|e| CoreError::GitUnavailable { why: e.to_string() })?;
+
+    if out.success() {
+        return Ok(RemoteOutcome {
+            created: true,
+            blocked: None,
+            url: remote_url(project_dir, exec),
+        });
+    }
+    match classify_gh_failure(&out) {
+        Some(why) => blocked(why),
+        // Unrecognised means unrecognised. Turning it into a quiet "no remote"
+        // would hide `gh`'s own explanation of what went wrong.
+        None => Err(CoreError::ToolFailed {
+            argv: out.argv.clone(),
+            status: out.status,
+            stderr: out.stderr.trim().to_owned(),
+        }),
+    }
+}
+
+/// What `origin` points at, or `None`.
+///
+/// Reuses the store's `remote get-url origin` op. Its docs describe it as the
+/// store's ownership check, which is what it was written for; the invocation is
+/// `git remote get-url origin` either way, and reading a fact back off disk is
+/// the same reason both callers want it.
+fn remote_url(project_dir: &Path, exec: &dyn ProcessRunner) -> Option<String> {
+    let out = exec
+        .run_git_op(&GitOp::RemoteGetUrl {
+            cwd: project_dir.to_path_buf(),
+        })
+        .ok()?;
+    if !out.success() {
+        return None;
+    }
+    let url = out.trimmed().trim().to_owned();
+    if url.is_empty() { None } else { Some(url) }
 }
 
 /// The branch, or `None` if it could not be read.
@@ -214,16 +419,30 @@ pub fn current_branch(project_dir: &Path, exec: &dyn ProcessRunner) -> Option<St
     if name.is_empty() { None } else { Some(name) }
 }
 
-/// Whether `gh` can be run. Probed the same way `git` is.
-#[must_use]
-pub fn gh_available() -> bool {
-    std::process::Command::new("gh")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .stdin(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+/// Recognise the one `gh` failure that is a fact about the machine.
+///
+/// Same shape and same caution as [`classify_commit_failure`], including the
+/// `None`-is-a-real-failure default. `gh` exits `1` for everything, so the
+/// message is again the only signal — and `NO_COLOR` plus `LC_ALL=C` in the
+/// constructed environment are what make it stable enough to match on.
+///
+/// The phrasings cover `gh`'s two shapes for "no credential": the interactive
+/// one that tells you to log in, and the CI one that tells you to set a token.
+/// Both are the same fact.
+fn classify_gh_failure(out: &crate::exec::CommandOutput) -> Option<RemoteBlocked> {
+    let haystack = format!("{} {}", out.stdout, out.stderr).to_ascii_lowercase();
+    let unauthenticated = [
+        "gh auth login",
+        "not logged in",
+        "no authentication token",
+        "authentication token not found",
+        "gh_token",
+        "github_token",
+    ];
+    if unauthenticated.iter().any(|m| haystack.contains(m)) {
+        return Some(RemoteBlocked::NotAuthenticated);
+    }
+    None
 }
 
 /// Recognise the two `git commit` failures that are facts about the machine.
@@ -285,6 +504,129 @@ mod tests {
         }
     }
 
+    /// A runner that claims `gh` exists and **panics if anything runs it**.
+    ///
+    /// The pre-flight checks in [`create_remote`] are only worth anything if
+    /// they run before `gh` does. Asserting on a returned reason would pass
+    /// against an implementation that created the repository first and reported
+    /// the reason afterwards, which is precisely the debris the checks exist to
+    /// avoid. So the assertion is that the subprocess never happens.
+    #[derive(Debug)]
+    struct GhMustNotRun;
+
+    impl ProcessRunner for GhMustNotRun {
+        fn git_available(&self) -> bool {
+            true
+        }
+        fn run_git(
+            &self,
+            _cwd: &Path,
+            _args: &[&str],
+        ) -> Result<crate::exec::CommandOutput, crate::detect::DetectError> {
+            Err(crate::detect::DetectError::NotAttempted {
+                why: "not under test".to_owned(),
+            })
+        }
+        fn run_git_op(
+            &self,
+            _op: &GitOp,
+        ) -> Result<crate::exec::CommandOutput, crate::detect::DetectError> {
+            Err(crate::detect::DetectError::NotAttempted {
+                why: "not under test".to_owned(),
+            })
+        }
+        fn run_gh_op(
+            &self,
+            op: &GhOp,
+        ) -> Result<crate::exec::CommandOutput, crate::detect::DetectError> {
+            panic!("gh was run despite a pre-flight check that should have stopped it: {op:?}");
+        }
+        fn gh_available(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn nothing_to_push_stops_before_gh_creates_an_empty_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        let outcome = create_remote(
+            dir.path(),
+            &GhMustNotRun,
+            RepoVisibility::Private,
+            false, // nothing was committed
+            true,  // and gh is available, so only the check can stop this
+        )
+        .expect("a blocked remote is not an error");
+        assert!(!outcome.created);
+        assert_eq!(outcome.blocked, Some(RemoteBlocked::NothingToPush));
+    }
+
+    #[test]
+    fn a_missing_gh_is_reported_and_never_attempted() {
+        let dir = tempfile::tempdir().unwrap();
+        let outcome = create_remote(
+            dir.path(),
+            &crate::exec::NoRunner,
+            RepoVisibility::Public,
+            true,
+            false,
+        )
+        .expect("a blocked remote is not an error");
+        assert_eq!(outcome.blocked, Some(RemoteBlocked::GhMissing));
+        assert!(outcome.url.is_none());
+    }
+
+    /// The half that keeps the two tests above honest: with both preconditions
+    /// satisfied the op *is* run. Without this, an implementation that never
+    /// called `gh` at all would satisfy every assertion here.
+    #[test]
+    fn with_both_preconditions_met_the_op_is_actually_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = create_remote(
+                dir.path(),
+                &GhMustNotRun,
+                RepoVisibility::Private,
+                true,
+                true,
+            );
+        }))
+        .expect_err("gh should have been invoked");
+        let msg = err
+            .downcast_ref::<String>()
+            .map_or("", String::as_str)
+            .to_owned();
+        assert!(msg.contains("gh was run"), "unexpected panic: {msg}");
+        assert!(msg.contains("RepoCreate"), "the op reaching gh was {msg}");
+    }
+
+    #[test]
+    fn an_unauthenticated_gh_is_a_machine_fact_and_anything_else_is_a_failure() {
+        for auth in [
+            "To get started with GitHub CLI, please run: gh auth login.",
+            "gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable",
+            "You are not logged into any GitHub hosts",
+        ] {
+            assert_eq!(
+                classify_gh_failure(&out(auth)),
+                Some(RemoteBlocked::NotAuthenticated),
+                "{auth}"
+            );
+        }
+
+        // Paired, and this is the half that matters: an unrecognised failure
+        // must stay a failure, so `gh`'s own explanation reaches the user
+        // instead of being flattened into "no remote".
+        for real in [
+            "GraphQL: Name already exists on this account (createRepository)",
+            "a git remote named 'origin' already exists",
+            "failed to push: remote rejected",
+            "error connecting to api.github.com",
+        ] {
+            assert_eq!(classify_gh_failure(&out(real)), None, "{real}");
+        }
+    }
+
     #[test]
     fn the_two_machine_facts_are_recognised_and_nothing_else_is() {
         assert_eq!(
@@ -319,12 +661,9 @@ mod tests {
         // fix: choosing a name and address on the user's behalf would stamp an
         // invented person into their history.
         let r = RepoReport {
-            initialised: true,
-            already_a_repository: false,
-            committed: false,
             commit_blocked: Some(CommitBlocked::NoAuthorIdentity),
-            branch: Some("trunk".to_owned()),
-            gh_available: true,
+            committed: false,
+            ..local_only()
         };
         assert!(r.needs_manual_finish(), "the user has to act, so say so");
 
@@ -336,22 +675,66 @@ mod tests {
         assert!(!quiet.needs_manual_finish());
     }
 
-    #[test]
-    fn the_report_says_what_is_left_without_saying_it_about_the_project() {
-        let r = RepoReport {
+    /// A local-only run: `--git` with no visibility flag, which is what the
+    /// flag on its own means.
+    fn local_only() -> RepoReport {
+        RepoReport {
             initialised: true,
             already_a_repository: false,
             committed: true,
             commit_blocked: None,
             branch: Some("trunk".to_owned()),
             gh_available: false,
-        };
-        assert!(r.needs_manual_finish());
+            remote_requested: None,
+            remote_created: false,
+            remote_blocked: None,
+            remote_url: None,
+        }
+    }
 
-        let with_gh = RepoReport {
-            gh_available: true,
-            ..r.clone()
+    /// **The change of meaning worth a test of its own.** A missing `gh` used
+    /// to make every `vibe new --git` report unfinished business. It now does
+    /// so only when a remote was asked for: a limitation nobody reached is not
+    /// something left to do, and reporting it anyway is the tool nagging about
+    /// a problem the user does not have.
+    #[test]
+    fn a_missing_gh_is_only_unfinished_business_if_a_remote_was_asked_for() {
+        let local = local_only();
+        assert!(
+            !local.needs_manual_finish(),
+            "a local-only run reported unfinished business about a remote \
+             nobody asked for"
+        );
+
+        // Paired: the same machine, the same missing `gh`, and a remote that
+        // *was* requested.
+        let asked = RepoReport {
+            remote_requested: Some(RepoVisibility::Private),
+            remote_blocked: Some(RemoteBlocked::GhMissing),
+            ..local_only()
         };
-        assert!(!with_gh.needs_manual_finish());
+        assert!(asked.needs_manual_finish());
+    }
+
+    #[test]
+    fn a_created_remote_leaves_nothing_to_finish() {
+        let done = RepoReport {
+            gh_available: true,
+            remote_requested: Some(RepoVisibility::Public),
+            remote_created: true,
+            remote_url: Some("https://github.com/you/demo.git".to_owned()),
+            ..local_only()
+        };
+        assert!(!done.needs_manual_finish());
+
+        // And the failure direction: asked for, `gh` present, not created.
+        let failed = RepoReport {
+            gh_available: true,
+            remote_requested: Some(RepoVisibility::Public),
+            remote_created: false,
+            remote_blocked: Some(RemoteBlocked::NotAuthenticated),
+            ..local_only()
+        };
+        assert!(failed.needs_manual_finish());
     }
 }

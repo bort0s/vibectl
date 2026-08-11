@@ -11,6 +11,10 @@ rule 3a**, whose open question this answers.
 redirect `gh repo create`, on `ubuntu-latest`, `macos-latest` and
 `windows-latest`. The `gh` path is unblocked.
 
+**§2 implemented 2026-08-11.** `GhOp`, the `gh` half of ADR-0005 §10 rule 1.
+§3 is amended and §3a added: the remote is a second opt-in, so `--git` alone
+stays local. §9 records the controls and the one caveat still open.
+
 ## Context
 
 `vibe new` scaffolds a directory and a manifest. P5 adds the two things a person
@@ -62,6 +66,46 @@ caller would find it already there; this is that caller.
 credential, which is the original architecture and the reason `gh` is preferred
 at all. Nothing about the token reaches this crate.
 
+**Implemented 2026-08-11**, once §6 was green. `GhOp` is the `gh` half of rule
+1: one variant, one `(program, subcommand)` pair, argv constructed rather than
+passed through. `alias set` and `extension install` — the two invocations
+ADR-0005 §10 names as arbitrary-execution-by-design — are **unexpressible**
+rather than filtered, the same technique as the missing `FileOp::Delete` and the
+missing `GitOp::Push`.
+
+Four things about the shape are decisions rather than details:
+
+- **`--source=.` is a literal and the directory is the process's cwd.** The
+  source repository is therefore named without any path reaching argv, which
+  leaves the repository name as the only value from outside this crate in the
+  whole vector — last, after a `--`.
+- **The argument check is an allowlist, and it stops at the `--`.** Every
+  element before the separator must be the allowlisted pair or one of four
+  named flags; everything after it is data. This *diverges* from `GitOp`'s
+  deliberately un-`--`-aware check, and the divergence is the point: there the
+  narrowing costs nothing because `Add` only carries paths this crate builds,
+  where here it would refuse to create a repository named `alias`. Rule 2 exists
+  to catch a value landing in a slot that turns out to be flag-parsed, and a
+  slot after `--` in a `cobra` command is not one. Refusing there would be a
+  validation rule wearing a containment rule's clothes.
+- **A separate two-variant `RepoVisibility`, not the manifest's `Visibility`.**
+  The manifest type carries `Other(String)` so a value from a future build
+  round-trips, which is right for a field being read and wrong for one being
+  turned into a flag: `Other(s)` is a user string one `format!` from argv.
+- **The remote is a second opt-in: `--git --private` or `--git --public`.**
+  See §3a.
+
+`gh`'s environment is constructed like `git`'s, with three additions and one
+refusal. `XDG_CONFIG_HOME` is forwarded on the ground rule 3 already admits
+`HOME` — a program cannot find its own configuration without being told where it
+is — and it grants nothing `HOME` does not, which is only acceptable *because*
+§6 verified that a per-user `gh` config cannot redirect `gh repo create`.
+`GH_PAGER` is set **blank**, because `gh` pipes its output through a pager named
+in that same per-user config: a command reachable through a config file is the
+`ext::` shape in a new place, and blank means there is no pager to name.
+`SSH_AUTH_SOCK` is forwarded only because this op pushes, the same scoping
+`GitOp::Clone` gets. And no token, per §5.
+
 ### 3. `gh` absent: everything local, and say exactly what is left
 
 No remote is created and nothing is pushed. `vibe` initialises the repository,
@@ -83,6 +127,65 @@ the project — the same distinction `SyncNotes::not_attempted` draws when `git`
 is missing, and the same reason `NotAttempted` must never collapse into
 `NoEvidence`. The tool does not guess, does not half-perform the step, and does
 not invent a credential path in order to avoid admitting a limit.
+
+**Amended 2026-08-11: this message is printed when a remote was asked for, not
+whenever `gh` is missing.** The message above assumed `--git` implied a remote.
+Under §3a it does not, and printing "vibe cannot create the remote" to someone
+who asked for a local repository reports a limitation nobody reached — the same
+nagging `archive`-on-an-already-archived-project refuses to do. The wording,
+the honesty rule and the paste-ready commands are unchanged; only the condition
+moved.
+
+`RemoteBlocked` names three reasons, and the renderer says a different sentence
+for each, because they need different actions from the user:
+
+| Reason | What the user does |
+| --- | --- |
+| `GhMissing` | install `gh`, or run the printed commands by hand |
+| `NotAuthenticated` | `gh auth login` |
+| `NothingToPush` | get a commit first |
+
+They are checked **in the order the user has to fix them**, not in the order
+that is cheapest to check. A fresh machine often has neither an identity nor
+`gh`, and telling that person to install `gh` sends them after a tool that would
+not have run anyway.
+
+`NothingToPush` is checked before `gh` is invoked at all, and that ordering is
+the whole reason it exists: `gh repo create --push` against a repository with no
+commits creates the remote and *then* fails at the push, leaving an empty
+repository on the user's account as the side effect of a command that reported
+failure.
+
+Anything `gh` says that is not one of those is a real failure and surfaces as
+`ToolFailed` carrying `gh`'s own stderr. A catch-all fourth variant would turn
+every `gh` problem into a silent "no remote", which is the swallow
+`classify_commit_failure` already refuses.
+
+### 3a. The remote is a second opt-in, and `--git` alone stays local
+
+`vibe new --git` initialises a repository and commits. It does **not** create a
+remote, on any machine, however well `gh` is set up. Creating one needs
+`--private` or `--public` as well.
+
+Two independent reasons, either of which would be sufficient:
+
+- **`gh` requires the visibility to be stated, and so must we.** There is no
+  default we could pick that is not this tool deciding whether someone's code is
+  published. That is the same class of act as writing a plausible value into a
+  manifest field nothing detected, with a worse blast radius, because publishing
+  is not undoable by us.
+- **`--git` says "initialise a git repository".** Reading it as "and publish
+  this to github.com" would make a flag whose help text describes a local action
+  perform an outward-facing one — precisely the objection §8 makes to `git init`
+  happening unasked, one step further out.
+
+The cost is that a user who wants the whole flow types one more flag. The
+alternative cost is a repository appearing on someone's GitHub account because
+they had `gh` installed.
+
+`--private` and `--public` conflict with each other and both require `--git`, so
+the argument parser refuses every reading that would need a guess, before
+anything is scaffolded.
 
 ### 4. The `GITHUB_TOKEN` API fallback is designed and not built
 
@@ -126,6 +229,21 @@ no op that wants one.
 **Rule 3a's open question is answered by removal, not by scoping.** The safest
 handling of a credential is not a narrow environment — it is not needing the
 credential. Scoping is what you do when the need is real.
+
+**The cost this has, stated rather than discovered later.** `gh` reads
+`GH_TOKEN`/`GITHUB_TOKEN` from its environment, and the environment `vibe` hands
+it is constructed, so a machine authenticated *only* by an exported token — a
+CI shell, or a developer who never ran `gh auth login` — finds `gh`
+unauthenticated here even though `gh auth status` in their terminal is green.
+
+That is a real degradation and it is reported as one:
+`RemoteBlocked::NotAuthenticated`, with `gh auth login` as the first line of the
+advice and a sentence saying *why* it happened, because "it works in my shell"
+is otherwise an unexplainable failure. Forwarding the token would fix it in one
+line and would put a credential into a subprocess environment for the first time
+in this codebase, which is what rule 3a exists to prevent. **If this is ever
+revisited, the argument to beat is not convenience — it is that `gh auth login`
+already solves it, on the user's side, once.**
 
 ### 6. Verified: a per-user `gh` config does not redirect `gh repo create`
 
@@ -204,6 +322,58 @@ one, and creating one unasked is the tool doing something that was not
 requested. When `git` itself is missing, the flag fails cleanly and says so —
 a fact about this machine, reported as one.
 
+### 9. The controls the `gh` path ships with, and the one caveat still open
+
+Four guards were added with the `gh`-present path, and each was **sabotaged and
+observed to fail** before being committed (ADR-0002 §7). Recorded because the
+rule's whole history is that intending to get this right has not been enough:
+
+| Guard | Sabotage | Observed |
+| --- | --- | --- |
+| the `gh` argument allowlist | `reject_dangerous_gh_args` returns `Ok(())` | 2 red in `gh::tests` |
+| the `NothingToPush` pre-flight | delete the check | red: the runner panicked because `gh repo create` was actually invoked |
+| the probe's `--help` placement | append instead of insert | red, naming the argv that would have been a live create |
+| the message's remote gating | gate on `false` | red at both unit and CLI level |
+
+The second is the one worth keeping in mind. Its fixture is a runner that
+**panics if `gh` is run at all**, so the sabotaged build demonstrably reached
+the subprocess rather than failing earlier — the reached-guard rule built into
+the fixture. And a third test asserts the op *is* run when both preconditions
+hold, so "never calls `gh`" cannot pass by accident.
+
+Two CI-verified controls now run under `VIBE_REQUIRE_GH=1`, in one step:
+
+- `gh_containment.rs` — §6's question, green since `4de79c0`.
+- `gh_argv.rs` — **does this `gh` still accept the argv `GhOp` constructs?**
+  The unit tests assert the enum against strings and cannot answer that; only
+  `gh` can. It runs the real argv with `--help` inserted after the subcommand
+  and before the flags, so `cobra` parses every flag and then prints help
+  instead of doing anything, and it is paired: the same invocation with
+  `--source-tree=.` must be rejected, or the control cannot detect a rename and
+  its green half proves nothing. Three independent things stop it creating
+  anything — `--help` short-circuits, `GH_CONFIG_DIR` is an empty directory with
+  no credential, and the working directory is not a repository.
+
+Both files take the shape §6 established: `VIBE_REQUIRE_GH=1` turns a missing
+`gh` into a panic, so **the step passing is itself the proof the controls ran**,
+with no log to read and no credential needed to read one.
+
+**Caveat, with a due date rather than a disclaimer.** The `gh`-requiring
+assertions in `gh_argv.rs` have not run anywhere yet: `gh` is not installed on
+the development machine, and every other check *was* run locally — 303 tests,
+`clippy -D warnings`, `rustfmt`, and `cargo +1.85.0 check`, all green on Windows
+10. What is unverified is narrow and specific: whether a real `gh` accepts
+`--source=.`, `--push` and `--private` in the positions `GhOp::argv` puts them,
+and whether it rejects `--source-tree=.`. The `VIBE_REQUIRE_GH` guard itself was
+verified locally by running it with `gh` absent and observing the panic. **CI is
+the first run of the rest; discharge this by naming the run and the revision,
+not by the passage of time.**
+
+**Not tested anywhere, deliberately:** the path where `gh` *succeeds*. It
+creates a repository on github.com under whoever is logged in, and a suite that
+can do that on a developer's machine or a CI runner is one that will eventually
+do it by accident.
+
 ## Consequences
 
 **Easier:** the credential question disappears. There is no token in any
@@ -217,6 +387,15 @@ message makes this the worst path in the tool.
 **Trade-off accepted #1:** *without `gh`, `vibe new --git` does not produce a
 remote repository.* This is a real reduction against the spec's ambition, and it
 is the graceful degradation ADR-0005 §10 rule 3a already permitted in writing.
+
+**Trade-off accepted #1a:** *with `gh`, `vibe new --git` still does not produce
+one* — the user types `--private` or `--public` too (§3a). One more flag, in
+exchange for never publishing a repository nobody asked to publish.
+
+**Trade-off accepted #1b:** *a user authenticated only by an exported
+`GH_TOKEN` is told to run `gh auth login`* (§5), because the environment handed
+to `gh` is constructed and the token is not forwarded. The alternative is the
+first credential in a subprocess environment in this codebase.
 
 **Trade-off accepted #2:** *the API-create fallback is designed and not built,
 so a user with `GITHUB_TOKEN` and no `gh` gets no more than a user with

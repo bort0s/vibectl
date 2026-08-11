@@ -445,6 +445,18 @@ it to the subject the same way the subject will read it. A probe and a subject
 that consult different sources will eventually disagree, and the disagreement
 surfaces as a platform-specific red that costs a day.
 
+**The fourth sighting was in shipping code, not in a test, and that is worse.**
+`repo::gh_available()` span `gh --version` with the *inherited* environment,
+while the `gh` invocation it gates would have run under `env_clear()` plus an
+allowlist. Same two sources, same eventual disagreement — except that no test
+observes a product disagreeing with itself, so it does not arrive as a red at
+all. It arrives as a user reporting that `vibe` said `gh` was there and then
+could not run it. The probe now goes through the same constructed environment
+as the operation, and the general form is worth stating: **a capability check
+must observe the environment the capability will actually run in.** A test
+harness measuring the wrong world costs a day of debugging; a product measuring
+the wrong world ships.
+
 **A precondition you did not construct is not a precondition.** Worked example,
 because it is genuinely surprising: *"no git identity configured" is not a
 deterministic state.* When `user.name`/`user.email` are unset, `git` may

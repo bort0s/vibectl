@@ -81,13 +81,39 @@ const IDENTITY: &str = "[user]\n\tname = Test\n\temail = test@example.invalid\n"
 
 /// Run `vibe new --git` with a controlled `HOME`.
 fn new_git(root: &Path, name: &str, home: &Path) -> std::process::Output {
+    new_git_with(root, name, home, &[])
+}
+
+/// The same, with extra flags.
+///
+/// # What is deliberately never tested here
+///
+/// No test in this file runs the path where `gh` **succeeds**. That path
+/// creates a repository on github.com under whoever is logged in, and a test
+/// suite that can do that on a developer's machine or a CI runner is a test
+/// suite that will eventually do it by accident. The `gh` side is covered
+/// where it can be covered without side effects: `gh_argv.rs` proves this
+/// crate's argv is what `gh` accepts, `gh_containment.rs` proves a per-user
+/// config cannot redirect it, and `repo.rs`'s unit tests prove the pre-flight
+/// checks and the failure classification.
+///
+/// The `--private` test below is safe for two independent reasons, not one:
+/// the planted `HOME` contains no `gh` credential, and `vibe` never forwards
+/// `GH_TOKEN`, so `gh` cannot authenticate — and before either matters, the
+/// commit is refused, so the remote step stops before `gh` is invoked at all.
+fn new_git_with(root: &Path, name: &str, home: &Path, extra: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_vibe"))
-        .args(["new", name, "--git", "--path"])
+        .args(["new", name, "--git"])
+        .args(extra)
+        .arg("--path")
         .arg(root)
         // Both, because git resolves the per-user config through `HOME` on unix
         // and `USERPROFILE` on Windows, and `vibe` forwards each.
         .env("HOME", home)
         .env("USERPROFILE", home)
+        // `gh` looks here before `HOME` on unix. Planted for the same reason:
+        // the test states the environment rather than inheriting one.
+        .env("XDG_CONFIG_HOME", home.join("xdg"))
         .output()
         .expect("run vibe")
 }
@@ -111,6 +137,99 @@ fn without_the_flag_no_repository_is_created() {
         !tmp.path().join("plain/.git").exists(),
         "a repository was created without --git"
     );
+}
+
+/// **The remote is a second opt-in, and the CLI refuses to guess.**
+///
+/// `--private`/`--public` without `--git` is refused by argument parsing, so
+/// there is no reading of "create the remote" that does not also say "make a
+/// repository". And the two visibilities conflict, so `vibe` is never asked to
+/// pick.
+#[test]
+fn asking_for_a_remote_without_a_repository_is_refused_before_anything_runs() {
+    let tmp = tempfile::tempdir().unwrap();
+    for flags in [
+        vec!["new", "demo", "--private", "--path"],
+        vec!["new", "demo", "--public", "--path"],
+        vec!["new", "demo", "--git", "--private", "--public", "--path"],
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_vibe"))
+            .args(&flags)
+            .arg(tmp.path())
+            .output()
+            .expect("run vibe");
+        assert!(!out.status.success(), "{flags:?} was accepted");
+        assert!(
+            !tmp.path().join("demo").exists(),
+            "{flags:?} scaffolded before failing"
+        );
+    }
+}
+
+/// **The behaviour ADR-0008 §3 was amended for.** `--git` on its own is a
+/// request for a local repository. On a machine where `gh` is missing it used
+/// to print the finish-the-job advice regardless, which is a limitation nobody
+/// reached; on a machine where `gh` is present, the alternative reading — create
+/// the remote because we can — would publish a repository from a flag whose
+/// help text says "initialise a git repository".
+///
+/// Deterministic on every machine precisely because the answer no longer
+/// depends on whether `gh` is installed.
+#[test]
+fn the_flag_alone_says_nothing_about_remotes_whether_or_not_gh_exists() {
+    if !git_available() {
+        eprintln!("skipping: git is not on PATH");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let home = planted_home(tmp.path(), Some(IDENTITY));
+    let out = new_git(tmp.path(), "demo", &home);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let text = stdout(&out);
+    assert!(text.contains("Committed the scaffold"), "{text}");
+    let lower = text.to_lowercase();
+    for volunteered in ["gh ", "remote", "push"] {
+        assert!(
+            !lower.contains(volunteered),
+            "`--git` volunteered `{volunteered}` for a remote nobody asked \
+             for:\n{text}"
+        );
+    }
+}
+
+/// With nothing committed there is nothing to push, and `gh` is not run at all.
+///
+/// The message is the evidence: if `gh` had been invoked, the report would name
+/// what `gh` said — that it is missing, or that it cannot authenticate — and
+/// those are different sentences from this one.
+#[test]
+fn a_requested_remote_stops_before_gh_when_there_is_no_commit() {
+    if !git_available() {
+        eprintln!("skipping: git is not on PATH");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    // No identity, so the commit is refused deterministically (see
+    // REFUSE_AUTODETECT) and the remote step has nothing to push.
+    let home = planted_home(tmp.path(), None);
+    let out = new_git_with(tmp.path(), "demo", &home, &["--private"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let text = stdout(&out);
+    assert!(text.contains("no commit to push"), "{text}");
+    assert!(text.contains("will not invent one"), "{text}");
+    // The two things it would have said had it run `gh`.
+    assert!(!text.contains("gh was not found"), "{text}");
+    assert!(!text.contains("not authenticated"), "{text}");
 }
 
 #[test]

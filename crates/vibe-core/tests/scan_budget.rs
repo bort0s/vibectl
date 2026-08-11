@@ -74,6 +74,26 @@ impl ProcessRunner for CountingRunner {
             .push(op.argv());
         self.inner.run_git_op(op)
     }
+
+    /// Counted for the same reason `run_git_op` is, and with more force: a scan
+    /// has no business creating a repository on github.com, so an invocation
+    /// reaching here at all would show up as a budget overrun rather than as
+    /// nothing.
+    fn run_gh_op(
+        &self,
+        op: &vibe_core::GhOp,
+    ) -> Result<CommandOutput, vibe_core::detect::DetectError> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        self.argv
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(op.argv());
+        self.inner.run_gh_op(op)
+    }
+
+    fn gh_available(&self) -> bool {
+        self.inner.gh_available()
+    }
 }
 
 fn git_available() -> bool {

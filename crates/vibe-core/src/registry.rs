@@ -185,6 +185,59 @@ impl Registry {
         Ok(WritePlan::new(PlanIntent::New, project_dir, ops))
     }
 
+    /// Generate `CLAUDE.md`, `AGENTS.md` or `README.md` from the manifest.
+    ///
+    /// Refuses rather than overwrites unless the file is ours and unchanged.
+    /// **`force` does not move `Foreign`** — a file with no marker was written
+    /// by someone else, and no flag turns that into ours. That is what makes
+    /// `README.md` safe to have as a target (ADR-0007 §4).
+    ///
+    /// The refusal happens here, at plan time, rather than in `apply`. A plan
+    /// the user is shown by `--dry-run` must not contain an op that `apply`
+    /// would then decline: a dry run that overstates what will happen is the
+    /// one thing it must never do.
+    pub fn plan_render(
+        &self,
+        project_dir: &Path,
+        target: crate::render::RenderTarget,
+        force: bool,
+    ) -> Result<WritePlan, CoreError> {
+        let project_dir = absolutize(project_dir)?;
+        let manifest = ManifestDocument::open(&manifest_path(&project_dir))?.parse()?;
+
+        let path = project_dir.join(target.file_name());
+        let state = crate::render::marker::classify_path(&path);
+        if !state.may_overwrite(force) {
+            return Err(CoreError::RenderRefused { path, state });
+        }
+
+        let body = crate::render::render_body(&manifest, target)?;
+        let contents = crate::render::marker::wrap(&body);
+
+        // An identical file is not a write. Returning an empty plan is what
+        // makes `vibe render` twice in a row report "already up to date"
+        // instead of showing a diff with nothing in it.
+        let op = match std::fs::read_to_string(&path) {
+            Ok(before) if before == contents => None,
+            Ok(before) => Some(FileOp::UpdateFile {
+                path,
+                before,
+                after: contents,
+                reason: crate::manifest::EditReason::Rendered { target },
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Some(FileOp::CreateFile { path, contents })
+            }
+            Err(source) => return Err(CoreError::Io { path, source }),
+        };
+
+        Ok(WritePlan::new(
+            PlanIntent::Render,
+            project_dir,
+            op.map_or_else(Vec::new, |o| vec![o]),
+        ))
+    }
+
     /// Execute a plan. The only method in this crate that writes to disk.
     pub fn apply(&self, plan: &WritePlan, rep: &dyn Reporter) -> Result<ApplyReport, CoreError> {
         plan::apply(plan, rep)

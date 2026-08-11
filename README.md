@@ -11,13 +11,13 @@ agents) can pick any of them back up without archaeology.
 > crates.io yet.
 >
 > Working today: `vibe new`, `vibe scan`, `vibe list`, `vibe show`, `vibe sync`,
-> `vibe archive` / `vibe unarchive`, and `vibe agents`
+> `vibe archive` / `vibe unarchive`, `vibe render`, and `vibe agents`
 > (`update`/`list`/`status`/`add`/`remove`/`sync`), with `--json` on reads and
 > `--dry-run` on writes. Manifests round-trip through `toml_edit`, so your
 > comments and any keys this build does not recognise survive editing.
 >
-> Not built yet: `vibe render` (P4), `gh` integration in `vibe new` (P5), and
-> optional AI enrichment (P6).
+> Not built yet: `gh` integration in `vibe new` (P5) and optional AI enrichment
+> (P6).
 
 ## The idea
 
@@ -120,6 +120,25 @@ installed = ["engineering-code-reviewer"]
 A global cache is kept in your OS config directory to make `vibe list` instant.
 It is **fully regenerable and never authoritative** — delete it and `vibe scan`
 rebuilds it.
+
+## Generated files
+
+`vibe render claude` (or `agents`, or `readme`) writes a file from the manifest.
+Each one carries a marker on its first line holding a hash of the rest:
+
+```markdown
+<!-- vibe:generated v1 hash=b3:1f9a…c4 -->
+```
+
+That marker is the whole ownership model, and it means the file answers "did
+vibe write this, and have you changed it since" on its own — no sidecar record
+to get out of step with it.
+
+Once you edit a generated file, `vibe render` refuses to overwrite it until you
+pass `--force`. And a file `vibe` did **not** generate — a `README.md` you wrote
+yourself — is refused *even with* `--force`. There is no flag that makes `vibe`
+adopt a file it did not write, which is what makes `README.md` safe to have as a
+target at all.
 
 ## Agents
 

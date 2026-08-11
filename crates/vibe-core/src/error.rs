@@ -123,6 +123,24 @@ pub enum CoreError {
     /// unreadable. Carries the note so a caller need not re-derive it.
     #[error("{why}")]
     OwnershipUnknown { why: String },
+
+    /// A template failed to render. A bug in a compiled-in template, not
+    /// something a user's manifest should be able to cause - which is why the
+    /// sparse-manifest tests in `render::engine` exist.
+    #[error("could not render {target}: {why}")]
+    RenderFailed { target: &'static str, why: String },
+
+    /// `render` declined to write over what is already there.
+    ///
+    /// Carries the state rather than prose, so a caller can tell
+    /// "you edited this, pass --force" from "this is not ours and --force will
+    /// not help" - which are the two halves of ADR-0007 §4 and must not read
+    /// the same.
+    #[error("{} is {}", .path.display(), .state.as_str())]
+    RenderRefused {
+        path: PathBuf,
+        state: crate::render::RenderState,
+    },
 }
 
 impl CoreError {
@@ -148,6 +166,8 @@ impl CoreError {
             CoreError::ToolFailed { .. } => "VIBE_E_TOOL_FAILED",
             CoreError::GitUnavailable { .. } => "VIBE_E_GIT_UNAVAILABLE",
             CoreError::OwnershipUnknown { .. } => "VIBE_E_OWNERSHIP_UNKNOWN",
+            CoreError::RenderFailed { .. } => "VIBE_E_RENDER_FAILED",
+            CoreError::RenderRefused { .. } => "VIBE_E_RENDER_REFUSED",
         }
     }
 
@@ -167,10 +187,12 @@ impl CoreError {
             | CoreError::PathInsideGitDir { path }
             | CoreError::StoreNotOurs { path, .. }
             | CoreError::StoreNotARepository { path }
+            | CoreError::RenderRefused { path, .. }
             | CoreError::Io { path, .. } => Some(path),
             CoreError::GitUrlRejected { .. }
             | CoreError::ToolFailed { .. }
             | CoreError::GitUnavailable { .. }
+            | CoreError::RenderFailed { .. }
             | CoreError::OwnershipUnknown { .. } => None,
         }
     }

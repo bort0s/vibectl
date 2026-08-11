@@ -43,6 +43,7 @@ pub mod model;
 pub mod ops;
 pub mod plan;
 pub mod registry;
+pub mod render;
 pub mod report;
 pub mod scan;
 pub mod url;
@@ -60,6 +61,7 @@ pub use model::{Confidence, Detected, Manifest, Status, UnknownReason, Visibilit
 pub use ops::SyncNotes;
 pub use plan::{ApplyOutcome, ApplyReport, FileOp, PlanIntent, WritePlan};
 pub use registry::{NewRequest, Registry};
+pub use render::{RenderState, RenderTarget};
 pub use report::{CollectingReporter, Diagnostic, Event, NullReporter, Reporter, Severity};
 pub use scan::{ScanOutcome, ScanReport, ScanRequest, ScannedProject};
 pub use url::GitUrl;

@@ -32,9 +32,52 @@ pub enum Command {
     Archive(ArchiveArgs),
     /// Put an archived project back
     Unarchive(ArchiveArgs),
+    /// Generate CLAUDE.md, AGENTS.md or README.md from the manifest
+    Render(RenderArgs),
     /// Manage the agents a project declares
     #[command(subcommand)]
     Agents(AgentsCommand),
+}
+
+#[derive(Debug, Args)]
+pub struct RenderArgs {
+    /// What to generate: claude, agents, or readme
+    #[arg(value_parser = parse_render_target)]
+    pub target: vibe_core::RenderTarget,
+
+    /// Project directory
+    #[arg(long, default_value = ".")]
+    pub path: PathBuf,
+
+    /// Overwrite a generated file you have since edited. The edits are lost.
+    ///
+    /// This will NOT overwrite a file vibe did not generate - a hand-written
+    /// README stays yours whatever flag you pass (ADR-0007 §4).
+    #[arg(long)]
+    pub force: bool,
+
+    #[command(flatten)]
+    pub write: WriteFlags,
+
+    #[command(flatten)]
+    pub format: FormatFlags,
+}
+
+/// Reject anything outside the closed target set, and say what is valid.
+///
+/// The set is closed so a target name can never become a path to write to;
+/// listing the alternatives is `vibectl`'s job, since core does not write prose.
+fn parse_render_target(s: &str) -> Result<vibe_core::RenderTarget, String> {
+    s.parse().map_err(|()| {
+        format!(
+            "unknown render target `{s}` - expected one of: {}",
+            vibe_core::RenderTarget::ALL
+                .iter()
+                .map(|t| t.file_name().to_ascii_lowercase().replace(".md", ""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })
 }
 
 /// The six agent subcommands.

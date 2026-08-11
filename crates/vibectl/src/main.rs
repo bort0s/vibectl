@@ -47,6 +47,7 @@ fn run(cli: &Cli) -> Result<Exit, vibe_core::CoreError> {
         Command::Sync(args) => cmd::sync(args),
         Command::Archive(args) => cmd::archive(args, true),
         Command::Unarchive(args) => cmd::archive(args, false),
+        Command::Render(args) => cmd::render(args),
         Command::Agents(sub) => match sub {
             AgentsCommand::Update(args) => agents::update(args),
             AgentsCommand::List(args) => agents::list(args),

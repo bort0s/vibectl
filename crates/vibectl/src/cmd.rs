@@ -7,7 +7,7 @@ use std::io::Write;
 
 use vibe_core::{Config, CoreError, Query, Registry, ScanRequest};
 
-use crate::cli::{ArchiveArgs, ListArgs, ShowArgs, SyncArgs};
+use crate::cli::{ArchiveArgs, ListArgs, RenderArgs, ShowArgs, SyncArgs};
 use crate::exit::Exit;
 use crate::{output, reporter};
 
@@ -139,6 +139,54 @@ pub fn archive(args: &ArchiveArgs, archived: bool) -> Result<Exit, CoreError> {
     let report = registry.apply(&plan, &rep)?;
     if !args.format.json {
         let _ = writeln!(stdout, "Project {verb}.");
+        let _ = output::write_apply_human(&mut stdout, &report);
+    }
+    Ok(Exit::Success)
+}
+
+/// Generate one file from the manifest.
+///
+/// The refusal happens in core, at plan time, so a `--dry-run` never shows an
+/// op that `apply` would decline. Everything this adds is the sentence
+/// explaining which of the two refusals happened, because "you edited this,
+/// pass --force" and "this is not ours and --force will not help" must not read
+/// the same.
+pub fn render(args: &RenderArgs) -> Result<Exit, CoreError> {
+    let registry = Registry::open(Config::discover());
+    let plan = registry.plan_render(&args.path, args.target, args.force)?;
+
+    let mut stdout = std::io::stdout();
+    let mut stderr = std::io::stderr();
+
+    if args.format.json {
+        let json = serde_json::to_string_pretty(&plan).expect("plain data serialises");
+        let _ = writeln!(stdout, "{json}");
+    } else if plan.is_empty() {
+        // Byte-identical to what is already there. Not an error, and not a
+        // write - saying so beats showing a diff with nothing in it.
+        let _ = writeln!(stdout, "{} is already up to date.", args.target);
+        return Ok(Exit::Success);
+    } else {
+        let _ = output::write_plan_human(&mut stdout, &plan);
+    }
+
+    if args.write.dry_run {
+        if !args.format.json {
+            let _ = writeln!(
+                stderr,
+                "
+dry run - nothing was written"
+            );
+        }
+        return Ok(Exit::Success);
+    }
+    if plan.is_empty() {
+        return Ok(Exit::Success);
+    }
+
+    let rep = reporter::TermReporter::new(args.format.json);
+    let report = registry.apply(&plan, &rep)?;
+    if !args.format.json {
         let _ = output::write_apply_human(&mut stdout, &report);
     }
     Ok(Exit::Success)

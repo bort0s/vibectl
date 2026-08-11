@@ -14,6 +14,7 @@ keywords.workspace = true
 blake3 = { workspace = true }
 directories = { workspace = true }
 ignore = { workspace = true }
+minijinja = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

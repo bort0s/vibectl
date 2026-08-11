@@ -66,6 +66,37 @@ pub enum Event {
     Diagnostic(Diagnostic),
 }
 
+/// How prominently a [`Diagnostic`] should be reported.
+///
+/// **Two variants, one of them live. Recorded 2026-08-11 rather than acted
+/// on.** The state of the apparatus, measured:
+///
+/// - `Severity::Note` is constructed **nowhere**. The only construction in the
+///   workspace is [`Diagnostic::warn`], which is `Severity::Warn`.
+/// - There is exactly one diagnostic in the product — `W_SCHEMA_MINOR_NEWER`,
+///   emitted from `scan.rs`.
+/// - Exactly one consumer branches on it: `vibectl`'s `diagnostic_line`. No
+///   exit code, no summary count, and no `--json` filter compares a variant.
+///
+/// So the field currently discriminates nothing: `Diagnostic::warn` already
+/// encodes the only rank in use.
+///
+/// **Deliberately not deleted, and the reasoning is worth keeping straight.**
+/// "One live variant" is not the project's threshold for removal — the standard
+/// is *do not build machinery before its third call site*, which is about work
+/// done ahead of need, and a variant that already exists costs nothing to keep.
+/// Deleting it would be a public-API deletion on an enum whose
+/// `#[non_exhaustive]` exists precisely to let it grow.
+///
+/// **The honest follow-up points the other way:** a one-variant `Severity` does
+/// not earn a *field* on `Diagnostic`, so the consistent move would be dropping
+/// the field rather than keeping a degenerate enum — and the field earns itself
+/// the moment a second diagnostic exists.
+///
+/// **Revisit trigger: the second diagnostic.** If it emits `Warn`, `Note` is
+/// still dead and this question returns with more evidence than it has now. If
+/// it emits `Note`, a deletion and a re-introduction on public API were both
+/// avoided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]

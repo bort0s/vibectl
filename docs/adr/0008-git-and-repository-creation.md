@@ -373,9 +373,11 @@ first.
 > [31477784150](https://github.com/bort0s/vibectl/actions/runs/31477784150) at
 > `0c4720e`, green on `ubuntu-latest`, `macos-latest` and `windows-latest`. The
 > **`Verify gh containment and argv` step succeeded on all three**, and under
-> `VIBE_REQUIRE_GH=1` that is not merely "the tests passed": a missing `gh`
-> panics, so the step's success is itself the evidence `gh` was present and both
-> control files executed rather than returning early.
+> `VIBE_REQUIRE_GH=1` that is more than "the tests passed": a missing `gh`
+> panics, so the step's success is evidence that `gh` was present for every
+> guard call that executed. **How much more is bounded below, by experiment
+> rather than by argument** — the first draft of this paragraph claimed the step
+> also proved both control files executed, and that claim was false.
 >
 > Established by that run, in the runners' own `gh`: `gh repo create` accepts
 > the argv `GhOp::argv` constructs, rejects `--source-tree=.` — so the control
@@ -383,14 +385,105 @@ first.
 > still cannot redirect the command (§6, re-established on this revision rather
 > than inherited from `4de79c0`).
 >
-> **What that run does not cover, stated so the discharge is not read wider than
-> it is:** the two commits `b21b6b7` and `0c4720e` were pushed together, so
-> Actions raised one run, for the tip. `b21b6b7` was not verified individually
-> the way the pre-`4de79c0` commits were. The difference is inert here —
-> `0c4720e` is documentation only and the code tree is byte-identical at both —
-> but "CI verified each commit individually" is not true of this pair, and the
-> distinction ADR-0002 §7 draws between per-commit and cumulative verification
-> is worth keeping accurate.
+> Run [31478052772](https://github.com/bort0s/vibectl/actions/runs/31478052772)
+> at `03cb963` is green too, and it is worth being exact about what that adds:
+> **nothing to coverage.** It ran the same code tree — `03cb963` changes only
+> ADR text — on fresh runner instances. What it establishes is *determinism*,
+> which §7 requires of a control separately from correctness: the same input on
+> different machines produced the same answer, so neither control is sensitive
+> to runner state the way the `ext::` control's `touch` race was. A second green
+> on an unchanged tree is anti-flake evidence, and reading it as a second
+> confirmation of the `gh` behaviour would be counting one observation twice.
+>
+> **What that run covers, in the project's own two-facts form.** `b21b6b7` and
+> `0c4720e` were pushed together, so Actions raised one run, for the tip. The
+> *project property* — **this code tree passes CI on three platforms** — is
+> established for `b21b6b7`, because the code tree at `b21b6b7` and the code
+> tree the run tested are the same bytes. The *per-machine fact* — a run
+> labelled `b21b6b7` — does not exist and will not. Those are different claims
+> and only the second is missing.
+>
+> The identity is proved rather than asserted, and here is the invocation so a
+> later reader can re-run it instead of trusting this sentence:
+>
+> ```
+> $ git diff --quiet b21b6b7 0c4720e -- crates/ Cargo.toml Cargo.lock .github/
+> $ echo $?
+> 0
+> $ git diff --name-only b21b6b7 0c4720e
+> docs/adr/0005-core-api-amendments-for-desktop-consumption.md
+> docs/adr/0008-git-and-repository-creation.md
+> ```
+>
+> Exit `0` from `--quiet` is "no differences" across every path that can change
+> what CI does — sources, manifests, lockfile, and the workflow itself. The
+> second command shows what *did* change: two ADR files, which no job reads.
+>
+> This is the same shape as the uncompiled-commit discharge above, which
+> distinguished "CI checked every commit" from "a local run checked the result
+> of all of them" and kept both. **Neither alone is the whole claim**, and
+> collapsing them in either direction — "unverified" when the bytes are covered,
+> or "verified per commit" when no such run exists — records something that is
+> not true.
+
+#### What the green step proves, established by sabotaging it
+
+The claim above was narrowed after being tested. ADR-0002 §7 says a control's
+value must be demonstrated by breaking it, and **that applies to the mechanism
+that reports the control just as much as to the control** — a proof-carrying
+exit status is itself a guard, and an unsabotaged guard is a claim.
+
+The original claim was that a green step proves `gh` was present *and* that both
+control files executed rather than returning early. The panic establishes the
+first. Nothing established the second: a panic proves one skip point was
+reached, not two, and a control file whose tests return before calling the guard
+never reaches it at all.
+
+Two sabotages, one control file each, same CI input, run against the baseline of
+`31477784150` (both files live, step green):
+
+| Branch | Sabotage | Run | `Run tests` | `Verify gh …` step |
+| --- | --- | --- | --- | --- |
+| `exp/skip-gh-argv` | `gh_argv`'s `gh` test returns before `gh_available()` | [31480318558](https://github.com/bort0s/vibectl/actions/runs/31480318558) | success ×3 | **success ×3** |
+| `exp/skip-gh-containment` | all three `gh_containment` tests return before `gh_available()` | [31480321845](https://github.com/bort0s/vibectl/actions/runs/31480321845) | success ×3 | **success ×3** |
+
+**Both sabotages left the step green on every runner.** `Run tests` staying
+green in both is what makes the result conclusive rather than a compile failure
+wearing the same colour — had the tree failed to build, both steps would have
+gone red and the experiment would have proved nothing.
+
+So the claim is now this, and no more:
+
+- **What the step proves.** Both control *targets* exist, compile, and pass —
+  `cargo test --test gh_containment --test gh_argv` exits `101` if a named
+  target is missing, so deleting or renaming a control file turns the step red.
+  And every `gh_available()` call that executed found `gh` on `PATH`, because a
+  missing one panics.
+- **What it does not prove.** That any assertion inside those files ran. Zero
+  guard calls and one hundred are the same green.
+
+The distinction generalises, and it is the useful part: **`VIBE_REQUIRE_GH`
+closes an environment-shaped hole, not a code-shaped one.** It converts "this
+machine has no `gh`, so the control skipped" — the `ext::`-era failure, where a
+runner's configuration silently voided the check — into a failure. It cannot
+convert "this control no longer checks anything" into one, because that hole is
+in the test rather than around it, and an exit status has nothing to observe.
+
+**Closing the second hole needs a positive assertion that the controls ran, and
+this is designed and not built.** The obvious lever does not work: `cargo test`
+exits `0` when a filter matches nothing (`-- --exact no_such_test` → `0`,
+verified on cargo 1.97.1), so naming each control test in the step would not
+fail when a name stops existing. A mechanism would have to make execution
+*observable* — each control recording that it ran, and a final check failing
+unless every expected one did. That is a real design with real failure modes
+(cross-process state, ordering, its own skip paths), and it is not worth
+building for two files that a reviewer can read. **It becomes worth building
+when the number of controls exceeds what a reviewer checks by eye**, which is
+the trigger to revisit, and until then the honest position is the narrowed claim
+above rather than the mechanism nobody verified.
+
+The two sabotage branches were deleted after the runs. They exist as this table,
+not as code — a one-time demonstration in §7's sense, not a permanent job.
 
 #### The `gh`-succeeds path is UNTESTED, deliberately and permanently
 

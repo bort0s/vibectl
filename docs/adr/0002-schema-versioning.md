@@ -490,24 +490,40 @@ turned out to need a credential nobody had.
 
 The `gh` containment control does better: CI sets `VIBE_REQUIRE_GH=1`, under
 which a missing `gh` **panics** instead of skipping. The step passing is
-therefore itself the proof that `gh` was present and the control executed — the
-reached-guard rule built into the mechanism rather than enforced by discipline.
-**Prefer this shape for every CI-verified control.**
+therefore itself the proof that `gh` was present wherever the guard was
+consulted — the reached-guard rule built into the mechanism rather than enforced
+by discipline. **Prefer this shape for every CI-verified control.**
 
-**The mechanism paid for itself on 2026-08-11, and the reason is worth stating
-precisely.** `gh_argv.rs` was discharged (ADR-0008 §9) by reading one step's
-conclusion from the public Actions API — no credential, no log. Job and step
-*conclusions* turn out to be public for a public repository even though logs are
-not, which is a channel this section assumed was closed.
+**And sabotage the reporting mechanism too, because it is also a guard.** This
+paragraph first claimed the green step proved the controls had *executed*. That
+was tested on 2026-08-11 and was false: forcing each control file in turn to
+return before its guard call left the step green on all three runners
+(ADR-0008 §9 has the runs). A panic proves one skip point was reached, not
+every one.
 
-That is not the lesson, and reading it as one would be the wrong repair. **A
-conclusion cannot distinguish a control that ran from one that skipped** — both
-are green, which is the failure this whole rule exists against, and it would
-still be true if every log on earth were world-readable. What made the public
-channel sufficient is that `VIBE_REQUIRE_GH` moved the information *out* of the
-log and into the exit status. A control designed so its **result** carries the
-proof does not care which channels are open; a control that needs its output
-read is hostage to whichever channel happens to be available that week.
+The corrected statement is worth carrying because the shape recurs:
+**`VIBE_REQUIRE_GH` closes an environment-shaped hole, not a code-shaped one.**
+It converts "this machine lacks the tool, so the control skipped" — the
+`ext::`-era failure, a runner's configuration silently voiding a check — into a
+failure. It cannot convert "this control no longer checks anything" into one,
+because that hole is inside the test rather than around it and an exit status
+has nothing to observe. A proof-carrying result is still the right design; it
+just proves a narrower thing than it is tempting to write down, and the way to
+find out which is to break it.
+
+Why *that* shape and not a better channel, confirmed on 2026-08-11: ADR-0008 §9
+was discharged by reading one step's conclusion from the public Actions API,
+with no credential and no log. Job and step *conclusions* turn out to be public
+for a public repository even though logs are not — a channel this section
+assumed was closed. That discovery is not the lesson and treating it as one
+would be the wrong repair, because **a conclusion cannot distinguish a control
+that ran from one that skipped**: both are green, which is the failure this rule
+exists against, and it would remain true if every log on earth were
+world-readable. What made the public channel sufficient is that
+`VIBE_REQUIRE_GH` had already moved the information *out* of the log and into
+the exit status. A control whose **result** carries the proof does not care
+which channels are open; one that needs its output read is hostage to whichever
+channel happens to be available that week.
 
 Where output genuinely must escape, `$GITHUB_STEP_SUMMARY` is readable without
 authentication. **A credential that reads CI logs is not the answer**: this

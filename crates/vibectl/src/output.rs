@@ -436,48 +436,83 @@ pub fn write_sync_notes(out: &mut impl Write, notes: &vibe_core::SyncNotes) -> s
     Ok(())
 }
 
+/// The facts [`write_repo_message`] renders from.
+///
+/// A plain local struct rather than [`vibe_core::RepoReport`] directly, and the
+/// reason is a design constraint working correctly rather than an inconvenience:
+/// `RepoReport` is `#[non_exhaustive]` (ADR-0005 §3) because consumers *read*
+/// reports, so a consumer crate cannot build one in a struct literal — including
+/// in its own tests.
+///
+/// Splitting the decision out means the message's branches are testable without
+/// weakening that, and without core growing a constructor whose only caller is a
+/// test. [`RepoMessage::from_report`] is the one place the two shapes meet.
+struct RepoMessage<'a> {
+    initialised: bool,
+    already_a_repository: bool,
+    committed: bool,
+    identity_missing: bool,
+    branch: Option<&'a str>,
+    gh_available: bool,
+    project_name: &'a str,
+}
+
+impl<'a> RepoMessage<'a> {
+    fn from_report(report: &'a vibe_core::RepoReport, project_name: &'a str) -> Self {
+        Self {
+            initialised: report.initialised,
+            already_a_repository: report.already_a_repository,
+            committed: report.committed,
+            identity_missing: report.commit_blocked
+                == Some(vibe_core::repo::CommitBlocked::NoAuthorIdentity),
+            branch: report.branch.as_deref(),
+            gh_available: report.gh_available,
+            project_name,
+        }
+    }
+}
+
 /// What `vibe new --git` did, and precisely what is left to do.
 ///
 /// **This message is the entire quality of the `gh`-absent path** (ADR-0008
 /// §3). The tool creates no remote and pushes nothing there, so a vague report
 /// makes it the worst path in the product and an exact one makes it fine.
-///
-/// Two rules it obeys:
-///
-/// - *"`gh` is not installed"* is a fact about **this machine**, and is worded
-///   so it cannot be read as "this project cannot have a remote" — the same
-///   distinction `SyncNotes::not_attempted` draws.
-/// - The branch is whatever `git` reported. `git init` honours the user's
-///   `init.defaultBranch`, so printing `main` when we did not read it would be
-///   a plausible-looking guess in the one output whose whole purpose is being
-///   correct enough to paste.
 pub fn write_repo_human(
     out: &mut impl Write,
     report: &vibe_core::RepoReport,
     project_name: &str,
 ) -> std::io::Result<()> {
-    if report.already_a_repository {
+    write_repo_message(out, &RepoMessage::from_report(report, project_name))
+}
+
+/// Two rules this obeys:
+///
+/// - *"`gh` is not installed"* is a fact about **this machine**, worded so it
+///   cannot be read as "this project cannot have a remote" — the same
+///   distinction `SyncNotes::not_attempted` draws.
+/// - The branch is whatever `git` reported. `git init` honours the user's
+///   `init.defaultBranch`, so printing `main` when we did not read one would be
+///   a plausible-looking guess in the one output whose whole purpose is being
+///   correct enough to paste.
+fn write_repo_message(out: &mut impl Write, m: &RepoMessage<'_>) -> std::io::Result<()> {
+    if m.already_a_repository {
         writeln!(out, "Already a git repository - left alone.")?;
-    } else if report.initialised {
-        match &report.branch {
+    } else if m.initialised {
+        match m.branch {
             Some(b) => writeln!(out, "Initialised a git repository on branch {b}.")?,
             // Not "on branch main". We did not read one, so we do not name one.
             None => writeln!(out, "Initialised a git repository.")?,
         }
     }
-    if report.committed {
+    if m.committed {
         writeln!(out, "Committed the scaffold.")?;
-    }
-
-    if !report.needs_manual_finish() {
-        return Ok(());
     }
 
     // A machine with no `user.email` is common on a fresh install, and it is
     // not ours to fix: choosing a name and address on the user's behalf would
     // stamp an invented person into their history. So it is reported, with the
     // commands that fix it, and the run still succeeds.
-    if report.commit_blocked == Some(vibe_core::repo::CommitBlocked::NoAuthorIdentity) {
+    if m.identity_missing {
         writeln!(
             out,
             "\nThe scaffold was staged but not committed: git has no author \
@@ -489,7 +524,7 @@ pub fn write_repo_human(
         writeln!(out, "  git commit -m \"Initial commit\"")?;
     }
 
-    if report.gh_available {
+    if m.gh_available {
         return Ok(());
     }
 
@@ -502,7 +537,8 @@ pub fn write_repo_human(
     writeln!(out, "To finish:")?;
     writeln!(
         out,
-        "  gh repo create <owner>/{project_name} --source=. --push"
+        "  gh repo create <owner>/{} --source=. --push",
+        m.project_name
     )?;
     writeln!(
         out,
@@ -510,11 +546,119 @@ pub fn write_repo_human(
     )?;
     writeln!(
         out,
-        "  git remote add origin git@github.com:<owner>/{project_name}.git"
+        "  git remote add origin git@github.com:<owner>/{}.git",
+        m.project_name
     )?;
-    match &report.branch {
+    match m.branch {
         Some(b) => writeln!(out, "  git push -u origin {b}")?,
         None => writeln!(out, "  git push -u origin <branch>")?,
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod repo_message_tests {
+    use super::RepoMessage;
+
+    /// Unit tests rather than CLI tests, on purpose. The `gh`-absent branch can
+    /// only be exercised end-to-end on a machine without `gh`, and every CI
+    /// runner has one — so a CLI test of it skips exactly where it most needs to
+    /// run, which is a skip masquerading as a pass (ADR-0002 §7). Driving the
+    /// renderer directly makes both branches deterministic everywhere.
+    fn render(m: &RepoMessage<'_>) -> String {
+        let mut buf = Vec::new();
+        super::write_repo_message(&mut buf, m).expect("writes");
+        String::from_utf8(buf).expect("utf8")
+    }
+
+    fn base() -> RepoMessage<'static> {
+        RepoMessage {
+            initialised: true,
+            already_a_repository: false,
+            committed: true,
+            identity_missing: false,
+            branch: Some("trunk"),
+            gh_available: true,
+            project_name: "demo",
+        }
+    }
+
+    #[test]
+    fn with_gh_present_and_a_commit_there_is_nothing_left_to_say() {
+        let text = render(&base());
+        assert!(text.contains("branch trunk"), "{text}");
+        assert!(text.contains("Committed the scaffold"), "{text}");
+        // The paired half of every assertion below: none of the finish-the-job
+        // advice appears when there is nothing to finish.
+        assert!(!text.contains("gh was not found"), "{text}");
+        assert!(!text.contains("will not invent one"), "{text}");
+    }
+
+    #[test]
+    fn without_gh_it_names_the_machine_not_the_project() {
+        let text = render(&RepoMessage {
+            gh_available: false,
+            ..base()
+        });
+        assert!(text.contains("gh was not found on this machine"), "{text}");
+        assert!(text.contains("gh repo create <owner>/demo"), "{text}");
+        assert!(text.contains("git push -u origin trunk"), "{text}");
+
+        // The distinction the whole path rests on: a fact about the machine's
+        // tooling, never a claim that the project cannot have a remote — the
+        // same substitution `NotAttempted` versus `NoEvidence` prevents.
+        let lower = text.to_lowercase();
+        for claim in ["cannot have a remote", "has no remote", "project has no"] {
+            assert!(!lower.contains(claim), "{claim}: {text}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_branch_is_never_rendered_as_main() {
+        let text = render(&RepoMessage {
+            branch: None,
+            gh_available: false,
+            ..base()
+        });
+        assert!(
+            !text.contains("origin main"),
+            "a branch we did not read was printed as `main`, which is a \
+             plausible-looking guess in the one output whose purpose is being \
+             correct enough to paste:\n{text}"
+        );
+        assert!(text.contains("git push -u origin <branch>"), "{text}");
+        assert!(!text.contains("on branch"), "{text}");
+    }
+
+    #[test]
+    fn a_missing_identity_is_advice_and_a_clean_run_is_silence() {
+        let missing = render(&RepoMessage {
+            committed: false,
+            identity_missing: true,
+            ..base()
+        });
+        assert!(missing.contains("will not invent one"), "{missing}");
+        assert!(missing.contains("user.email"), "{missing}");
+
+        // Paired: nothing-to-commit is a no-op and must produce no advice at
+        // all, or a second `vibe new --git` nags about a problem nobody has.
+        let quiet = render(&RepoMessage {
+            committed: false,
+            identity_missing: false,
+            ..base()
+        });
+        assert!(!quiet.contains("will not invent one"), "{quiet}");
+        assert!(!quiet.contains("user.email"), "{quiet}");
+    }
+
+    #[test]
+    fn an_existing_repository_is_reported_as_left_alone() {
+        let text = render(&RepoMessage {
+            initialised: false,
+            already_a_repository: true,
+            ..base()
+        });
+        assert!(text.contains("left alone"), "{text}");
+        assert!(!text.contains("Initialised"), "{text}");
+    }
 }

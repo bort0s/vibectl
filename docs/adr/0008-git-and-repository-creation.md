@@ -592,11 +592,12 @@ The obvious lever does not work in the *forward* direction: `cargo test` exits
 cargo 1.97.1), so naming each control in the verify step would not fail when a
 name stops existing.
 
-##### Designed and not built: hazard injection at the input layer
+##### Two hazard-injection designs: one rejected, one struck, and what replaced them
 
 Recorded in full because the shape that is *wrong* here is instructive, and
-because the version that is merely expensive should not be re-derived from
-scratch.
+because neither should be re-derived from scratch — the first was rejected on a
+containment argument, the second was struck by a measurement after the premise
+it rested on was withdrawn.
 
 **The rejected shape: a build-configuration flag.** Inject the hazard into the
 library behind `--cfg vibe_hazard_injection`, and have a dedicated job require
@@ -620,42 +621,80 @@ the subprocess boundary has no such redirect and then introduce one *inside the
 library*, reachable by exactly the same kind of ambient file. **The flag is
 rejected on that ground, not on cost.**
 
-**The variant that keeps the value: inject the hazard as the control's own
-input.** `VIBE_INJECT_HAZARD=1` makes a control build its argv, or its
-environment, from the hazardous variant instead of the real one — `gh_argv`
-using `--source-tree=.`, say — with its assertions unchanged, so it must fail. A
-dedicated job runs the controls with the variable set and **requires a non-zero
-exit**. An inert control stays green under injection and is caught. Nothing
-enters the library, nothing reaches a shipped artifact, no `cfg` exists to be
-set by anyone downstream, and the worst failure mode is a broken test.
+**The variant that was designed here — `VIBE_INJECT_HAZARD=1`, flipping a
+control's own input so it must fail — is struck.** It was scoped under the
+premise that mutation testing could not express removing a guard clause. That
+premise was withdrawn (ADR-0002 §7), and the design was not revisited at the
+time. It has now been measured, and it is subsumed.
 
-Four requirements, three of them learned from the way this section's own claims
-failed:
+**The measurement.** `cargo mutants --package vibe-core --file
+crates/vibe-core/src/gh.rs -- --test gh_argv` (27.1.0), which mutates the module
+`gh_argv` exercises and runs *only that control*:
 
-1. **The injected job and the ordinary `Test` job must be required as a pair on
-   the same commit, not as independent checks.** A requires-red job has three
+```
+13 mutants tested in 3m: 9 missed, 3 caught, 1 unviable
+```
+
+The three caught are exactly the `GhOp::argv` body replacements — `vec![]`,
+`vec![String::new()]`, `vec!["xyzzy".into()]` — which is the same target
+`VIBE_INJECT_HAZARD` was designed to hit. **A control scoped this way going red
+proves its assertions executed**, for the same reason injection would: a skipped
+test cannot fail. So the injected job buys nothing the tool does not already
+give, while costing an injection point per control, an env var, and a second
+place to keep in step.
+
+Three things the measurement establishes that argument alone did not:
+
+- **Scope is what carries the proof, not mutation.** A *whole-suite* mutants run
+  proves only that **some** test caught each mutant — `gh.rs`'s own unit tests
+  catch all three `argv` mutants, so an inert `gh_argv` would change nothing
+  about a whole-suite result. Only a run scoped to one test target says anything
+  about that target. Any use of this as an execution proof must be per-control.
+- **A scoped run's MISSED count carries no information.** Nine of thirteen are
+  missed here, and none is a defect: `flag`, `pair`, `needs_network`,
+  `needs_credential` and `as_str` are simply not things `gh_argv` asserts about
+  — `gh.rs`'s unit tests cover them. What the scoped run reports as MISSED is a
+  function of the scope you handed it, which is ADR-0002 §7's instrument rule in
+  its most literal form: **only the caught count means anything at this scope**,
+  and a reader who sees "9 missed" and files bugs has misread the instrument.
+- **`gh`'s presence does not change the number.** `gh_argv` reaches library code
+  only through `probe_argv()` → `GhOp::argv()`; it names `--source=.` as a
+  literal rather than through `RepoVisibility::flag()`, and never calls `pair`,
+  `cwd` or the `needs_*` predicates. The gh-present test consumes the same
+  `probe_argv()`, so 3/13 holds on a runner with `gh` too. This was measured on
+  a machine without `gh`, and that is the reason the result transfers rather
+  than a caveat on it.
+
+**What is left uncovered, named precisely so nobody re-derives the struck
+design.** `gh_containment.rs` imports only `std`: it asserts on `gh`'s
+behaviour, not on this library's, so **no mutant of this codebase can ever prove
+that control executed**. Input injection cannot reach it either, and that is why
+the struck design was not merely redundant but insufficient — the hazard it
+would have injected is not in our input, it is in `gh`'s response. The only
+shape that could close it is substituting a deliberately hostile `gh` on `PATH`
+— one that *does* honour the alias — and requiring the control to go red. That
+is a fixture, not a flag, and it is named here and not designed.
+
+The requirements worked out for the struck design are kept, because they apply
+to **any** requires-red mechanism including the mutants one:
+
+1. **A requires-red job and the ordinary `Test` job must be required as a pair
+   on the same commit, not as independent checks.** A requires-red job has three
    distinct false-pass modes and the pairing closes all three at once: a
    compile error is red (reads as success), a **missing target is red** —
    `cargo test --test <name>` exits `101`, which a requires-red job scores as a
-   pass — and an already-failing test is red for a reason that has nothing to
-   do with injection. If the same tree is green uninjected, none of the three
-   can explain red under injection. This is the same discriminator the sabotage
+   pass — and an already-failing test is red for a reason unrelated to the
+   experiment. If the same tree is green in the ordinary job, none of the three
+   can explain red in the other. This is the discriminator the sabotage
    experiment above relied on when `Run tests` stayed green.
-2. **One `--exact` invocation per control, not one run for all of them.** A
-   single injected run going red proves *some* assertion fired, not that each
-   control's did — the original hole with an extra job in front of it. Worse, a
-   hazard that flips shared setup rather than one control's own input would take
-   the whole file red while proving nothing about any individual assertion. Each
-   control gets its own invocation, and the injection must be reachable only
-   through that control's own input path.
+2. **One invocation per control.** A single red run proves *some* assertion
+   fired, not that each control's did — the original hole with an extra job in
+   front of it.
 3. **`--exact` is fail-safe in this direction, which is the useful inversion of
    the defect measured above.** A filter matching nothing exits `0`; a job
    requiring non-zero therefore *fails* when a control is renamed or deleted.
    The property that made enumeration useless in the verify step makes it
    load-bearing here.
-4. **Every control needs its injection point or the job silently covers less** —
-   the same drift this section documents, now with two places to keep in step.
-   That cost is real and is the reason this is not built for two files.
 
 **The revisit trigger has to be observable, and the obvious one is not.** "When
 the controls outgrow what a reviewer checks by eye" cannot fire: the reviewer
@@ -701,12 +740,11 @@ local sabotage recorded in the table at the top of this section — a human ran
 it, observed red, and wrote down the result. That is worth more than nothing and
 is less than CI. If those controls go inert tomorrow, no job notices.
 
-This is a gap in the argument, recorded as one. It is the gap the injected job
-above would close for the two `gh` controls, and the gap that a mutation-testing
-pass would close more broadly, since removing a guard's body and requiring the
-suite to go red is the same experiment generalised — and it reaches the
-library-internal guards that input injection cannot, because there the hazard
-*is* the guard's absence.
+This is a gap in the argument, recorded as one, and there is exactly one
+mechanism that closes it: a mutation pass, which is this project's hand sabotage
+generalised — remove the guard, require red. It reaches library-internal guards
+because there the hazard *is* the guard's absence, which is the case no
+input-level injection can construct.
 
 That last claim is measured rather than assumed. `cargo mutants --list`
 (27.1.0) over the five containment modules enumerates **111 candidate mutants**,

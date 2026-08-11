@@ -31,13 +31,52 @@ fn git_available() -> bool {
 fn planted_home(root: &Path, gitconfig: Option<&str>) -> PathBuf {
     let home = root.join("home");
     std::fs::create_dir_all(&home).expect("mkdir home");
-    if let Some(text) = gitconfig {
-        std::fs::write(home.join(".gitconfig"), text).expect("write gitconfig");
-    }
+    // QUIET_MAINTENANCE unconditionally, including for the no-identity home:
+    // the commit is refused there, but `git init` and `git add` still run, and
+    // the rule is about the fixture rather than about whether this particular
+    // run reaches the commit.
+    //
+    // With no identity requested, REFUSE_AUTODETECT is added too - see its
+    // docs for why an absent identity is not by itself a deterministic state.
+    let text = match gitconfig {
+        Some(extra) => format!("{QUIET_MAINTENANCE}{extra}"),
+        None => format!("{QUIET_MAINTENANCE}{REFUSE_AUTODETECT}"),
+    };
+    std::fs::write(home.join(".gitconfig"), text).expect("write gitconfig");
     home
 }
 
-const WITH_IDENTITY: &str = "[user]\n\tname = Test\n\temail = test@example.invalid\n";
+/// Settings every planted home carries, whatever else it configures.
+///
+/// **ADR-0002 §7: a fixture must not leave anything running.** `git commit`
+/// spawns a *detached* `git maintenance run --auto`, which outlives the command
+/// that started it, takes a lock under `.git/`, and releases it whenever it
+/// finishes. That is precisely the race `c8845a0` root-caused after it produced
+/// an intermittent macOS red that named `vibe scan` and was nothing to do with
+/// it.
+///
+/// The existing scan fixtures set these for that reason. This one commits too,
+/// so it needs them too — and it is planted in the home `vibe`'s own `git` reads,
+/// because `env_clear()` means a repo-local `git config` set by the test would
+/// not be what the subprocess sees.
+const QUIET_MAINTENANCE: &str = "[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n";
+
+/// Force `git` to refuse rather than invent an identity.
+///
+/// **This is the platform-dependent variable the fixture has to remove.** With
+/// no identity configured, `git` may *auto-detect* one from the login name and
+/// the hostname and commit with a warning — and whether that succeeds depends
+/// on whether the machine has a resolvable hostname. A CI container often does
+/// not (`runner@fv-az123.(none)`) and the commit fails; a developer machine
+/// usually does and it succeeds. Two platforms, two behaviours, one assertion.
+///
+/// `user.useConfigOnly` makes the refusal unconditional, and `git` emits the
+/// same "Author identity unknown" it emits when auto-detection fails — so the
+/// condition under test is the real one, produced deterministically rather than
+/// hoped for.
+const REFUSE_AUTODETECT: &str = "[user]\n\tuseConfigOnly = true\n";
+
+const IDENTITY: &str = "[user]\n\tname = Test\n\temail = test@example.invalid\n";
 
 /// Run `vibe new --git` with a controlled `HOME`.
 fn new_git(root: &Path, name: &str, home: &Path) -> std::process::Output {
@@ -80,7 +119,7 @@ fn the_flag_initialises_a_repository_and_reports_the_real_branch() {
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
-    let home = planted_home(tmp.path(), Some(WITH_IDENTITY));
+    let home = planted_home(tmp.path(), Some(IDENTITY));
     let out = new_git(tmp.path(), "demo", &home);
     assert!(
         out.status.success(),
@@ -123,9 +162,7 @@ fn a_non_default_branch_name_is_reported_not_assumed() {
     let tmp = tempfile::tempdir().unwrap();
     let home = planted_home(
         tmp.path(),
-        Some(&format!(
-            "{WITH_IDENTITY}[init]\n\tdefaultBranch = quincunx\n"
-        )),
+        Some(&format!("{IDENTITY}[init]\n\tdefaultBranch = quincunx\n")),
     );
     let out = new_git(tmp.path(), "demo", &home);
     assert!(
@@ -154,9 +191,9 @@ fn a_missing_author_identity_is_reported_and_never_invented() {
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
-    // A home with no gitconfig at all. Deterministic on every platform,
-    // because `vibe` also sets GIT_CONFIG_NOSYSTEM=1, so no system-level
-    // identity can leak in either.
+    // A home with no identity, and with auto-detection refused so that
+    // "no identity" means the same thing on every platform. `vibe` also sets
+    // GIT_CONFIG_NOSYSTEM=1, so no system-level identity can leak in either.
     let home = planted_home(tmp.path(), None);
     let out = new_git(tmp.path(), "demo", &home);
 
@@ -194,7 +231,7 @@ fn with_an_identity_the_scaffold_is_committed_and_no_advice_is_printed() {
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
-    let home = planted_home(tmp.path(), Some(WITH_IDENTITY));
+    let home = planted_home(tmp.path(), Some(IDENTITY));
     let out = new_git(tmp.path(), "demo", &home);
     assert!(
         out.status.success(),

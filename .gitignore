@@ -17,3 +17,9 @@ Thumbs.db
 # Local agent tooling — third-party agent definitions, not part of this project.
 # Remove this line if you decide to vendor them into the public repo.
 .claude/
+
+# cargo-mutants scratch. ADR-0008 §9 records an on-demand invocation, and it
+# writes here rather than under target/ — so the command the ADR tells you to
+# run would otherwise dirty the tree it is measuring.
+/mutants.out/
+/mutants.out.old/

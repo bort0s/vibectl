@@ -719,10 +719,52 @@ crates/vibe-core/src/repo.rs:333:8: delete ! in create_remote          # the `if
 
 The first is character-for-character the sabotage a human ran by hand. The
 second reaches a single guard *clause*, which an earlier evaluation of this tool
-asserted it could not do — see ADR-0002 §7's granularity rule, which that error
+asserted it could not do — see ADR-0002 §7's instrument rule, which that error
 produced. Nothing is run in CI; this establishes only that the mechanism can
 express the experiment, which is the precondition for the decision, not the
 decision.
+
+**On demand, with the invocation recorded, and no schedule.** A scheduled run
+going red into a notification nobody reads is the channel-hostage failure the
+`VIBE_REQUIRE_GH` rule exists to prevent, arrived at from the other side: a
+result that has to be *read* is hostage to whichever channel is being watched.
+The two shapes that survive that rule are on-demand with the command written
+down, and a gate that fails where someone already looks. This is the first; the
+gate stays a named option, and it needs a checked-in baseline of known-missed
+mutants, which is a second thing that goes stale silently and deserves its own
+evidence rather than being folded in here.
+
+```
+cargo mutants --package vibe-core \
+  --file crates/vibe-core/src/gh.rs \
+  --file crates/vibe-core/src/exec.rs \
+  --file crates/vibe-core/src/url.rs \
+  --file crates/vibe-core/src/git.rs \
+  --file crates/vibe-core/src/repo.rs
+```
+
+**No test-target scoping, deliberately, and this reverses an earlier
+recommendation.** Scoping to `--lib` cuts the cycle from ~24s to ~3s, but
+`containment.rs`, `honesty.rs` and the rest can then catch nothing, so every
+mutant they would have caught reports MISSED. That is not a speed/coverage
+trade — it is manufacturing false findings and then triaging them by hand. It
+remains useful as a *fast triage pass* whose MISSEDs are not to be believed,
+and it must be labelled as one wherever it is used.
+
+`gh_containment.rs` is the one test target that can catch nothing at all — it
+imports only `std`, shells out to `gh`, and never touches library code — and it
+is nevertheless **not excluded**. Excluding it would save seconds and introduce
+a silent-drift risk: the day someone adds a `use vibe_core::` to it, the
+exclusion starts producing false MISSEDs and nothing in that diff touches this
+section. Including a target that catches nothing costs time and cannot cause a
+wrong answer; excluding one can. Default-include is the polarity, and the
+observation is re-derivable rather than trusted:
+
+```
+for f in crates/vibe-core/tests/*.rs; do
+  grep -q vibe_core "$f" || echo "catches nothing: $f"
+done
+```
 
 The two sabotage branches were deleted after the runs. They exist as this table,
 not as code — a one-time demonstration in §7's sense, not a permanent job.

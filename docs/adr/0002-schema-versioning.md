@@ -525,13 +525,21 @@ the exit status. A control whose **result** carries the proof does not care
 which channels are open; one that needs its output read is hostage to whichever
 channel happens to be available that week.
 
-**A mechanism's green means only as much as its granularity allows, and the
-granularity has to be established before the result is trusted.** Not assumed
-from how the mechanism is described, and not inferred from how it is usually
-used — established, from the mechanism itself.
+**An instrument's properties are measured with the instrument, and they belong
+to a build of it rather than to its category.** Not assumed from how the
+instrument is described, not inferred from how it is usually used, and not
+carried over from a different version — asked, of the thing itself, before any
+result it produces is trusted.
 
-This is the class the two rules above are instances of, seen a third time from
-the other direction:
+Indexed on the action deliberately. The obvious phrasing of this case is *"a
+mechanism's green means only as much as its granularity allows"*, and that is
+true, but granularity was merely this instance's topic. The next wrong
+assumption will be about what the instrument counts as **caught**, how it scores
+an **unviable** result, what its **timeout** does to a slow case, or which of its
+operators are **enabled by default** — and a rule indexed on granularity does
+not fire for any of them. Indexed on the action, it fires for all of them,
+including the two rules above, which are the same failure with the instrument
+being a fixture and an exit status:
 
 - **The unreached guard.** The fixture's granularity was *"the command
   failed"*, which cannot separate "the guard fired" from "an earlier step
@@ -559,10 +567,9 @@ Both are the same mistake — a conclusion resting on an unmeasured property of
 the instrument — and both are cheap to avoid, because instruments have ways of
 being asked. `--list`, a dry run, a deliberate injection.
 
-**State the version with the answer.** Granularity is a property of a specific
-build of a tool, not of its category: an older or newer operator set moves it,
-and a claim that omits the version rots silently into a claim about whatever is
-installed today.
+**Record the version beside the answer**, or the measurement decays into an
+assumption of exactly the kind it was made to replace: a claim that omits the
+version silently becomes a claim about whatever is installed today.
 
 Where output genuinely must escape, `$GITHUB_STEP_SUMMARY` is readable without
 authentication. **A credential that reads CI logs is not the answer**: this

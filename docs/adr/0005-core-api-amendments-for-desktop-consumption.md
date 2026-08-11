@@ -247,7 +247,17 @@ adds the token only for those that return `true`. In the v1 set that is
 `GhOp::RepoCreate` and `GitOp::Push` — `Init`, `Add`, `Commit` and `RemoteAdd`
 run with no credential in scope at all.
 
-**Open question, deliberately not answered here:** *which* of those ops can
+**Answered by [ADR-0008](0008-git-and-repository-creation.md) §4-§5
+(2026-08-11): none of them, because P5 needs no credential at all.** The
+`gh`-present path lets `gh` own authentication; the `gh`-absent path creates no
+remote and pushes nothing, reporting the exact commands that finish the job. The
+API-create fallback below is designed and deliberately not built - it costs 18
+net new crates including a full TLS stack, in a library every embedder links.
+Rule 3a's narrowing is therefore achieved by removing the need rather than by
+scoping it. The original question is kept below because the reasoning is what
+justifies the answer.
+
+**Open question as originally posed:** *which* of those ops can
 actually consume a `GITHUB_TOKEN` is a P5 decision, not a P0 one. `gh` reads
 `GH_TOKEN`/`GITHUB_TOKEN` from the environment and that path is straightforward.
 `git push` does **not** — git has no concept of `GITHUB_TOKEN`, and the usual

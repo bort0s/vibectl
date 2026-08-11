@@ -407,17 +407,25 @@ first.
 > later reader can re-run it instead of trusting this sentence:
 >
 > ```
-> $ git diff --quiet b21b6b7 0c4720e -- crates/ Cargo.toml Cargo.lock .github/
-> $ echo $?
-> 0
 > $ git diff --name-only b21b6b7 0c4720e
 > docs/adr/0005-core-api-amendments-for-desktop-consumption.md
 > docs/adr/0008-git-and-repository-creation.md
 > ```
 >
-> Exit `0` from `--quiet` is "no differences" across every path that can change
-> what CI does — sources, manifests, lockfile, and the workflow itself. The
-> second command shows what *did* change: two ADR files, which no job reads.
+> **Unscoped, deliberately.** That is the entire delta between the two commits:
+> two ADR files, and nothing else in the repository. It needs no judgement about
+> which paths matter, which is exactly what makes it the proof.
+>
+> The path-scoped form — `git diff --quiet b21b6b7 0c4720e -- crates/
+> Cargo.toml Cargo.lock .github/`, exit `0` — was written first and is kept only
+> as this footnote, because **it is an allowlist and allowlists go stale.**
+> `rust-toolchain.toml`, `.cargo/config.toml`, `rustfmt.toml`, `clippy.toml` and
+> `deny.toml` all change what CI does and all sit outside it. If one of them
+> lands later, that command still exits `0` and still reads like proof. The
+> unscoped listing has no such failure mode and proves strictly more, so it
+> leads. Same argument as rule 4's closed scheme allowlist, pointed the other
+> way: a denylist of paths-that-do-not-matter would have been the right shape
+> here, and enumerating what *does* matter was the wrong one.
 >
 > This is the same shape as the uncompiled-commit discharge above, which
 > distinguished "CI checked every commit" from "a local run checked the result
@@ -425,6 +433,15 @@ first.
 > collapsing them in either direction — "unverified" when the bytes are covered,
 > or "verified per commit" when no such run exists — records something that is
 > not true.
+>
+> The inference this licenses — *a documentation-only commit inherits the
+> previous verdict, so its own run adds nothing* — is a **condition, not a
+> conclusion**: it holds only while no CI job consumes documentation. Today none
+> does; `fmt`, `clippy`, `test` and `msrv` read Rust sources, manifests and the
+> lockfile, and the `ci` job reads only other jobs' results. A markdown lint, a
+> link checker, or a job that renders these ADRs would void it, and would do so
+> without touching this paragraph. State the condition when using the shortcut,
+> or the shortcut outlives the thing that made it true.
 
 #### What the green step proves, established by sabotaging it
 
@@ -452,6 +469,73 @@ green in both is what makes the result conclusive rather than a compile failure
 wearing the same colour — had the tree failed to build, both steps would have
 gone red and the experiment would have proved nothing.
 
+**The diffs, verbatim, because the table alone asserts the one thing that would
+invalidate the experiment.** A `return` placed *after* `gh_available()` would
+have produced the same two rows, the same two green runs, and the opposite
+conclusion — the reached-guard rule turned on the sabotage itself. The branches
+are deleted, so the evidence has to live here. Note in each hunk that the
+inserted block is immediately followed by the `if !gh_available()` line: the
+context lines are what prove the ordering, which is why they are kept rather
+than trimmed.
+
+`exp/skip-gh-argv` (`03cb963..7f218f2`):
+
+```diff
+--- a/crates/vibe-core/tests/gh_argv.rs
++++ b/crates/vibe-core/tests/gh_argv.rs
+@@ -172,6 +172,9 @@ fn the_parse_error_detector_is_sensitive_in_both_directions() {
+
+ #[test]
+ fn the_argv_the_enum_constructs_is_accepted_by_this_gh() {
++    if true {
++        return;
++    }
+     if !gh_available() {
+         eprintln!("skipping: gh is not on PATH (this is the CI-verified check)");
+         return;
+```
+
+`exp/skip-gh-containment` (`03cb963..0ce2eab`):
+
+```diff
+--- a/crates/vibe-core/tests/gh_containment.rs
++++ b/crates/vibe-core/tests/gh_containment.rs
+@@ -141,6 +141,9 @@ fn hostile_config(dir: &Path, marker: &Path) {
+ /// `gh repo create` still run `gh`'s own command?
+ #[test]
+ fn a_per_user_alias_does_not_redirect_gh_repo_create() {
++    if true {
++        return;
++    }
+     if !gh_available() {
+         eprintln!("skipping: gh is not on PATH (this is the CI-verified check)");
+         return;
+@@ -189,6 +192,9 @@ fn a_per_user_alias_does_not_redirect_gh_repo_create() {
+ /// under test and not something incidental.
+ #[test]
+ fn the_same_invocation_without_the_config_behaves_the_same() {
++    if true {
++        return;
++    }
+     if !gh_available() {
+         eprintln!("skipping: gh is not on PATH");
+         return;
+@@ -229,6 +235,9 @@ fn the_same_invocation_without_the_config_behaves_the_same() {
+ /// on. Recorded so the CI log says which.
+ #[test]
+ fn report_whether_gh_permits_aliasing_a_builtin() {
++    if true {
++        return;
++    }
+     if !gh_available() {
+         eprintln!("skipping: gh is not on PATH");
+         return;
+```
+
+All three of `gh_containment`'s tests were made inert, not just the asserting
+two, so the sabotage models the file going silently dead rather than one test
+being disabled.
+
 So the claim is now this, and no more:
 
 - **What the step proves.** Both control *targets* exist, compile, and pass —
@@ -461,6 +545,16 @@ So the claim is now this, and no more:
   missing one panics.
 - **What it does not prove.** That any assertion inside those files ran. Zero
   guard calls and one hundred are the same green.
+
+> **Precondition on the first half: one control, one integration-test target.**
+> Under `tests/*.rs` the target name *is* the filename, which is the only reason
+> `--test gh_argv` can fail when the control disappears. **Fold a control into a
+> module of a shared target and that half of the proof dies silently** — the
+> target still exists, `--test <shared>` still exits `0`, and the module can be
+> renamed or deleted with the step staying green. Nothing in such a diff would
+> touch this section, which is the same half-death the sabotage above found one
+> level up. If the layout ever changes, this claim is void until something else
+> establishes it.
 
 The distinction generalises, and it is the useful part: **`VIBE_REQUIRE_GH`
 closes an environment-shaped hole, not a code-shaped one.** It converts "this
@@ -477,10 +571,24 @@ fail when a name stops existing. A mechanism would have to make execution
 *observable* — each control recording that it ran, and a final check failing
 unless every expected one did. That is a real design with real failure modes
 (cross-process state, ordering, its own skip paths), and it is not worth
-building for two files that a reviewer can read. **It becomes worth building
-when the number of controls exceeds what a reviewer checks by eye**, which is
-the trigger to revisit, and until then the honest position is the narrowed claim
-above rather than the mechanism nobody verified.
+building for two files that a reviewer can read.
+
+**The revisit trigger has to be observable, and the obvious one is not.** "When
+the controls outgrow what a reviewer checks by eye" cannot fire: the reviewer
+who can no longer check by eye is precisely the one not noticing that they
+can't. That is the `ext::` control's failure shape — a condition that goes quiet
+exactly when it starts mattering. So the trigger is an **event that produces a
+diff someone reviews**, whichever comes first:
+
+- **A seventh control file** under `crates/*/tests/` gated on a `VIBE_REQUIRE_*`
+  variable. Crude, but it is a number, and adding one is a diff.
+- **The first control modified by someone who did not write it.** The proof by
+  eye rests on the reader holding the whole argument; the first hand-off is
+  where that stops being true, and it arrives as a reviewable change rather than
+  as a gradual loss of attention.
+
+Until one of those fires, the honest position is the narrowed claim above rather
+than a mechanism nobody has verified.
 
 The two sabotage branches were deleted after the runs. They exist as this table,
 not as code — a one-time demonstration in §7's sense, not a permanent job.

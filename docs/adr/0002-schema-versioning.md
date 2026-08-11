@@ -494,6 +494,21 @@ therefore itself the proof that `gh` was present and the control executed — th
 reached-guard rule built into the mechanism rather than enforced by discipline.
 **Prefer this shape for every CI-verified control.**
 
+**The mechanism paid for itself on 2026-08-11, and the reason is worth stating
+precisely.** `gh_argv.rs` was discharged (ADR-0008 §9) by reading one step's
+conclusion from the public Actions API — no credential, no log. Job and step
+*conclusions* turn out to be public for a public repository even though logs are
+not, which is a channel this section assumed was closed.
+
+That is not the lesson, and reading it as one would be the wrong repair. **A
+conclusion cannot distinguish a control that ran from one that skipped** — both
+are green, which is the failure this whole rule exists against, and it would
+still be true if every log on earth were world-readable. What made the public
+channel sufficient is that `VIBE_REQUIRE_GH` moved the information *out* of the
+log and into the exit status. A control designed so its **result** carries the
+proof does not care which channels are open; a control that needs its output
+read is hostage to whichever channel happens to be available that week.
+
 Where output genuinely must escape, `$GITHUB_STEP_SUMMARY` is readable without
 authentication. **A credential that reads CI logs is not the answer**: this
 project's containment story is built on constructing environments rather than

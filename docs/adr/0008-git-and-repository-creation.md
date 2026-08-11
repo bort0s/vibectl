@@ -358,16 +358,39 @@ Both files take the shape §6 established: `VIBE_REQUIRE_GH=1` turns a missing
 `gh` into a panic, so **the step passing is itself the proof the controls ran**,
 with no log to read and no credential needed to read one.
 
-**Caveat, with a due date rather than a disclaimer.** The `gh`-requiring
-assertions in `gh_argv.rs` have not run anywhere yet: `gh` is not installed on
-the development machine, and every other check *was* run locally — 303 tests,
-`clippy -D warnings`, `rustfmt`, and `cargo +1.85.0 check`, all green on Windows
-10. What is unverified is narrow and specific: whether a real `gh` accepts
-`--source=.`, `--push` and `--private` in the positions `GhOp::argv` puts them,
-and whether it rejects `--source-tree=.`. The `VIBE_REQUIRE_GH` guard itself was
-verified locally by running it with `gh` absent and observing the panic. **CI is
-the first run of the rest; discharge this by naming the run and the revision,
-not by the passage of time.**
+**Caveat as recorded, and discharged the same day.** When the `gh` path was
+committed, the `gh`-requiring assertions in `gh_argv.rs` had run nowhere: `gh`
+is not installed on the development machine, though every other check *was* run
+locally — 303 tests, `clippy -D warnings`, `rustfmt`, and `cargo +1.85.0 check`,
+all green on Windows 10. What was unverified was narrow and specific: whether a
+real `gh` accepts `--source=.`, `--push` and `--private` in the positions
+`GhOp::argv` puts them, and whether it rejects `--source-tree=.`. The
+`VIBE_REQUIRE_GH` guard itself was verified locally, by running it with `gh`
+absent and observing the panic — the guard the other proofs rest on, checked
+first.
+
+> **Discharged 2026-08-11.** Run
+> [31477784150](https://github.com/bort0s/vibectl/actions/runs/31477784150) at
+> `0c4720e`, green on `ubuntu-latest`, `macos-latest` and `windows-latest`. The
+> **`Verify gh containment and argv` step succeeded on all three**, and under
+> `VIBE_REQUIRE_GH=1` that is not merely "the tests passed": a missing `gh`
+> panics, so the step's success is itself the evidence `gh` was present and both
+> control files executed rather than returning early.
+>
+> Established by that run, in the runners' own `gh`: `gh repo create` accepts
+> the argv `GhOp::argv` constructs, rejects `--source-tree=.` — so the control
+> can detect a renamed flag rather than only an outage — and a per-user config
+> still cannot redirect the command (§6, re-established on this revision rather
+> than inherited from `4de79c0`).
+>
+> **What that run does not cover, stated so the discharge is not read wider than
+> it is:** the two commits `b21b6b7` and `0c4720e` were pushed together, so
+> Actions raised one run, for the tip. `b21b6b7` was not verified individually
+> the way the pre-`4de79c0` commits were. The difference is inert here —
+> `0c4720e` is documentation only and the code tree is byte-identical at both —
+> but "CI verified each commit individually" is not true of this pair, and the
+> distinction ADR-0002 §7 draws between per-commit and cumulative verification
+> is worth keeping accurate.
 
 #### The `gh`-succeeds path is UNTESTED, deliberately and permanently
 

@@ -369,10 +369,44 @@ verified locally by running it with `gh` absent and observing the panic. **CI is
 the first run of the rest; discharge this by naming the run and the revision,
 not by the passage of time.**
 
-**Not tested anywhere, deliberately:** the path where `gh` *succeeds*. It
-creates a repository on github.com under whoever is logged in, and a suite that
-can do that on a developer's machine or a CI runner is one that will eventually
-do it by accident.
+#### The `gh`-succeeds path is UNTESTED, deliberately and permanently
+
+Recorded the way `scan_bench`'s cold-cache measurement was: named in capitals,
+with the reason and the boundary, so nobody reads a green suite as covering it.
+
+**What is not tested anywhere:** a `gh repo create` that authenticates and
+returns success. No unit test, no integration test, no CI job, on any platform.
+
+**Why it stays that way.** That path creates a repository on github.com under
+whoever the machine is logged in as. A suite that *can* do that is a suite that
+eventually does it by accident — on a developer's laptop, or on a runner with a
+token in scope, at which point the side effect is on a real account and no test
+teardown can un-publish it. This is not a cost/benefit judgement that could go
+the other way with more effort; the thing that would make the test meaningful is
+exactly the thing that makes it unacceptable.
+
+**Where verification does stop, precisely.** The seam is checked from both sides
+right up to the subprocess boundary:
+
+- `GhOp::argv` produces the vector — asserted against the enum's own output, not
+  a retyped copy.
+- `gh_argv.rs` puts that vector through a real `gh` and confirms it parses,
+  paired against a flag `gh` does not have.
+- `gh_containment.rs` confirms a per-user config cannot redirect the command.
+- `repo.rs` covers everything downstream of the call: both pre-flight checks,
+  the classification of what `gh` says, and the refusal to flatten an
+  unrecognised failure into "no remote".
+
+What is unverified is one hop: whether GitHub, having received a well-formed and
+authenticated request, does what its documentation says. That is a dependency's
+contract, not this crate's behaviour, and the honest place to stop is the last
+thing we control.
+
+**The revisit trigger, so this is a decision and not an omission:** if a
+disposable test account with a scoped token and automatic repository cleanup
+ever exists as project infrastructure, this becomes testable without a side
+effect on anyone's real account, and should be reconsidered then. Absent that,
+it stays untested and the boundary above is the claim.
 
 ## Consequences
 

@@ -425,6 +425,53 @@ positively, which is a constructed `GIT_*` constant under a rule that otherwise
 forbids all `GIT_*`. So `GIT_CONFIG_GLOBAL` would need no new principle, only the
 functional trade-off above.
 
+**4a. Every per-user config a forwarded `HOME` reaches is an execution surface,
+and each command it can name must be neutralised by name.**
+
+*Added 2026-08-11, after the third instance of one shape. Numbered `4a` rather
+than inserted as a new rule 5, for the reason the renumbering note above
+records.*
+
+Rules 1–3 govern argv and the environment; rule 4 governs a value in argv. All
+four are about things **we** pass. This one is about what the program does with
+a file we never see:
+
+- **`ext::` through `~/.gitconfig`.** `protocol.ext.allow = always` re-enables a
+  transport whose documented purpose is running an arbitrary command.
+  `GIT_CONFIG_NOSYSTEM=1` does not cover the per-user file, and `HOME` cannot be
+  dropped because `git` needs it to find any configuration at all.
+- **`gh`'s per-user config through the same `HOME`** (and `XDG_CONFIG_HOME`).
+  ADR-0008 §6 asked whether an alias there could redirect `gh repo create` and
+  verified it cannot — but the question had to be *asked*, and it was asked
+  because of the first instance.
+- **`gh`'s pager, through that same config.** `gh` pipes output through a
+  program the config names. Not an alias, not a transport, not a URL: a third
+  route to the same place, found only by enumerating what the file can invoke.
+
+The rule is therefore not "audit the config" — a config we do not control is not
+auditable — but: **before invoking a program whose config directory we must make
+reachable, enumerate the ways that config can name a command, and neutralise
+each one explicitly with a constructed constant.** `GH_PAGER=` (blank) is that
+neutralisation for the third instance, and it is a constant we construct, which
+rule 3's own carve-out already permits.
+
+Two properties make this statable rather than a warning:
+
+- **It is enumerable per program**, in a way "what else might a config do?" is
+  not. `git`: transports, `core.sshCommand`, external diff/merge drivers,
+  aliases, hooks. `gh`: aliases, extensions, the pager. That list belongs in the
+  diff that adds the program, not in a later incident.
+- **A neutralisation that costs functionality gets the "Deliberately not taken"
+  treatment above**, not a silent omission. Disabling the pager costs nothing
+  because output is piped; disabling `GIT_CONFIG_GLOBAL` outright would cost
+  credential helpers and proxies, which is why it is declined in writing.
+
+The failure mode this exists against is precise: each instance looked like a
+one-off, and the third one was only found because the first two had been written
+down. A fourth program — or a `gh` release that adds a config key naming a
+binary — is the next instance, and the rule is what makes it a checklist item
+rather than a discovery.
+
 **5. `CreateFile` containment canonicalizes the parent, not the path.**
 `canonicalize()` fails on a path that does not yet exist, which is every path a
 `CreateFile` op names. So: canonicalize the deepest existing ancestor, verify

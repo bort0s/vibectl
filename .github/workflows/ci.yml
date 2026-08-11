@@ -194,6 +194,16 @@ jobs:
       - name: Run tests
         run: cargo test --locked --workspace --all-features
 
+      # Run the gh containment controls by name, with output, and with the
+      # skip disabled. ADR-0008 §6 gates the `gh` path on these, and a control
+      # that returned early at its availability check produces the same green
+      # tick as one that ran - which a whole-suite result cannot distinguish.
+      # VIBE_REQUIRE_GH turns a missing `gh` into a failure rather than a skip.
+      - name: Verify gh containment (ADR-0008 §6)
+        env:
+          VIBE_REQUIRE_GH: "1"
+        run: cargo test --locked -p vibe-core --test gh_containment -- --nocapture --test-threads=1
+
   msrv:
     name: MSRV (1.85.0)
     runs-on: ubuntu-latest

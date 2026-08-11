@@ -23,10 +23,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use super::git::GitOp;
 use super::state::StoreAgent;
 use crate::error::CoreError;
 use crate::exec::ProcessRunner;
+use crate::git::GitOp;
 use crate::url::GitUrl;
 
 /// The upstream this build clones when nothing else is configured.

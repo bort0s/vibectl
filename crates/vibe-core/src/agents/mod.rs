@@ -10,14 +10,13 @@
 //!
 //! See ADR-0006.
 
-pub mod git;
 pub mod lock;
 pub mod ops;
 mod state;
 pub mod store;
 
+pub use crate::git::{GitOp, STORE_REMOTE};
 pub use crate::url::GitUrl;
-pub use git::{GitOp, STORE_REMOTE};
 pub use lock::{LOCK_VERSION, LockLoad, LockedAgent, Lockfile, content_hash, hash_is_verifiable};
 pub use ops::{AgentCatalogue, AgentPlan, AgentStatus, Refusal, StoreListing, install_path};
 pub use state::{AgentReport, AgentState, InstalledAgent, StoreAgent, compute};

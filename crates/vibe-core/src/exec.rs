@@ -13,8 +13,8 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use crate::agents::GitOp;
 use crate::detect::DetectError;
+use crate::git::GitOp;
 
 /// The captured result of a subprocess.
 #[derive(Debug, Clone, PartialEq, Eq)]

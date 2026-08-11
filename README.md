@@ -11,9 +11,10 @@ agents) can pick any of them back up without archaeology.
 > crates.io yet.
 >
 > Working today: `vibe new`, `vibe scan`, `vibe list`, `vibe show`, `vibe sync`,
-> `vibe archive` / `vibe unarchive`, with `--json` on reads and `--dry-run` on
-> writes. Manifests round-trip through `toml_edit`, so your comments and any
-> keys this build does not recognise survive editing.
+> `vibe archive` / `vibe unarchive`, and `vibe agents`
+> (`update`/`list`/`status`/`add`/`remove`/`sync`), with `--json` on reads and
+> `--dry-run` on writes. Manifests round-trip through `toml_edit`, so your
+> comments and any keys this build does not recognise survive editing.
 >
 > Not built yet: `vibe render` (P4), `gh` integration in `vibe new` (P5), and
 > optional AI enrichment (P6).
@@ -73,6 +74,7 @@ would be strange if it didn't, and is kept deliberately minimal.
 | `vibe render <target>` | Generate `CLAUDE.md`, `AGENTS.md`, or `README.md` |
 | `vibe archive <name>` | Take a project off your desk. Never deletes anything. |
 | `vibe unarchive <name>` | Put it back. |
+| `vibe agents <sub>` | Install agent definitions from a git-backed store into `.claude/agents/` |
 
 `--json` on every read command, and on any `--dry-run` — a plan is a proposal to
 be inspected before it runs, so it is machine-readable too. `--dry-run` on every
@@ -110,11 +112,46 @@ env_required = ["SUPABASE_URL", "SUPABASE_ANON_KEY"]
 [context]
 decisions = ["iOS-native design system", "client-side economy enforcement (known debt)"]
 next = ["validate draggable sheet on physical device"]
+
+[agents]
+installed = ["engineering-code-reviewer"]
 ```
 
 A global cache is kept in your OS config directory to make `vibe list` instant.
 It is **fully regenerable and never authoritative** — delete it and `vibe scan`
 rebuilds it.
+
+## Agents
+
+`vibe agents` installs agent definitions — markdown files with frontmatter —
+from a git-backed store into a project's `.claude/agents/`.
+
+```console
+$ vibe agents update                  # the only command that uses the network
+$ vibe agents list                    # what the store offers
+$ vibe agents add engineering-code-reviewer
+$ vibe agents status                  # what this project has, and its state
+$ vibe agents sync                    # after a fresh clone: install what's declared
+```
+
+Two files, and the split is the point. `.vibe/project.toml` declares *intent* —
+a sorted list of names, committed, no hashes — so a teammate's `add` does not
+turn the project's manifest into merge noise. `.vibe/agents.lock` records local
+filesystem state: which files `vibe` wrote and what they hashed to.
+
+The lockfile belongs in your `.gitignore`, and **`vibe` will not put it there** —
+it does not write files you did not ask for, including helpful ones. The
+generated header says so at the top of the file; adding the line is your call.
+
+**`.claude/agents/` is not ours.** It holds hand-written agents and agents other
+tools installed, so `vibe` only ever touches files it put there and can still
+prove it wrote. An agent you edited is never overwritten without `--force`, an
+agent deleted upstream is never deleted locally, and a file `vibe` did not
+install is neither adopted nor removed.
+
+`update` is the only command that touches the network. Everything else works
+offline against whatever the store already holds — and says how old that is
+rather than letting a stale store look like a complete one.
 
 ## Design rules
 

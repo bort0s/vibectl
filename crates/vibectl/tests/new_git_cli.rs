@@ -10,12 +10,13 @@
 //! two different things. A system-level `gitconfig` is visible to one and
 //! invisible to the other.
 //!
-//! That is the fixture-produces-a-finding-about-itself family again (ADR-0002
-//! §7): the failure named the subject and was caused by the harness. The answer
-//! is not a better probe — it is to stop reading ambient state at all. Each test
-//! plants a `HOME` containing exactly the configuration it wants, so both halves
-//! of every pair run everywhere rather than skipping on whichever machine
-//! happens to be configured the other way.
+//! That is ADR-0002 §7's rule that **the harness and the subject must agree
+//! about what environment is under test**: the failure named the subject and was
+//! caused by the harness measuring a different world. The answer is not a better
+//! probe — it is to stop reading ambient state at all. Each test plants a `HOME`
+//! containing exactly the configuration it wants, so both halves of every pair
+//! run everywhere rather than skipping on whichever machine happens to be
+//! configured the other way.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

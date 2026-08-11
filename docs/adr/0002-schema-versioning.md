@@ -419,6 +419,76 @@ disclaimer. It is discharged by naming what was run, where, and on which
 revision — never by the passage of time or by later work being green on top of
 it.
 
+**The harness and the subject must agree about what environment is under test.**
+A test that constructs its preconditions differently from how the code under
+test observes them is measuring something else — and it fails in the direction
+that looks like a finding about the subject.
+
+This is the class the previous three rules are instances of, named late because
+it took three sightings to see it:
+
+- **P2, `Interest` and root-relative paths.** The fixture built paths one way,
+  the walker resolved them another, and the disagreement read as a detector bug.
+- **The `git()` fixture helper.** It discarded exit status, so a failed
+  `git commit` let the hooks control report "the probes never fired" — a false
+  negative accusing a subsystem that was innocent.
+- **`new_git_cli` and the git identity.** The test probed `git config
+  user.email` in *its own* environment; `vibe` runs `git` under `env_clear()`
+  plus `GIT_CONFIG_NOSYSTEM=1`. A system-level `gitconfig` is visible to one and
+  invisible to the other, so the two disagreed about whether an identity
+  existed. It passed on Linux and Windows and failed on macOS, and the failure
+  named `vibe`.
+
+The fix is never a better probe. It is to stop reading ambient state: plant the
+environment the test intends — a `HOME`, a config directory, a `PATH` — and pass
+it to the subject the same way the subject will read it. A probe and a subject
+that consult different sources will eventually disagree, and the disagreement
+surfaces as a platform-specific red that costs a day.
+
+**A precondition you did not construct is not a precondition.** Worked example,
+because it is genuinely surprising: *"no git identity configured" is not a
+deterministic state.* When `user.name`/`user.email` are unset, `git` may
+**auto-detect** an identity from the login name and the hostname and commit with
+a warning instead of failing. Whether that succeeds depends on whether the
+machine has a resolvable hostname — a CI container often does not
+(`runner@fv-az123.(none)`) and the commit fails, while a developer machine
+usually does and it succeeds. A test asserting "vibe reports a missing identity"
+was therefore asserting against a coin flip weighted by platform.
+
+`user.useConfigOnly = true` in the planted config makes the refusal
+unconditional, and `git` emits the identical *"Author identity unknown"* it
+emits when auto-detection fails — so the condition under test is the real one,
+produced rather than hoped for. Anyone writing the next identity-adjacent test
+needs this; it is not discoverable from the failure.
+
+**Recorded honestly: that fix was elimination, not diagnosis.** CI logs require
+authentication that was not available, so the second attempt removed *both*
+remaining platform variables — the auto-detected identity and the detached
+`git maintenance` — without confirming which one was the cause. Each is
+independently required by a rule above, so the change is right either way, but
+neither was individually established as the failure. Written down because "we
+removed two things and it went green" reads as a diagnosis six months later
+unless someone says it was not one.
+
+**Prove the control ran without needing to read a log.** The `ext::`
+verification distinguished "passed" from "returned early at the availability
+guard" by a human reading `--nocapture` output on three runners. That works
+exactly as long as someone reads it, and it stopped working the moment CI logs
+turned out to need a credential nobody had.
+
+The `gh` containment control does better: CI sets `VIBE_REQUIRE_GH=1`, under
+which a missing `gh` **panics** instead of skipping. The step passing is
+therefore itself the proof that `gh` was present and the control executed — the
+reached-guard rule built into the mechanism rather than enforced by discipline.
+**Prefer this shape for every CI-verified control.**
+
+Where output genuinely must escape, `$GITHUB_STEP_SUMMARY` is readable without
+authentication. **A credential that reads CI logs is not the answer**: this
+project's containment story is built on constructing environments rather than
+adding channels to them, which is the same argument that rejected an askpass
+helper in ADR-0008 §4, and it does not stop applying because the beneficiary is
+the person debugging.
+
 The corollary, from `W_SCHEMA_MINOR_NEWER`: a warning defined and never emitted
 is a policy that exists only in this document. A test asserting a diagnostic is
 reported must check that something *produces* it, not merely that a consumer

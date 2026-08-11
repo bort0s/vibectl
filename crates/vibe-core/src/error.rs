@@ -107,7 +107,9 @@ pub enum CoreError {
 
     /// A `git` invocation failed. `status` travels separately from the prose
     /// because the prose is whatever `git` wrote to stderr (ADR-0005 §6).
-    #[error("git {} failed", .argv.first().map_or("", String::as_str))]
+    // argv[0] is the program, so `.first()` rendered "git git failed". The
+    // subcommand is what identifies the operation to a reader.
+    #[error("git {} failed", .argv.get(1).map_or("", String::as_str))]
     ToolFailed {
         argv: Vec<String>,
         status: Option<i32>,

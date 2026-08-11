@@ -349,6 +349,14 @@ pub struct NewArgs {
     #[arg(long, default_value = "active", value_parser = parse_status)]
     pub status: Status,
 
+    /// Initialise a git repository and commit the scaffold
+    ///
+    /// Opt-in, not the default: a person who wanted a repository in a directory
+    /// knows how to make one, and creating one unasked is the tool doing
+    /// something that was not requested (ADR-0008 §8).
+    #[arg(long)]
+    pub git: bool,
+
     #[command(flatten)]
     pub write: WriteFlags,
 

@@ -7,10 +7,9 @@ Proposed (2026-08-11). Design for P5.
 **Amends [ADR-0005](0005-core-api-amendments-for-desktop-consumption.md) §10
 rule 3a**, whose open question this answers.
 
-**One pending verification, §6.** The `gh` path must not ship until the
-per-user-config question is green in CI. If an alias *can* redirect
-`gh repo create`, that is a finding of the same weight as `ext::` and the design
-changes before any code depends on it.
+**§6 verified 2026-08-11 (`4de79c0`).** A per-user `gh` config does **not**
+redirect `gh repo create`, on `ubuntu-latest`, `macos-latest` and
+`windows-latest`. The `gh` path is unblocked.
 
 ## Context
 
@@ -128,9 +127,9 @@ no op that wants one.
 handling of a credential is not a narrow environment — it is not needing the
 credential. Scoping is what you do when the need is real.
 
-### 6. Pending: can a per-user `gh` config redirect `gh repo create`?
+### 6. Verified: a per-user `gh` config does not redirect `gh repo create`
 
-**Not assumed either way, and the `gh` path does not ship until this is green.**
+**Not assumed either way. The `gh` path did not ship until this was green.**
 
 ADR-0005 §10 says `gh` is *worse* than `git` because `gh alias set` and
 `gh extension install` execute arbitrary binaries by design. Rule 1 means this
@@ -161,6 +160,30 @@ longer argument filter — it is the same answer rule 4 gave: neutralise the
 input. Most likely `GH_CONFIG_DIR` pointed at an empty directory we construct,
 which is a constructed constant rather than passthrough and so raises no new
 tension with rules 2–3 (`GIT_CONFIG_NOSYSTEM=1` is the precedent).
+
+#### Result (2026-08-11, `4de79c0`)
+
+**A per-user alias does not redirect `gh repo create`.** Green on
+`ubuntu-latest`, `macos-latest` and `windows-latest`.
+
+Two things make that result mean what it says, and both were built in
+deliberately:
+
+- **A skip cannot masquerade as a pass.** `gh` is not installed on the
+  development machine, so these tests pass locally by returning early — the
+  exact shape of a control that never reached its guard. CI runs them by name
+  with `VIBE_REQUIRE_GH=1`, under which a missing `gh` *panics* rather than
+  skips. The step passing is therefore proof `gh` was present and the control
+  ran, without anyone having to read a log to check. The `ext::` verification
+  needed `--nocapture` output read by a human to draw the same distinction;
+  this does not.
+- **The negative result is not vacuous.** A `gh` that failed for an unrelated
+  reason would also leave no marker, so the clean run must reach `gh`'s own
+  `repo create` help or the test fails on that instead.
+
+**This stays a test rather than becoming a sentence here**, for the reason the
+local-clone-hooks claim did: a `gh` release that widens what aliases can
+intercept turns this red, where a paragraph would go quietly wrong.
 
 ### 7. The branch name is read back, never assumed
 

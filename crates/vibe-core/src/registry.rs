@@ -238,6 +238,17 @@ impl Registry {
         ))
     }
 
+    /// Initialise a git repository in a project and commit the scaffold.
+    ///
+    /// Deliberately **not** part of `plan_new`'s `WritePlan`. `git init` writes
+    /// `<project>/.git/**`, which containment rule 6 rejects categorically, and
+    /// routing it through `apply` would cost an exception to a rule whose value
+    /// is not having one (ADR-0006 §9b, ADR-0008 §1).
+    pub fn init_repository(&self, project_dir: &Path) -> Result<crate::RepoReport, CoreError> {
+        let project_dir = absolutize(project_dir)?;
+        crate::repo::init(&project_dir, self.exec.as_ref(), "Initial commit")
+    }
+
     /// Execute a plan. The only method in this crate that writes to disk.
     pub fn apply(&self, plan: &WritePlan, rep: &dyn Reporter) -> Result<ApplyReport, CoreError> {
         plan::apply(plan, rep)

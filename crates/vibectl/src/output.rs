@@ -435,3 +435,86 @@ pub fn write_sync_notes(out: &mut impl Write, notes: &vibe_core::SyncNotes) -> s
     }
     Ok(())
 }
+
+/// What `vibe new --git` did, and precisely what is left to do.
+///
+/// **This message is the entire quality of the `gh`-absent path** (ADR-0008
+/// §3). The tool creates no remote and pushes nothing there, so a vague report
+/// makes it the worst path in the product and an exact one makes it fine.
+///
+/// Two rules it obeys:
+///
+/// - *"`gh` is not installed"* is a fact about **this machine**, and is worded
+///   so it cannot be read as "this project cannot have a remote" — the same
+///   distinction `SyncNotes::not_attempted` draws.
+/// - The branch is whatever `git` reported. `git init` honours the user's
+///   `init.defaultBranch`, so printing `main` when we did not read it would be
+///   a plausible-looking guess in the one output whose whole purpose is being
+///   correct enough to paste.
+pub fn write_repo_human(
+    out: &mut impl Write,
+    report: &vibe_core::RepoReport,
+    project_name: &str,
+) -> std::io::Result<()> {
+    if report.already_a_repository {
+        writeln!(out, "Already a git repository - left alone.")?;
+    } else if report.initialised {
+        match &report.branch {
+            Some(b) => writeln!(out, "Initialised a git repository on branch {b}.")?,
+            // Not "on branch main". We did not read one, so we do not name one.
+            None => writeln!(out, "Initialised a git repository.")?,
+        }
+    }
+    if report.committed {
+        writeln!(out, "Committed the scaffold.")?;
+    }
+
+    if !report.needs_manual_finish() {
+        return Ok(());
+    }
+
+    // A machine with no `user.email` is common on a fresh install, and it is
+    // not ours to fix: choosing a name and address on the user's behalf would
+    // stamp an invented person into their history. So it is reported, with the
+    // commands that fix it, and the run still succeeds.
+    if report.commit_blocked == Some(vibe_core::repo::CommitBlocked::NoAuthorIdentity) {
+        writeln!(
+            out,
+            "\nThe scaffold was staged but not committed: git has no author \
+             identity configured on this machine, and vibe will not invent one."
+        )?;
+        writeln!(out, "To fix, then commit:")?;
+        writeln!(out, "  git config --global user.name \"Your Name\"")?;
+        writeln!(out, "  git config --global user.email \"you@example.com\"")?;
+        writeln!(out, "  git commit -m \"Initial commit\"")?;
+    }
+
+    if report.gh_available {
+        return Ok(());
+    }
+
+    // The honest half.
+    writeln!(
+        out,
+        "\ngh was not found on this machine, so vibe did not create a remote \
+         repository and did not push."
+    )?;
+    writeln!(out, "To finish:")?;
+    writeln!(
+        out,
+        "  gh repo create <owner>/{project_name} --source=. --push"
+    )?;
+    writeln!(
+        out,
+        "  # or, if you create the repository on github.com first:"
+    )?;
+    writeln!(
+        out,
+        "  git remote add origin git@github.com:<owner>/{project_name}.git"
+    )?;
+    match &report.branch {
+        Some(b) => writeln!(out, "  git push -u origin {b}")?,
+        None => writeln!(out, "  git push -u origin <branch>")?,
+    }
+    Ok(())
+}

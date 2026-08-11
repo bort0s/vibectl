@@ -115,13 +115,26 @@ fn cmd_new(args: &NewArgs) -> Result<Exit, vibe_core::CoreError> {
     let rep = reporter::TermReporter::new(args.format.json);
     let report = registry.apply(&plan, &rep)?;
 
+    // Repository setup runs after the plan is applied, and outside it: `git
+    // init` writes `<project>/.git/**`, which containment rule 6 rejects, so it
+    // cannot travel inside a WritePlan (ADR-0008 §1).
+    let repo = if args.git {
+        Some(registry.init_repository(&args.path.join(req.name()))?)
+    } else {
+        None
+    };
+
     if args.format.json {
-        let json = serde_json::to_string_pretty(&report)
+        let payload = serde_json::json!({ "apply": report, "repo": repo });
+        let json = serde_json::to_string_pretty(&payload)
             .expect("ApplyReport is a plain data structure and always serialises");
         let _ = writeln!(stdout, "{json}");
     } else {
         let _ = writeln!(stdout, "Created {}", req.name());
         let _ = output::write_apply_human(&mut stdout, &report);
+        if let Some(repo) = &repo {
+            let _ = output::write_repo_human(&mut stdout, repo, req.name());
+        }
     }
 
     Ok(Exit::Success)

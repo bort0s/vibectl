@@ -472,11 +472,29 @@ gone red and the experiment would have proved nothing.
 **The diffs, verbatim, because the table alone asserts the one thing that would
 invalidate the experiment.** A `return` placed *after* `gh_available()` would
 have produced the same two rows, the same two green runs, and the opposite
-conclusion — the reached-guard rule turned on the sabotage itself. The branches
-are deleted, so the evidence has to live here. Note in each hunk that the
-inserted block is immediately followed by the `if !gh_available()` line: the
-context lines are what prove the ordering, which is why they are kept rather
-than trimmed.
+conclusion — the reached-guard rule turned on the sabotage itself. Note in each
+hunk that the inserted block is immediately followed by the `if !gh_available()`
+line: the context lines are what prove the ordering, which is why they are kept
+rather than trimmed.
+
+**The commits are kept as annotated tags, so this paste stays checkable.** The
+branches were deleted; the commits would then have survived only until the
+reflog expired, after which the one mechanism that can detect a corrupted paste
+— comparing it against the real diff — becomes unrunnable, and a reader cannot
+distinguish that from a correct record. `exp-skip-gh-argv` and
+`exp-skip-gh-containment` are tags rather than branches: lighter, off every
+branch's history, and excluded from CI by the workflow's `branches:` filter. The
+check is therefore re-runnable indefinitely:
+
+```
+git diff 03cb963 exp-skip-gh-argv        -- crates/vibe-core/tests/gh_argv.rs
+git diff 03cb963 exp-skip-gh-containment -- crates/vibe-core/tests/gh_containment.rs
+```
+
+The blocks below were produced that way and compared line-for-line against the
+command's output rather than trusted — which found one transcription error, a
+dropped `#[test]`, before it shipped. **A verbatim claim that nothing checks is
+just a claim**, and this one is now checkable by anyone with the repository.
 
 `exp/skip-gh-argv` (`03cb963..7f218f2`):
 
@@ -563,15 +581,81 @@ runner's configuration silently voided the check — into a failure. It cannot
 convert "this control no longer checks anything" into one, because that hole is
 in the test rather than around it, and an exit status has nothing to observe.
 
-**Closing the second hole needs a positive assertion that the controls ran, and
-this is designed and not built.** The obvious lever does not work: `cargo test`
-exits `0` when a filter matches nothing (`-- --exact no_such_test` → `0`,
-verified on cargo 1.97.1), so naming each control test in the step would not
-fail when a name stops existing. A mechanism would have to make execution
-*observable* — each control recording that it ran, and a final check failing
-unless every expected one did. That is a real design with real failure modes
-(cross-process state, ordering, its own skip paths), and it is not worth
-building for two files that a reviewer can read.
+**Closing the second hole needs proof that each control's assertions executed,
+and only one thing gives that: the control must go red when the hazard is
+present.** A skipped test cannot fail, so a control that goes red under an
+injected hazard has necessarily run. No exit status can substitute, because an
+exit status has nothing to observe.
+
+The obvious lever does not work in the *forward* direction: `cargo test` exits
+`0` when a filter matches nothing (`-- --exact no_such_test` → `0`, verified on
+cargo 1.97.1), so naming each control in the verify step would not fail when a
+name stops existing.
+
+##### Designed and not built: hazard injection at the input layer
+
+Recorded in full because the shape that is *wrong* here is instructive, and
+because the version that is merely expensive should not be re-derived from
+scratch.
+
+**The rejected shape: a build-configuration flag.** Inject the hazard into the
+library behind `--cfg vibe_hazard_injection`, and have a dedicated job require
+the controls to fail. The strongest guard for such a flag — `cfg(all(test,
+…))` — **is unavailable here**, and the reason is structural rather than
+incidental: the containment lives in `vibe-core`'s library, the controls are
+integration tests under `tests/`, and a library linked by an integration test is
+compiled *without* `cfg(test)`. The hazard would therefore have to compile into
+an ordinary library build. What remains — `compile_error!` on
+`not(debug_assertions)`, `check-cfg` for typos, a release job asserting the flag
+was unset — guards our builds and not anyone else's.
+
+**And that is the argument that decides it, by symmetry with §6.** `RUSTFLAGS`
+and `.cargo/config.toml` are ambient and inherited from parent directories, so
+a downstream consumer — the Tauri frontend that links this library — could have
+containment removed from *their* build of `vibe-core` by configuration they did
+not write and would not see. That is precisely the class of hazard §6 spent a
+CI control proving does **not** exist for `gh`: a per-user configuration file
+silently redirecting what a program does. It would be perverse to establish that
+the subprocess boundary has no such redirect and then introduce one *inside the
+library*, reachable by exactly the same kind of ambient file. **The flag is
+rejected on that ground, not on cost.**
+
+**The variant that keeps the value: inject the hazard as the control's own
+input.** `VIBE_INJECT_HAZARD=1` makes a control build its argv, or its
+environment, from the hazardous variant instead of the real one — `gh_argv`
+using `--source-tree=.`, say — with its assertions unchanged, so it must fail. A
+dedicated job runs the controls with the variable set and **requires a non-zero
+exit**. An inert control stays green under injection and is caught. Nothing
+enters the library, nothing reaches a shipped artifact, no `cfg` exists to be
+set by anyone downstream, and the worst failure mode is a broken test.
+
+Four requirements, three of them learned from the way this section's own claims
+failed:
+
+1. **The injected job and the ordinary `Test` job must be required as a pair on
+   the same commit, not as independent checks.** A requires-red job has three
+   distinct false-pass modes and the pairing closes all three at once: a
+   compile error is red (reads as success), a **missing target is red** —
+   `cargo test --test <name>` exits `101`, which a requires-red job scores as a
+   pass — and an already-failing test is red for a reason that has nothing to
+   do with injection. If the same tree is green uninjected, none of the three
+   can explain red under injection. This is the same discriminator the sabotage
+   experiment above relied on when `Run tests` stayed green.
+2. **One `--exact` invocation per control, not one run for all of them.** A
+   single injected run going red proves *some* assertion fired, not that each
+   control's did — the original hole with an extra job in front of it. Worse, a
+   hazard that flips shared setup rather than one control's own input would take
+   the whole file red while proving nothing about any individual assertion. Each
+   control gets its own invocation, and the injection must be reachable only
+   through that control's own input path.
+3. **`--exact` is fail-safe in this direction, which is the useful inversion of
+   the defect measured above.** A filter matching nothing exits `0`; a job
+   requiring non-zero therefore *fails* when a control is renamed or deleted.
+   The property that made enumeration useless in the verify step makes it
+   load-bearing here.
+4. **Every control needs its injection point or the job silently covers less** —
+   the same drift this section documents, now with two places to keep in step.
+   That cost is real and is the reason this is not built for two files.
 
 **The revisit trigger has to be observable, and the obvious one is not.** "When
 the controls outgrow what a reviewer checks by eye" cannot fire: the reviewer
@@ -589,6 +673,40 @@ diff someone reviews**, whichever comes first:
 
 Until one of those fires, the honest position is the narrowed claim above rather
 than a mechanism nobody has verified.
+
+##### Two claims that must not be merged, and the gap that remains
+
+A first draft of this section closed with: *"injection is only needed where a
+guard's fired state is unobservable — where the guard returns its decision, a
+test asserts the decision directly."* That is two claims welded together, one
+true and one false.
+
+- **False:** that an observable decision removes the need for injection. It does
+  not. `assert_eq!(outcome.blocked, Some(RemoteBlocked::NothingToPush))` in a
+  test that returns early is green in exactly the same way as an assertion about
+  something unobservable. **The code-shaped hole does not care how convenient
+  the assertion was to write** — it is about whether the assertion ran, and
+  nothing about the guard's return type bears on that.
+- **True:** that making guards report their decision is cheaper than making
+  hazards injectable, and is better design regardless. A guard returning
+  `Err(..)` or `Some(RemoteBlocked::..)` can be tested by an ordinary paired
+  assertion; a guard whose success is silence needs a fixture built around its
+  absence. That is a claim about the cost of *writing* the control, not about
+  what the control proves once written.
+
+The consequence, stated plainly rather than dissolved by the principle:
+**`reject_dangerous_gh_args` and the `NothingToPush` pre-flight have no
+continuous proof that their controls execute.** What they have is the one-time
+local sabotage recorded in the table at the top of this section — a human ran
+it, observed red, and wrote down the result. That is worth more than nothing and
+is less than CI. If those controls go inert tomorrow, no job notices.
+
+This is a gap in the argument, recorded as one. It is the gap the injected job
+above would close for the two `gh` controls, and the gap that a mutation-testing
+pass would close more broadly, since removing a guard's body and requiring the
+suite to go red is the same experiment generalised — and it reaches the
+library-internal guards that input injection cannot, because there the hazard
+*is* the guard's absence.
 
 The two sabotage branches were deleted after the runs. They exist as this table,
 not as code — a one-time demonstration in §7's sense, not a permanent job.

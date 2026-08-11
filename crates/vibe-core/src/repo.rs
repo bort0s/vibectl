@@ -119,15 +119,25 @@ pub enum RemoteBlocked {
 impl RemoteBlocked {
     /// Every variant, for a frontend to check it has a sentence for each.
     ///
-    /// **This list is a second place to remember, and that is stated rather
-    /// than papered over.** Rust cannot enumerate an enum's variants without a
-    /// macro or a derive, so nothing makes `ALL` complete by construction: add
-    /// a variant, forget to list it here, and a frontend's coverage test stays
-    /// green over a shorter list. What is available — and what
-    /// [`RemoteBlocked::all_is_complete`] does — is to put an **exhaustive
-    /// match beside the list**, so a new variant fails to compile in this file,
-    /// two lines from the thing that needs updating. The break lands next to
-    /// the list; it is not derived from it. See ADR-0001 §4.
+    /// **This list is a second place to remember. Measured, not assumed:**
+    ///
+    /// 1. Adding a variant **cannot be done silently.** It fails to compile
+    ///    twice — `E0004` in [`RemoteBlocked::key`] and again in this module's
+    ///    `all_lists_every_variant_and_every_variant_has_a_key`, whose match is
+    ///    exhaustive for exactly this reason.
+    /// 2. **After fixing both matches, a short `ALL` compiles and every test
+    ///    passes.** Verified by adding a throwaway variant, adding its key and
+    ///    its test arm, and leaving `ALL` at three: green.
+    /// 3. *Removing* a variant from `ALL` is caught, by the array's own type
+    ///    (`E0308`, expected size 3, found 2).
+    ///
+    /// So the guarantee is "you will be made to open this file and edit two
+    /// matches, one of them ten lines from this list" — not "the list is
+    /// checked". Closing step 2 needs an independent enumeration, and any
+    /// check driven by iterating `ALL` is circular by construction: a variant
+    /// missing from `ALL` is never iterated, so its arm never runs. A macro or
+    /// a derive is the only escape, and both were declined at two call sites
+    /// (ADR-0001 §4).
     pub const ALL: [Self; 3] = [Self::GhMissing, Self::NotAuthenticated, Self::NothingToPush];
 
     /// A stable identifier, safe to branch on and safe to print as data.

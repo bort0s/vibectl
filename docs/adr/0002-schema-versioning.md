@@ -571,6 +571,27 @@ being asked. `--list`, a dry run, a deliberate injection.
 assumption of exactly the kind it was made to replace: a claim that omits the
 version silently becomes a claim about whatever is installed today.
 
+**A sabotage whose expected result is green proves nothing without a separate
+assertion that the edit landed.** Red carries its own proof of application — a
+no-op edit leaves the test green, so a test that went red must have seen the
+change. Green does not: it is ambiguous between two opposite conclusions, *the
+sabotage applied and the control is inert* and *the sabotage never applied*.
+Same colour, inverse readings, and the wrong one is the one that flatters the
+control.
+
+Found on 2026-08-11 while negative-controlling ADR-0001 §4's key-plus-test
+chain. A `perl -0pi -e` substitution silently matched nothing; the test passed;
+the run would have been recorded as "the control is insensitive here" when
+nothing had been done to it. The repair is not "check it landed that time" but
+the same shape as `VIBE_REQUIRE_GH`: make the experiment's result carry its own
+proof. In practice that is an assertion in the patch script — `assert old in s`
+before writing — so a pattern that stops matching **fails the experiment**
+instead of passing it.
+
+This is why the sabotage table above is worth reading in one direction only: a
+row that says *red* is self-proving, and a row that says *green* is a claim
+about the harness as much as about the subject.
+
 Where output genuinely must escape, `$GITHUB_STEP_SUMMARY` is readable without
 authentication. **A credential that reads CI logs is not the answer**: this
 project's containment story is built on constructing environments rather than

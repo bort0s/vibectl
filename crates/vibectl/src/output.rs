@@ -193,6 +193,28 @@ fn detected_or_dash<T: std::fmt::Display>(d: &vibe_core::Detected<T>) -> String 
 /// Turn a structured diagnostic into a sentence.
 ///
 /// The catalogue lives here, not in core: core emits a stable code plus named
+/// The label for a severity this build cannot place.
+///
+/// **Factored out so the text is testable.** The arm that reaches it needs a
+/// `Severity` variant that cannot exist yet — a dependency's-contract case, like
+/// `gh` honouring an alias — but the *body* has no such requirement. Splitting
+/// them turns "the behaviour this change exists for is uncovered" into "the
+/// message is covered, the one line of dispatch is not", which is a much smaller
+/// thing for ADR-0008 §9 to carry.
+///
+/// The property it exists to hold: **it claims no rank.** `warning` and `note`
+/// are positions in an ordering this build knows; an unrecognised severity has
+/// none, and borrowing one is the constraint-5 substitution this whole change
+/// removes.
+fn unranked_severity_label(name: Option<&str>) -> String {
+    // Backticked, because it is the name core sent rather than a word chosen
+    // here — the same reason unknown manifest keys are quoted (ADR-0002 §5).
+    name.map_or_else(
+        || "unrecognised severity".to_owned(),
+        |name| format!("unrecognised severity `{name}`"),
+    )
+}
+
 /// params and this decides the English.
 pub fn diagnostic_line(d: &Diagnostic) -> String {
     // **This label is a claim about the diagnostic, so an unknown severity does
@@ -217,13 +239,8 @@ pub fn diagnostic_line(d: &Diagnostic) -> String {
             // data rather than prose — the same route ADR-0002 §5 uses to
             // report keys a build does not understand. A serialisation that
             // fails leaves us with no name, and saying so beats guessing one.
-            unranked = serde_json::to_value(d.severity)
-                .ok()
-                .and_then(|v| v.as_str().map(str::to_owned))
-                .map_or_else(
-                    || "unrecognised severity".to_owned(),
-                    |name| format!("unrecognised severity `{name}`"),
-                );
+            let name = serde_json::to_value(d.severity).ok();
+            unranked = unranked_severity_label(name.as_ref().and_then(|v| v.as_str()));
             unranked.as_str()
         }
     };
@@ -690,6 +707,31 @@ mod degradation_tests {
             unverifiable.contains("cannot") && unverifiable.contains("marker"),
             "{unverifiable}"
         );
+    }
+
+    /// The unrankable label claims no rank — the property the whole severity
+    /// change exists for, tested directly rather than through a variant that
+    /// cannot be constructed.
+    #[test]
+    fn an_unplaceable_severity_borrows_no_rank() {
+        let named = super::unranked_severity_label(Some("critical"));
+        assert!(named.contains("critical"), "{named}");
+        assert!(named.contains('`'), "the name must read as data: {named}");
+        assert!(named.contains("unrecognised"), "{named}");
+        // The substitution this replaced: a rank it does not have.
+        for rank in ["warning", "note"] {
+            assert!(!named.contains(rank), "borrowed the rank `{rank}`: {named}");
+        }
+
+        // And with no name available, it says less rather than guessing.
+        let anonymous = super::unranked_severity_label(None);
+        assert!(anonymous.contains("unrecognised"), "{anonymous}");
+        for rank in ["warning", "note"] {
+            assert!(
+                !anonymous.contains(rank),
+                "borrowed the rank `{rank}`: {anonymous}"
+            );
+        }
     }
 
     /// The `Warn` label is unchanged by the severity fix.

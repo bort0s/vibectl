@@ -708,6 +708,22 @@ suite to go red is the same experiment generalised — and it reaches the
 library-internal guards that input injection cannot, because there the hazard
 *is* the guard's absence.
 
+That last claim is measured rather than assumed. `cargo mutants --list`
+(27.1.0) over the five containment modules enumerates **111 candidate mutants**,
+and both of the guards named above are among them:
+
+```
+crates/vibe-core/src/exec.rs:162:5: replace reject_dangerous_gh_args -> Result<(), DetectError> with Ok(())
+crates/vibe-core/src/repo.rs:333:8: delete ! in create_remote          # the `if !committed` pre-flight
+```
+
+The first is character-for-character the sabotage a human ran by hand. The
+second reaches a single guard *clause*, which an earlier evaluation of this tool
+asserted it could not do — see ADR-0002 §7's granularity rule, which that error
+produced. Nothing is run in CI; this establishes only that the mechanism can
+express the experiment, which is the precondition for the decision, not the
+decision.
+
 The two sabotage branches were deleted after the runs. They exist as this table,
 not as code — a one-time demonstration in §7's sense, not a permanent job.
 

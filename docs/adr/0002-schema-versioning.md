@@ -525,6 +525,45 @@ the exit status. A control whose **result** carries the proof does not care
 which channels are open; one that needs its output read is hostage to whichever
 channel happens to be available that week.
 
+**A mechanism's green means only as much as its granularity allows, and the
+granularity has to be established before the result is trusted.** Not assumed
+from how the mechanism is described, and not inferred from how it is usually
+used — established, from the mechanism itself.
+
+This is the class the two rules above are instances of, seen a third time from
+the other direction:
+
+- **The unreached guard.** The fixture's granularity was *"the command
+  failed"*, which cannot separate "the guard fired" from "an earlier step
+  errored". The assertion was correct and the mechanism could not carry it.
+- **`VIBE_REQUIRE_GH`.** The exit status's granularity is *"every guard call
+  that executed found the tool"*, which cannot separate "every control ran"
+  from "none did". Two sabotages established that (ADR-0008 §9), and the claim
+  was narrowed to what the granularity supports.
+- **Mutation testing, where the assumption ran the other way.** This project's
+  hand sabotage — delete a guard, require red — is mutation testing done
+  manually, so the tool was evaluated as the general form. The evaluation
+  asserted that `cargo-mutants` replaces whole function bodies and therefore
+  could never express removing one guard *clause*, and concluded that a green
+  run would say less than it appears to. **That was read from outside the tool
+  and was wrong.** `cargo mutants --list` settles it without running a single
+  test, and on 27.1.0 it emits `delete ! in create_remote` at exactly the
+  `if !committed` line, alongside `replace reject_dangerous_gh_args -> …
+  with Ok(())`, which is character-for-character the sabotage a human had
+  already run by hand.
+
+The third instance is the useful one precisely because the error went the
+*generous* direction: assuming a mechanism is coarser than it is discards a
+proof you already have, and assuming it is finer manufactures one you do not.
+Both are the same mistake — a conclusion resting on an unmeasured property of
+the instrument — and both are cheap to avoid, because instruments have ways of
+being asked. `--list`, a dry run, a deliberate injection.
+
+**State the version with the answer.** Granularity is a property of a specific
+build of a tool, not of its category: an older or newer operator set moves it,
+and a claim that omits the version rots silently into a claim about whatever is
+installed today.
+
 Where output genuinely must escape, `$GITHUB_STEP_SUMMARY` is readable without
 authentication. **A credential that reads CI logs is not the answer**: this
 project's containment story is built on constructing environments rather than

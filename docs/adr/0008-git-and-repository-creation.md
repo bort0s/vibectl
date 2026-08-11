@@ -637,11 +637,26 @@ crates/vibe-core/src/gh.rs -- --test gh_argv` (27.1.0), which mutates the module
 
 The three caught are exactly the `GhOp::argv` body replacements — `vec![]`,
 `vec![String::new()]`, `vec!["xyzzy".into()]` — which is the same target
-`VIBE_INJECT_HAZARD` was designed to hit. **A control scoped this way going red
-proves its assertions executed**, for the same reason injection would: a skipped
-test cannot fail. So the injected job buys nothing the tool does not already
-give, while costing an injection point per control, an env var, and a second
-place to keep in step.
+`VIBE_INJECT_HAZARD` was designed to hit. So the injected job buys nothing the
+tool does not already give, while costing an injection point per control, an env
+var, and a second place to keep in step.
+
+**The covered claim, at the granularity the evidence has.** Not *"`gh_argv`
+executed"*. `gh_argv.rs` holds three tests; the three caught mutants are all
+`GhOp::argv` replacements, so they are caught by whichever test routes through
+`probe_argv()` — one of the three on a machine without `gh`, two with it. If the
+others went inert tomorrow the scoped run would still report 3 caught. The
+sentence that is true, and the one to cite:
+
+> **The assertions in `gh_argv` that consume `GhOp::argv` executed.**
+
+That is the `VIBE_REQUIRE_GH` narrowing one level down, and the fourth instance
+of the shape ADR-0002 §7's instrument rule now names. Note that this section's
+own requirement — *one invocation per control* — does **not** reach it, because
+"control" there means a file and the granularity available here is a symbol.
+Test-level granularity would close it and is deliberately not taken: the cost
+rises with the number of tests and the value does not, since what is being
+protected is a guard, and a guard is reached through a symbol.
 
 Three things the measurement establishes that argument alone did not:
 
@@ -650,13 +665,14 @@ Three things the measurement establishes that argument alone did not:
   catch all three `argv` mutants, so an inert `gh_argv` would change nothing
   about a whole-suite result. Only a run scoped to one test target says anything
   about that target. Any use of this as an execution proof must be per-control.
-- **A scoped run's MISSED count carries no information.** Nine of thirteen are
-  missed here, and none is a defect: `flag`, `pair`, `needs_network`,
-  `needs_credential` and `as_str` are simply not things `gh_argv` asserts about
-  — `gh.rs`'s unit tests cover them. What the scoped run reports as MISSED is a
-  function of the scope you handed it, which is ADR-0002 §7's instrument rule in
-  its most literal form: **only the caught count means anything at this scope**,
-  and a reader who sees "9 missed" and files bugs has misread the instrument.
+- **A scoped run's MISSED set carries no *defect* information — but it is not
+  meaningless, and the difference is what the gate needs.** Nine of thirteen are
+  missed here and none is a defect: `flag`, `pair`, `needs_network`,
+  `needs_credential` and `as_str` are simply not things `gh_argv` asserts about,
+  and `gh.rs`'s unit tests cover them. A reader who files nine bugs has misread
+  the instrument. What the missed set *does* describe is where that control's
+  boundary falls — which is a fact about the control, not a finding about the
+  code.
 - **`gh`'s presence does not change the number.** `gh_argv` reaches library code
   only through `probe_argv()` → `GhOp::argv()`; it names `--source=.` as a
   literal rather than through `RepoVisibility::flag()`, and never calls `pair`,
@@ -664,6 +680,17 @@ Three things the measurement establishes that argument alone did not:
   `probe_argv()`, so 3/13 holds on a runner with `gh` too. This was measured on
   a machine without `gh`, and that is the reason the result transfers rather
   than a caveat on it.
+
+**The strike removes a design, not a gap. Capability is not continuity.**
+`VIBE_INJECT_HAZARD` was a CI job; the mutants invocation is on demand. The tool
+*can* produce the proof — that is what the run above establishes — but on demand
+it does not produce it *continuously*, and "injection was struck because mutants
+cover it" must not be read as "mutants cover it, ongoing". **Until the
+caught-set gate exists, `gh_argv`'s execution proof depends on a person
+remembering to run the invocation**, which is a weaker guarantee than the struck
+job would have given and is accepted for exactly the reasons in the paragraph
+above: two controls, a reviewer who can still hold the argument. The trigger to
+revisit is the one recorded there, not a feeling that this is covered.
 
 **What is left uncovered, named precisely so nobody re-derives the struck
 design.** `gh_containment.rs` imports only `std`: it asserts on `gh`'s
@@ -674,6 +701,31 @@ would have injected is not in our input, it is in `gh`'s response. The only
 shape that could close it is substituting a deliberately hostile `gh` on `PATH`
 — one that *does* honour the alias — and requiring the control to go red. That
 is a fixture, not a flag, and it is named here and not designed.
+
+**Two things must be recorded with that name, or the trap is sprung by the time
+someone builds it.**
+
+*It is the fifth instance of "the harness and the subject must agree about which
+environment is under test" (ADR-0002 §7), and the first deliberate one.* The
+previous four were accidents — a fixture and a subject reading different config,
+the last of them in production code. This one **constructs** the disagreement on
+purpose: a `PATH` where `gh` is not `gh`. That is legitimate, because the
+environment being disagreed about is the thing under test rather than a
+precondition being assumed, but it means the rule's usual repair ("stop reading
+ambient state") is inverted here, and anyone applying the rule mechanically will
+try to remove the very hazard the fixture exists to plant. The distinction:
+plant the environment deliberately and *state which one the subject will see* —
+what the rule forbids is a disagreement nobody chose.
+
+*It needs its benign twin, and the twin is not obvious.* Requiring red under a
+hostile `gh` is one-sided in the way ADR-0002 §7 rejects: **a hostile `gh` that
+is merely broken produces the same red as one that honours the alias.** A stub
+that exits non-zero, or is not executable, or prints nothing, would satisfy the
+requirement while testing nothing. So the fixture is a pair — the same stub with
+the alias absent, under which the control must go **green** — and the pair is
+what establishes that the redirect, and not the stub's existence, is what the
+control detects. Same structure as the `ext::` control's paired halves, and for
+the same reason.
 
 The requirements worked out for the struck design are kept, because they apply
 to **any** requires-red mechanism including the mutants one:
@@ -767,10 +819,26 @@ going red into a notification nobody reads is the channel-hostage failure the
 `VIBE_REQUIRE_GH` rule exists to prevent, arrived at from the other side: a
 result that has to be *read* is hostage to whichever channel is being watched.
 The two shapes that survive that rule are on-demand with the command written
-down, and a gate that fails where someone already looks. This is the first; the
-gate stays a named option, and it needs a checked-in baseline of known-missed
-mutants, which is a second thing that goes stale silently and deserves its own
-evidence rather than being folded in here.
+down, and a gate that fails where someone already looks. This is the first.
+
+**If the gate is built, it baselines the per-control *caught* set, not the
+missed set.** That distinction is the whole design, and getting it the wrong way
+round is why the gate was first rejected here as unworkable:
+
+- **Caught-set baseline — fires on the right thing.** `gh_argv` catches exactly
+  the three `GhOp::argv` mutants today. A refactor that stops routing
+  `probe_argv()` through `GhOp::argv` takes that set from 3 to 0 while every
+  test stays green, and the gate fires. That is precisely *"a containment
+  function lost its coverage"*, which is the event worth a red check.
+- **Missed-set baseline — fires on everything else.** It goes red when
+  unrelated unasserted code appears anywhere in scope, which is not a
+  containment regression and blocks work that has nothing to do with it. That
+  is the noise that made the gate look not worth building.
+
+The baseline is still a second artefact that can go stale, but the failure mode
+changes shape entirely: a stale *caught* baseline under-reports coverage the
+control has gained, which is visible as a diff the next time anyone re-runs it,
+where a stale missed baseline silently accumulates exemptions.
 
 ```
 cargo mutants --package vibe-core \

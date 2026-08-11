@@ -160,6 +160,14 @@ impl CoreError {
 
 Core errors carry *data* (paths, spans, key names, exit statuses), never a human-facing remediation sentence. `vibectl` owns "did you mean", "run `vibe scan` first", and color. `anyhow` appears only in `vibectl`; `vibe-core` has zero `anyhow` in its public API, so a `?` in core cannot accidentally erase structure.
 
+**What this rule looks like when the second frontend exists, written down before it does.** With one consumer, "core is mute and the CLI speaks" reads as tidiness. With two, it reads as duplication: `vibectl` and the desktop app each write their own sentence for the same `CoreError` or `RemoteBlocked`, and the obvious repair — hoist the string into core so there is one copy — is the wrong one. It is worth stating why now, because the argument is only available before someone is looking at two files that appear to say the same thing.
+
+They do not say the same thing. **What must never be duplicated is the taxonomy — the set of reasons and what each one means — and that is precisely what the enum is, and where it stays.** What is legitimately written twice is *presentation*, and the two presentations are not copies: a CLI's register for "no remote was created" is a paragraph plus paste-ready commands, and a GUI's is a state marker, a disabled action, and a tooltip. Neither is derivable from the other, and a shared string would force one medium into the other's register — usually the GUI into the CLI's, since the CLI is written first.
+
+The test that separates the two cases: **divergence across media is correct; divergence within one medium is drift.** Two frontends rendering the same reason differently is the system working. Two copies of one sentence inside `vibectl` — one in a core `as_str()` and one in the renderer, with the test asserting only the renderer's — is a defect, because nothing keeps them equal and nothing notices when they stop being. That was the actual state of `RemoteBlocked::as_str` and it is what motivated writing this down.
+
+So the direction of repair for a duplicated user-facing string is always **toward the frontend, never toward core**: delete core's copy, let each frontend own its own sentences, and keep in core only the variant that names the reason. A frontend that needs a string for a reason it does not recognise should say it does not recognise it (ADR-0002 §5's treatment of unknown manifest keys), not render a machine key as if it were prose.
+
 `CoreError` and every event/report enum are `#[non_exhaustive]`, since they are public API under semver.
 
 ### 5. Top-level API: a `Registry` handle, not free functions

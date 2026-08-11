@@ -395,6 +395,30 @@ Two things to take from it:
    window between the two snapshots was widest there. "macOS is special" would
    have been a premise, and a wrong one, built from a sample of two.
 
+**An uncompiled test is a test that has not run.** The same family again, one
+step earlier: the rules above are about a control that executes and proves less
+than it appears to. This one is about a control that never executed at all.
+
+A stretch of ten commits — `7b5dac1` through `b71deca`, covering the `ext::`
+control's rewrite, the hooks claim becoming a test, and §7's store-age reporting
+— was authored on a machine with no Rust toolchain. **Five of them said so**
+(`7b5dac1`, `05a8624`, `9706075`, `3caab2e`, `b71deca`): *"Not compiled — no
+cargo on this machine. CI is the first run."* Recording the caveat was right.
+Leaving it recorded indefinitely would not be, because "probably fine, CI will
+tell us" is a claim about work nobody has checked.
+
+**Discharged 2026-08-11.** CI verified each commit individually on push, across
+three platforms; a local stable toolchain then verified the cumulative tree at
+`b71deca` on Windows 10 — **233 tests passing, `clippy -D warnings` clean,
+`rustfmt` clean, and `cargo +1.85.0 check` green**. The distinction is worth
+keeping: CI checked every commit, the local run checked the result of all of
+them. Neither alone is the whole claim.
+
+The general rule: a caveat of this shape is a debt with a due date, not a
+disclaimer. It is discharged by naming what was run, where, and on which
+revision — never by the passage of time or by later work being green on top of
+it.
+
 The corollary, from `W_SCHEMA_MINOR_NEWER`: a warning defined and never emitted
 is a policy that exists only in this document. A test asserting a diagnostic is
 reported must check that something *produces* it, not merely that a consumer

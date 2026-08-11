@@ -64,11 +64,18 @@ pub enum CommitBlocked {
 }
 
 impl CommitBlocked {
+    /// A stable identifier, safe to branch on and safe to print as data.
+    ///
+    /// **Not a sentence.** ADR-0001 §4: core carries the taxonomy, each
+    /// frontend writes its own prose, and a string that lives in both places
+    /// drifts. The `as_str` this replaces held a fragment of English that
+    /// `vibectl` duplicated in its own renderer and asserted only its own copy
+    /// of.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
-            CommitBlocked::NothingToCommit => "nothing to commit",
-            CommitBlocked::NoAuthorIdentity => "git has no author identity configured",
+            CommitBlocked::NothingToCommit => "nothing_to_commit",
+            CommitBlocked::NoAuthorIdentity => "no_author_identity",
         }
     }
 }
@@ -110,12 +117,35 @@ pub enum RemoteBlocked {
 }
 
 impl RemoteBlocked {
+    /// Every variant, for a frontend to check it has a sentence for each.
+    ///
+    /// **This list is a second place to remember, and that is stated rather
+    /// than papered over.** Rust cannot enumerate an enum's variants without a
+    /// macro or a derive, so nothing makes `ALL` complete by construction: add
+    /// a variant, forget to list it here, and a frontend's coverage test stays
+    /// green over a shorter list. What is available — and what
+    /// [`RemoteBlocked::all_is_complete`] does — is to put an **exhaustive
+    /// match beside the list**, so a new variant fails to compile in this file,
+    /// two lines from the thing that needs updating. The break lands next to
+    /// the list; it is not derived from it. See ADR-0001 §4.
+    pub const ALL: [Self; 3] = [Self::GhMissing, Self::NotAuthenticated, Self::NothingToPush];
+
+    /// A stable identifier, safe to branch on and safe to print as data.
+    ///
+    /// **Exhaustive on purpose.** `#[non_exhaustive]` does not constrain the
+    /// crate that owns the type, so this match is the compile-time break that
+    /// makes a new variant impossible to add silently: core stops building,
+    /// the author adds a key, `ALL` grows, and each frontend's coverage test
+    /// then goes red until someone writes the sentence (ADR-0001 §4).
+    ///
+    /// It is a key, not prose. `vibectl` and the desktop app write different
+    /// sentences for the same reason, and neither is core's business.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
-            RemoteBlocked::GhMissing => "gh was not found on this machine",
-            RemoteBlocked::NotAuthenticated => "gh is not authenticated on this machine",
-            RemoteBlocked::NothingToPush => "there is no commit to push",
+            RemoteBlocked::GhMissing => "gh_missing",
+            RemoteBlocked::NotAuthenticated => "not_authenticated",
+            RemoteBlocked::NothingToPush => "nothing_to_push",
         }
     }
 }
@@ -484,6 +514,48 @@ fn run(exec: &dyn ProcessRunner, op: &GitOp) -> Result<crate::exec::CommandOutpu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The break that lands beside `ALL`.**
+    ///
+    /// The `match` is exhaustive, so adding a variant stops this file
+    /// compiling — and the fix is two lines above, in `ALL`. The length
+    /// assertion is a literal for the same reason: it cannot be derived, so it
+    /// is at least made to demand attention rather than to be forgotten
+    /// quietly.
+    ///
+    /// This does **not** prove `ALL` is complete. Nothing available on stable
+    /// does, short of a macro this project declined at two call sites
+    /// (ADR-0001 §4). It puts the compiler's objection next to the list that
+    /// needs editing, which is the strongest link there is here.
+    #[test]
+    fn all_lists_every_variant_and_every_variant_has_a_key() {
+        for v in RemoteBlocked::ALL {
+            match v {
+                RemoteBlocked::GhMissing
+                | RemoteBlocked::NotAuthenticated
+                | RemoteBlocked::NothingToPush => {}
+            }
+        }
+        assert_eq!(
+            RemoteBlocked::ALL.len(),
+            3,
+            "a variant was added: extend ALL, then update this count"
+        );
+
+        // Keys are identifiers, not sentences, and they are distinct — a
+        // duplicate would make two reasons indistinguishable to a frontend.
+        let keys: Vec<&str> = RemoteBlocked::ALL.iter().map(|b| b.key()).collect();
+        let mut sorted = keys.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), keys.len(), "duplicate key: {keys:?}");
+        for k in keys {
+            assert!(
+                !k.contains(' '),
+                "`{k}` reads like prose; keys are identifiers (ADR-0001 §4)"
+            );
+        }
+    }
 
     #[test]
     fn a_branch_that_cannot_be_read_is_none_not_main() {

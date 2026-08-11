@@ -82,14 +82,6 @@ impl RepoVisibility {
             RepoVisibility::Private => "--private",
         }
     }
-
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            RepoVisibility::Public => "public",
-            RepoVisibility::Private => "private",
-        }
-    }
 }
 
 /// Every `gh` invocation this crate may make.

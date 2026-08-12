@@ -522,6 +522,20 @@ enumeration obligation recurs with every new `(program, subcommand)` pair rule 1
 admits — the same granularity the allowlist already keys on, which is where it
 should have been keyed from the start.
 
+**The trigger this amendment installs is now a compile error rather than a
+convention.** *Added 2026-08-12, with the `git check-ignore` call site that
+prompted the amendment.* `GitOp::config_overrides` returns each variant's
+enumeration as constructed `(key, value)` constants, and its match is exhaustive
+with **no wildcard arm**: a new variant does not build until someone answers the
+question for it. The empty slices the existing ops return are therefore answers
+rather than gaps — though they are answers inherited from each op's own
+enumeration, and those predate the `core.fsmonitor` finding, which is exactly
+the staleness this rule says it cannot close by itself.
+
+Note what that trigger does *not* cover, restated because it is the same gap one
+level down: it fires on a new call site, never on a new `git` release. Nothing
+here would catch `core.fsmonitor`'s successor appearing in 2.55.
+
 **And "per invocation" inherits the optimism it corrects, so 4a's outputs are
 mitigations rather than closures — including this one.** Applied reflexively,
 because ADR-0010 records that a mitigation written as a closure is how a gap

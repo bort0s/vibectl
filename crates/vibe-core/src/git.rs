@@ -137,7 +137,59 @@ pub enum GitOp {
     /// be a plausible-looking guess in the one output whose entire purpose is
     /// being correct enough to paste (ADR-0008 §7).
     CurrentBranch { cwd: PathBuf },
+
+    // --- prompt operations (ADR-0010) ------------------------------------
+    /// `git --no-pager check-ignore -- <path>`
+    ///
+    /// Asks git whether its exclusion rules apply to a path. **Asking git
+    /// rather than parsing `.gitignore` is the whole design**, because git
+    /// honours redirects — `core.excludesFile`, nested `.gitignore` files,
+    /// `.git/info/exclude` — that a project may legitimately depend on, and a
+    /// parser of our own would be confidently wrong about all of them
+    /// (ADR-0010 §8).
+    ///
+    /// `--no-pager` precedes the subcommand, so this is the first variant
+    /// whose `argv[0]` is not its subcommand. See [`GitOp::subcommand`].
+    ///
+    /// The `--` is rule 2's separator and is load-bearing: `path` is a file
+    /// name that may begin with `-`.
+    ///
+    /// **The status is the answer, so this op's failures are not errors.** Its
+    /// only caller is [`crate::ignore_state::check_ignore`], which maps the
+    /// whole outcome — including the spawn error that means `git` is absent —
+    /// onto a state rather than a `Result`.
+    CheckIgnore { cwd: PathBuf, path: PathBuf },
 }
+
+/// The 4a enumeration for `git check-ignore`, as constructed config constants.
+///
+/// **Measured on git 2.54.0.windows.1** by planting a hostile per-user config
+/// and pairing it against an empty `HOME` (ADR-0010 §8). Recorded with the
+/// version because a list that is complete on 2.54 is silently a mitigation on
+/// 2.55, and no reader can tell those two states apart.
+///
+/// `core.fsmonitor` is **spawned by `git check-ignore`** — the planted config
+/// produced `error: cannot spawn vibe-nonexistent-fsmonitor-probe` twice, and
+/// the empty one produced nothing. A read-only-looking query is an execution
+/// surface, so the key is neutralised.
+///
+/// **`core.excludesFile` is deliberately absent from this list**, and that is
+/// the finding ADR-0005 §4a was amended for. Under the same paired fixture a
+/// control file moved from exit `1` to exit `0`, which is the redirect this op
+/// exists to honour. Neutralising it would follow 4a's original wording exactly
+/// and destroy the answer. The enumeration is therefore two questions — which
+/// keys execute something, and which keys *carry the answer* — and only the
+/// first set appears here.
+///
+/// `core.pager` is handled by `--no-pager` in [`GitOp::argv`] rather than here:
+/// an argv flag is deterministic, where what an empty `GIT_PAGER` means and how
+/// it ranks against `core.pager` is itself unmeasured (ADR-0005 §4a).
+///
+/// `false` rather than the empty string, for that same reason: `false` is a
+/// documented boolean git parses, where an empty value's meaning is one more
+/// unmeasured fact. Both were measured to silence the spawn; only one rests on
+/// something written down.
+const CHECK_IGNORE_CONFIG: &[(&str, &str)] = &[("core.fsmonitor", "false")];
 
 impl GitOp {
     /// The directory `git` runs in, or the parent the clone lands in.
@@ -156,7 +208,76 @@ impl GitOp {
             | GitOp::Add { cwd, .. }
             | GitOp::Commit { cwd, .. }
             | GitOp::RemoteAdd { cwd, .. }
-            | GitOp::CurrentBranch { cwd } => cwd,
+            | GitOp::CurrentBranch { cwd }
+            | GitOp::CheckIgnore { cwd, .. } => cwd,
+        }
+    }
+
+    /// The subcommand half of rule 1's `(program, subcommand)` pair.
+    ///
+    /// **Read from a match rather than from `argv()[0]`.** That shortcut held
+    /// while every variant's first element was its subcommand, and
+    /// [`GitOp::CheckIgnore`] ended it by carrying a constructed global flag —
+    /// `--no-pager` — ahead of the subcommand. A pair identified by position
+    /// would have silently become `("--no-pager", "check-ignore")` the day that
+    /// variant landed, which is the allowlist's key drifting without anyone
+    /// editing the allowlist.
+    #[must_use]
+    pub fn subcommand(&self) -> &'static str {
+        match self {
+            GitOp::Clone { .. } => "clone",
+            GitOp::RemoteGetUrl { .. } | GitOp::RemoteAdd { .. } => "remote",
+            GitOp::Fetch { .. } => "fetch",
+            GitOp::ResetToFetchHead { .. } => "reset",
+            GitOp::RevParseHead { .. } => "rev-parse",
+            GitOp::LastCommitDate { .. } => "log",
+            GitOp::Init { .. } => "init",
+            GitOp::Add { .. } => "add",
+            GitOp::Commit { .. } => "commit",
+            GitOp::CurrentBranch { .. } => "symbolic-ref",
+            GitOp::CheckIgnore { .. } => "check-ignore",
+        }
+    }
+
+    /// Config keys this invocation neutralises, as `(key, value)` constants.
+    ///
+    /// These reach `git` through constructed `GIT_CONFIG_KEY_n`/`_VALUE_n`
+    /// variables, never through `-c`: rule 2 rejects `-c` categorically, and
+    /// rule 3's carve-out already permits constants we construct ourselves,
+    /// which is how `GIT_CONFIG_NOSYSTEM=1` is set. Writing this as an
+    /// exception to rule 2 is how a rule dies (ADR-0010 §8).
+    ///
+    /// **Exhaustive on purpose, with no wildcard arm.** ADR-0005 §4a's amended
+    /// form found that the config surface is enumerable *per invocation*, not
+    /// per program — the list written while adding `git clone` did not cover
+    /// `git check-ignore`, and nothing revealed that until the new subcommand
+    /// was invoked. A `_ => &[]` arm would let the next variant inherit an
+    /// empty answer by default, which is precisely the silent staleness the
+    /// amendment installs a trigger against. Here the trigger is `E0004`.
+    ///
+    /// The empty slices are therefore answers, not gaps — but they are answers
+    /// **inherited from each op's own enumeration at the time it was added**,
+    /// and those predate the fsmonitor finding. `git add` and `git commit` also
+    /// read the index and may well spawn `core.fsmonitor` too; that is recorded
+    /// as an observation rather than fixed here, because widening a
+    /// neutralisation across call sites this diff did not measure would be
+    /// asserting a result nobody produced — and disabling a real fsmonitor
+    /// daemon on a large repository has a cost those ops never agreed to pay.
+    #[must_use]
+    pub fn config_overrides(&self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            GitOp::CheckIgnore { .. } => CHECK_IGNORE_CONFIG,
+            GitOp::Clone { .. }
+            | GitOp::RemoteGetUrl { .. }
+            | GitOp::Fetch { .. }
+            | GitOp::ResetToFetchHead { .. }
+            | GitOp::RevParseHead { .. }
+            | GitOp::LastCommitDate { .. }
+            | GitOp::Init { .. }
+            | GitOp::Add { .. }
+            | GitOp::Commit { .. }
+            | GitOp::RemoteAdd { .. }
+            | GitOp::CurrentBranch { .. } => &[],
         }
     }
 
@@ -199,6 +320,16 @@ impl GitOp {
                 url.as_str().to_owned(),
             ],
             GitOp::CurrentBranch { .. } => vec![s("symbolic-ref"), s("--short"), s("HEAD")],
+            GitOp::CheckIgnore { path, .. } => vec![
+                // A git-level flag, so it precedes the subcommand. Constructed
+                // here rather than set as `GIT_PAGER=`: deterministic, and it
+                // does not need the environment to mean anything in particular
+                // (ADR-0005 §4a).
+                s("--no-pager"),
+                s("check-ignore"),
+                s("--"),
+                path.to_string_lossy().into_owned(),
+            ],
         }
     }
 
@@ -318,6 +449,11 @@ mod tests {
             GitOp::CurrentBranch {
                 cwd: PathBuf::from("/d/proj"),
             },
+            GitOp::CheckIgnore {
+                cwd: PathBuf::from("/d/proj"),
+                // A prompt file whose name would be hostile in an option slot.
+                path: PathBuf::from(".claude/commands/--upload-pack.md"),
+            },
         ];
 
         for op in &ops {
@@ -326,12 +462,100 @@ mod tests {
             crate::exec::assert_argv_is_clean(&refs)
                 .unwrap_or_else(|e| panic!("{op:?} produced {argv:?}: {e:?}"));
 
-            // Every variant names a subcommand first, never a flag: the
-            // `(program, subcommand)` pair the allowlist keys on.
-            assert!(
-                !argv[0].starts_with('-'),
-                "{op:?} does not start with a subcommand"
-            );
+            // The `(program, subcommand)` pair the allowlist keys on is present
+            // and identified by name.
+            //
+            // **This used to assert `!argv[0].starts_with('-')`**, on the
+            // reading that every variant names its subcommand first.
+            // `CheckIgnore` ends that: `--no-pager` is a *git*-level flag and
+            // has to precede the subcommand. So the invariant moves rather than
+            // relaxes — anything ahead of the subcommand must be a global flag
+            // this crate constructs, and the list of those is two entries long
+            // and enumerated here.
+            const ALLOWED_GLOBAL_FLAGS: &[&str] = &["--no-pager"];
+            let at = argv
+                .iter()
+                .position(|a| a == op.subcommand())
+                .unwrap_or_else(|| panic!("{op:?} does not name {} in {argv:?}", op.subcommand()));
+            for leading in &argv[..at] {
+                assert!(
+                    ALLOWED_GLOBAL_FLAGS.contains(&leading.as_str()),
+                    "{op:?} puts `{leading}` before its subcommand"
+                );
+            }
+        }
+    }
+
+    /// The new call site's argv, spelled out, because it is the one variant
+    /// whose shape is load-bearing in two directions at once: `--no-pager`
+    /// must precede the subcommand to be a git-level flag at all, and `--`
+    /// must precede the path so a prompt file named `-n` is a value.
+    #[test]
+    fn check_ignore_argv_puts_the_pager_flag_first_and_the_separator_before_the_path() {
+        let op = GitOp::CheckIgnore {
+            cwd: PathBuf::from("/d/proj"),
+            path: PathBuf::from(".claude/commands/-n.md"),
+        };
+        assert_eq!(
+            op.argv(),
+            vec!["--no-pager", "check-ignore", "--", ".claude/commands/-n.md"]
+        );
+        assert_eq!(op.subcommand(), "check-ignore");
+        assert_eq!(op.cwd(), Path::new("/d/proj"));
+        // It reads. Nothing here should ever look like a write or a fetch.
+        assert!(!op.is_destructive());
+        assert!(!op.needs_network());
+        assert!(!op.needs_credential());
+    }
+
+    /// The 4a enumeration for this invocation, asserted as a pair.
+    ///
+    /// Both halves matter and only together: the execution surface is
+    /// neutralised, **and** the key that carries the answer is not. A version
+    /// of this that only checked the first half would pass just as happily
+    /// against an implementation that neutralised `core.excludesFile` too and
+    /// returned a confidently wrong answer (ADR-0005 §4a).
+    #[test]
+    fn check_ignore_neutralises_the_execution_surface_and_not_the_answer() {
+        let op = GitOp::CheckIgnore {
+            cwd: PathBuf::from("/d/proj"),
+            path: PathBuf::from("a.md"),
+        };
+        let keys: Vec<&str> = op.config_overrides().iter().map(|(k, _)| *k).collect();
+        assert_eq!(keys, vec!["core.fsmonitor"]);
+        assert_eq!(op.config_overrides()[0].1, "false");
+
+        // The half that is a decision rather than an omission.
+        assert!(
+            !keys.contains(&"core.excludesFile"),
+            "core.excludesFile carries the answer this op exists to ask for; \
+             neutralising it follows 4a's original wording and destroys the result"
+        );
+    }
+
+    /// Every *other* op's enumeration is an answer, not a blank — and the
+    /// answer they inherit is "nothing", from the pass that added them.
+    ///
+    /// Asserted so that widening the neutralisation across call sites becomes a
+    /// deliberate edit to a test that says why it was scoped, rather than a
+    /// quiet change of behaviour for `clone`, `add` and `commit`.
+    #[test]
+    fn only_the_new_call_site_carries_config_overrides() {
+        let cwd = PathBuf::from("/d/proj");
+        for op in [
+            GitOp::Init { cwd: cwd.clone() },
+            GitOp::Add {
+                cwd: cwd.clone(),
+                paths: vec![],
+            },
+            GitOp::Commit {
+                cwd: cwd.clone(),
+                message: "m".to_owned(),
+            },
+            GitOp::Fetch { cwd: cwd.clone() },
+            GitOp::CurrentBranch { cwd },
+        ] {
+            assert!(op.config_overrides().is_empty(), "{op:?}");
         }
     }
 

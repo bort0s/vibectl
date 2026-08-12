@@ -211,6 +211,31 @@ jobs:
           --test gh_containment --test gh_argv
           -- --nocapture --test-threads=1
 
+      # The same shape for `git`, and for the same reason: every control in
+      # ignore_state_git returns early when `git` is absent, which is the green
+      # tick a passing run also produces. VIBE_REQUIRE_GIT turns that into a
+      # failure, so this step passing is the proof the file executed.
+      #
+      # What it protects (ADR-0010 §5, §8, §10): the exit-code mapping that
+      # renders a prompt's privacy. A defect here reports "not ignored" - read
+      # as "you're versioned, all good" - for a file nothing was learned about.
+      # The controls are paired on both axes: Err-versus-Ok (a constructed PATH
+      # with no `git`, against the same input with `git` present) and inside Ok
+      # (an exit 128, against an exit 1 through the identical call).
+      #
+      # Two of these tests re-execute this same binary to construct a child
+      # environment that cannot be set in-process. That composes with
+      # --test-threads=1 - verified by running it, since the child has its own
+      # harness and the parent only waits on a process - so the serial form is
+      # kept for the same reason the gh step uses it: a failure names one test.
+      - name: Verify the ignore-state instrument (ADR-0010 §5, §8, §10)
+        env:
+          VIBE_REQUIRE_GIT: "1"
+        run: >
+          cargo test --locked -p vibe-core
+          --test ignore_state_git
+          -- --nocapture --test-threads=1
+
   msrv:
     name: MSRV (1.85.0)
     runs-on: ubuntu-latest

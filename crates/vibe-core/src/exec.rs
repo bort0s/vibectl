@@ -252,6 +252,28 @@ fn op_env(op: &GitOp) -> BTreeMap<OsString, OsString> {
             }
         }
     }
+
+    // The op's own 4a enumeration, delivered as constructed config.
+    //
+    // `GIT_CONFIG_COUNT`/`_KEY_n`/`_VALUE_n` is named in this module's header
+    // as a channel that reaches `git`'s config without appearing in any
+    // argument — which is exactly why it is *cleared* and then *set* here
+    // rather than filtered. Nothing inherited can arrive on it, and what does
+    // arrive is a fixed list of literals from `GitOp::config_overrides`. That
+    // is rule 3's carve-out for constants we construct ourselves, the same one
+    // `GIT_CONFIG_NOSYSTEM=1` already stands on, and it is deliberately not the
+    // `-c` flag rule 2 rejects categorically (ADR-0010 §8).
+    let overrides = op.config_overrides();
+    if !overrides.is_empty() {
+        env.insert(
+            "GIT_CONFIG_COUNT".into(),
+            overrides.len().to_string().into(),
+        );
+        for (i, (key, value)) in overrides.iter().enumerate() {
+            env.insert(format!("GIT_CONFIG_KEY_{i}").into(), (*key).into());
+            env.insert(format!("GIT_CONFIG_VALUE_{i}").into(), (*value).into());
+        }
+    }
     // No `GITHUB_TOKEN` branch, deliberately: no store op returns true from
     // `needs_credential`, and `git` cannot consume the token anyway. See the
     // method's docs.
@@ -587,6 +609,47 @@ mod tests {
             forwarded,
             vec!["GIT_CONFIG_NOSYSTEM", "GIT_TERMINAL_PROMPT"]
         );
+    }
+
+    /// The 4a neutralisation reaches `git` as constructed config, and only for
+    /// the op that enumerated it.
+    ///
+    /// Paired on purpose. `GIT_CONFIG_COUNT`/`_KEY_n`/`_VALUE_n` is named in
+    /// this module's header as a channel that reaches `git`'s config without
+    /// touching argv — so an assertion that it is *present* for `CheckIgnore`
+    /// is only half the statement. The other half is that it is *absent*
+    /// everywhere else, which is what distinguishes "we set this deliberately"
+    /// from "the environment leaked through".
+    #[test]
+    fn the_config_channel_is_constructed_for_one_op_and_absent_from_the_others() {
+        let get = |env: &BTreeMap<OsString, OsString>, k: &str| {
+            env.get(&OsString::from(k))
+                .map(|v| v.to_string_lossy().into_owned())
+        };
+
+        let env = op_env(&GitOp::CheckIgnore {
+            cwd: std::path::PathBuf::from("/d/proj"),
+            path: std::path::PathBuf::from("a.md"),
+        });
+        assert_eq!(get(&env, "GIT_CONFIG_COUNT").as_deref(), Some("1"));
+        assert_eq!(
+            get(&env, "GIT_CONFIG_KEY_0").as_deref(),
+            Some("core.fsmonitor")
+        );
+        assert_eq!(get(&env, "GIT_CONFIG_VALUE_0").as_deref(), Some("false"));
+        // The count and the pairs must agree, or git reads a key that is not
+        // there and fails the whole invocation.
+        assert!(get(&env, "GIT_CONFIG_KEY_1").is_none());
+
+        let env = op_env(&GitOp::Fetch {
+            cwd: std::path::PathBuf::from("/d/store"),
+        });
+        for absent in ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"] {
+            assert!(
+                get(&env, absent).is_none(),
+                "{absent} reached an op that enumerated no overrides"
+            );
+        }
     }
 
     fn a_gh_op() -> GhOp {

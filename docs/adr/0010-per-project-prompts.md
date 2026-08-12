@@ -2,13 +2,30 @@
 
 ## Status
 
-**Accepted (2026-08-12).** Scoping complete, no code written. This records the
-decisions, the measurements they rest on, and the failure modes that survive
-them.
+**Accepted (2026-08-12).** This records the decisions, the measurements they
+rest on, and the failure modes that survive them.
 
 Scope is **P6's first feature only** — prompt storage, naming, versioning and
 display. Live agent monitoring is the second feature and gets its own document;
 the two share a measurement round and nothing else.
+
+**Implementation, phase 1 of 3 (2026-08-12).** The ignore-state instrument:
+`GitOp::CheckIgnore`, its 4a enumeration, and the outcome-to-state mapping, in
+`crates/vibe-core/src/ignore_state.rs` with its controls in
+`crates/vibe-core/tests/ignore_state_git.rs`. Phase 2 is the filesystem layer —
+reading `.claude/commands` and `~/.claude/commands` and applying the measured
+precedence (§6) — and phase 3 is the display (§7).
+
+The instrument comes first because it is the only part that can be *silently*
+wrong: §5's whole argument is that the safety property lives in the state being
+visible, and a display of a state that quietly reads `not ignored` for a file
+nothing was learned about is worse than no feature. Phases 2 and 3 fail
+loudly — a prompt is listed or it is not.
+
+Two things in §5 changed rather than being implemented: the `128` row is split
+in two, because git's stderr distinguishes causes the exit status merges; and
+residual failure mode 4 is discharged and replaced with a narrower one. Both are
+amended in place and marked with the date.
 
 ## Context
 
@@ -215,6 +232,46 @@ installed"* and *"this is not a repository"* are both `unknown` and have
 So the state is one and the diagnostic is specific, which is also what
 `ErrorPayload`'s `{ code, params }` shape (ADR-0005 §6) exists to carry.
 
+**The `128` row above merged two causes under one label, and the instrument
+turns out to distinguish them.** *Amended 2026-08-12, from the phase 1 diff.*
+The status does not separate them; **stderr does**, and the reason to look was
+that the two have different remedies — *initialise, or move* versus *the path is
+simply wrong* — which is the same ground on which git-absent was separated from
+not-a-repository in the first place. Measured under `LC_ALL=C`, which this
+crate sets positively, so the prose is not at the mercy of the user's locale:
+
+| Cause | Exit | stderr | Remedy |
+| --- | --- | --- | --- |
+| not a git repository | `128` | `fatal: not a git repository (or any of the parent directories): .git` | `git init`, or move the project |
+| a `.git` file pointing nowhere | `128` | `fatal: not a git repository: (NULL)` | same — from the caller's side it is the same fact |
+| path outside the repository | `128` | `fatal: <p>: '<p>' is outside repository at '<root>'` | the path is wrong |
+| no path given | `128` | `fatal: no path specified` | — unreachable; the closed enum always supplies one |
+| usage error | **`129`** | `error: unknown option …` | — a bug on our side |
+
+So they become distinct `ErrorPayload` params rather than one merged cause. Two
+details make this a smaller claim than it looks:
+
+- **`129` was not in the table at all.** A classifier keyed on `128` would have
+  had nowhere to put a usage error, so the implementation keys on *"not `0`, not
+  `1`"* instead. That is a fourth number found while checking a claim about
+  three, which is the ordinary rate at which these tables turn out to be
+  enumerations of what was tried.
+- **The unreachable cause gets no variant.** *"No path specified"* is measured
+  and is not representable through `GitOp::CheckIgnore`, so giving it an arm
+  would be keeping a branch warm for nobody — the same reasoning that leaves
+  `FileOp::Delete` unwritten.
+
+**What this costs is a version-dependent instrument, and the cost is bounded by
+construction.** Matching another tool's prose is exactly the shape ADR-0005 §4a
+warns goes stale on someone else's release schedule. But the residual arm is
+`unknown`: an unrecognised message loses the *specific* cause and keeps the
+*state*, because `ignored` and `not ignored` are reached only from exit `0` and
+exit `1` and never from reading stderr at all. **A git rewording degrades a
+diagnostic; it cannot invent a state.** And it gets a trigger rather than a
+hope — the causes are asserted against the real `git` on the machine under
+`VIBE_REQUIRE_GIT=1`, so a reworded message turns a CI step red instead of
+quietly widening the residual arm.
+
 **The labels are `ignored` and `not ignored` — not `tracked`, and not
 `published`. This name is on its third pass, and each earlier one asserted more
 than the instrument measures.**
@@ -359,6 +416,29 @@ did not construct is not a precondition. Through a shell that absence measures a
 channel returns `3`). **The Rust-side observable is owed by that diff, not
 asserted here**, and it is owed *with* its control rather than as a claim.
 
+**Paid, 2026-08-12.** The observable is `Err(DetectError::NotAttempted)` raised
+by the spawn — no status, as predicted, so absence really is outside the
+exit-code space on the Rust side too. It is asserted against a `PATH` containing
+one empty directory, and paired against the same fixture and the same file with
+`PATH` left alone, which must answer `ignored`.
+
+**The fixture needed a shape worth recording, because the obvious one is not
+available.** A test cannot construct that `PATH` in-process: `std::env::set_var`
+is `unsafe` under edition 2024, which this workspace denies, and is racy across
+parallel tests besides. Adding a PATH override to `SystemRunner` would be
+product API existing for a test. So the test binary **re-executes itself** with
+the constructed environment and runs the real entry point through a real
+`SystemRunner` in the child — which is not merely a workaround: a test that
+rebuilt `child_env`'s allowlist with its own `Command` would be asserting things
+about *its copy* of the environment construction, and would keep passing on the
+day the real one changed. Same fixture serves §8's 4a controls, for the same
+reason.
+
+**And the guard was verified rather than assumed**, the way ADR-0008 §6 verified
+`VIBE_REQUIRE_GH`: run against a `PATH` with no `git` and without the variable,
+the file reports **8 passed in 0.00s** — the indistinguishable green this whole
+discipline exists to catch. With `VIBE_REQUIRE_GIT=1` the same run fails.
+
 ### 9. No launch integration, and this is not open
 
 `vibe` does not spawn `claude`, does not open an editor, and **does not print a
@@ -451,11 +531,30 @@ because writing a mitigation nobody has built is how a gap becomes a claim.
    copies equal — but tolerance of unknown frontmatter keys is a property of
    build 2.1.228, measured once. A release that starts interpreting a key vibe
    writes changes behaviour with no diff on our side.
-4. **The unknown state has two conditions with different remedies, and one of
-   them is unmeasured.** *Not a repository* and *git absent* both mean "vibe
-   cannot say", but a user can act on only one of them. And the Rust-side
-   observable for absence is a spawn error rather than a status, which is stated
-   as owed rather than known.
+4. ~~**The unknown state has two conditions with different remedies, and one of
+   them is unmeasured.**~~ **Discharged by the phase 1 diff, and replaced by a
+   narrower one.** *Not a repository*, *path outside the repository* and *git
+   absent* are now three causes with three remedies, separated because git's
+   stderr separates them (§5). The Rust-side observable for absence is paid too:
+   it is `Err(DetectError::NotAttempted)` from the spawn, asserted against a
+   constructed `PATH` with no `git` and paired against the same input with `git`
+   present.
+
+   **What survives is smaller and is a different kind of thing.** Two of those
+   causes are told apart by matching another tool's prose, so the *taxonomy* is
+   pinned to git 2.54.0.windows.1 in a way the *states* are not. A reworded
+   message costs specificity and cannot cost correctness, and CI turns it red
+   rather than letting it degrade quietly — but "red on the version that changes
+   it" is a trigger, not immunity, and the enumeration behind it is still the
+   list of conditions somebody thought to try.
+
+   **And one merge remains, named rather than papered over.** `git` absent and
+   this crate's own argument refusal both surface as `NotAttempted`, and the
+   error *type* does not distinguish them. The second is unreachable from
+   `GitOp::CheckIgnore` for any path containing a separator, so the cause is one
+   variant carrying the difference in prose — an honest merge, on the same rule
+   that split the other two: separate what the instrument separates, and say so
+   when it does not.
 
 **A fifth is mitigated rather than residual, and the distinction is the point.**
 `.gitignore` ordering is silent — the four lines work only in that order, and the

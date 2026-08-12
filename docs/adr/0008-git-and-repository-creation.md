@@ -434,14 +434,35 @@ first.
 > or "verified per commit" when no such run exists — records something that is
 > not true.
 >
-> The inference this licenses — *a documentation-only commit inherits the
-> previous verdict, so its own run adds nothing* — is a **condition, not a
-> conclusion**: it holds only while no CI job consumes documentation. Today none
-> does; `fmt`, `clippy`, `test` and `msrv` read Rust sources, manifests and the
-> lockfile, and the `ci` job reads only other jobs' results. A markdown lint, a
-> link checker, or a job that renders these ADRs would void it, and would do so
-> without touching this paragraph. State the condition when using the shortcut,
-> or the shortcut outlives the thing that made it true.
+> **A shortcut once licensed here — retired 2026-08-12.** It read: *a
+> documentation-only commit inherits the previous verdict, so its own run adds
+> nothing*, valid only while no CI job consumes documentation. It is withdrawn,
+> and the withdrawal is the more useful record.
+>
+> The condition was **true** — verified twice, the second time by enumerating
+> every one of the workflow's 19 steps with a positive control at each, printing
+> the three block scalars in full, and confirming that no `include_str!` and no
+> test reaches a file under `docs/`. It was retired for its cost, not its truth.
+>
+> **What it bought:** not having to look at one aggregate check, on a run that
+> fires anyway. That is the whole benefit, and it does not survive being written
+> next to what it cost — a standing condition in this ADR, a re-argument when a
+> hypothetical link checker came up, two rounds of verification, and a
+> permanent obligation to re-verify whenever `ci.yml` changes. **A near-zero
+> benefit does not justify a low cost; it justifies only a zero cost.** This was
+> machinery before its third caller, held to a lower standard than the macro in
+> ADR-0001 §4 that was declined for the same reason.
+>
+> **The practice now is: every pushed commit's CI is observed.** No condition to
+> maintain, no trigger to remember, and one API call. The failure it removes is
+> the expensive one — a commit reported as covered because a shortcut outlived
+> the thing that made it true.
+>
+> The enumeration is kept, but as a *fact about the workflow* rather than as a
+> licence: CI runs `fmt`, `clippy`, `test`, `check` and `cargo tree`, plus `jq`
+> over the other jobs' results, and reads Rust sources, manifests and the
+> lockfile. Anyone asking "does CI check X?" can start there — and that answer
+> ages the same way, so it is re-derived rather than trusted.
 
 #### What the green step proves, established by sabotaging it
 

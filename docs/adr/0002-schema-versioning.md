@@ -437,6 +437,27 @@ have to catch a missed renumber is a repository-wide search, which is the thing
 that has now failed twice in two days. A name survives insertion, does not
 collide across series, and cannot be silently stale.
 
+**What naming fixes and what it does not, in the same three results measured for
+`RemoteBlocked::ALL`** — this is the identical hole in prose, and it is recorded
+so nobody tries to close it:
+
+1. **Adding an instance to the corpus without adding it here is caught by
+   nothing.** Prose has no compiler, so this is strictly *weaker* than `ALL`,
+   where a new variant at least fails to build twice before anyone can ignore
+   it.
+2. **A list missing an instance reads exactly like a complete one.** There is no
+   independent enumeration of prose, so any check driven by this list is
+   circular for the same reason it is for `ALL`: an instance absent from the
+   list is never visited, whatever the check asserts about the ones that are.
+3. **Removing an entry is uncaught too** — `ALL` at least has an array length
+   the type checker enforces; a bullet list has no arity.
+
+So the claim is bounded: naming removes the *renumber cascade*, which was the
+thing repeatedly going stale. It does not make the list complete, and no
+arrangement of the list can. Completeness here depends on whoever writes the
+next instance remembering — which is the standing cost of every prose index and
+is not worth machinery to pretend otherwise.
+
 - **The root-relative path fixture** (P2, `Interest`). The fixture built paths
   one way, the walker resolved them another, and the disagreement read as a
   detector bug.
@@ -512,11 +533,25 @@ ASCII**, so the cause-bound repair from the first case would not have caught it.
   reported the zero. **It does not need to know why the tool might be blind**,
   which is exactly why it survives the next cause.
 
-A third failure the same hour is worth contrasting, because it is the *safe*
-mode: a Python pattern built with `[/\\]` raised `PatternError` instead of
-returning empty. A tool that dies is harmless; a tool that returns nothing is
-not. Where a search cannot be made robust, **make it fail loudly rather than
-quietly** — the same preference the availability guards encode.
+A third failure the same hour looked like the *safe* mode and is worth stating
+carefully, because the obvious phrasing of it is wrong. A Python pattern built
+with `[/\\]` raised `PatternError` instead of returning empty.
+
+**"A tool that dies is harmless" is false as written. The property is that it
+died where someone saw it.** In a shell pipeline without `pipefail`, a stage
+that dies mid-chain produces empty output and a zero exit downstream — the exact
+false green this rule defends against, manufactured by the failure mode the
+naive phrasing files as safe. `cmd | head` reports `head`'s status, and that has
+already bitten once in this project, where an exit code read as the tool's was
+`tail`'s. So: **loud only counts where the loudness is observed**, and a crash
+inside a pipeline is not.
+
+**The positive control covers this case too, which is the argument for leaning
+on it rather than on failure modes.** A known count that fails to arrive is a
+failed control whether the tool crashed, returned empty, or was silently blind
+— it does not need to distinguish them. Where a search cannot be made robust,
+make it fail where the failure is seen; where that cannot be guaranteed, the
+control is what remains.
 
 **A rule that earns its keep on its own author within minutes of being written
 has evidence few rules get.** Recorded here rather than smoothed over, because

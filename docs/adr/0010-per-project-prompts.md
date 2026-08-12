@@ -304,19 +304,35 @@ Enumerated by planting a hostile per-user config and pairing it against an empty
   will always invoke it. Whether a TTY changes that is unmeasured; neutralising
   it costs nothing, the same argument as `GH_PAGER=`.
 
-**The enumeration therefore splits, which is new**: execution surfaces are
-neutralised, and one answer-affecting key is deliberately preserved. §4a's usual
-form — neutralise every command the config can name — does not by itself say
-which keys to leave alone.
+**The enumeration splits, and that finding lives in the rule rather than here.**
+Execution surfaces are neutralised, one answer-affecting key is deliberately
+preserved, and a mechanical application of 4a's original form would have
+destroyed the answer while following the rule exactly. **ADR-0005 §4a is amended
+with the two-question form and with why this is not the fourth instance it
+predicted** — the enumeration turns out to be per *invocation* rather than per
+program. Recorded there because the next person applying 4a to a new call site
+will read the rule and not this document.
 
 **The neutralisation goes through constructed environment, not `-c`.** Rule 2
 rejects `-c` categorically; rule 3's carve-out already permits constants we
 construct ourselves, which is how `GIT_CONFIG_NOSYSTEM=1` is set. Writing this as
 an exception to rule 2 is how a rule dies.
 
-**Unmeasured and owed by that diff:** in Rust the absent-git case surfaces as a
-spawn error rather than an exit status, so it never enters the `0/1/128` space at
-all. That is not asserted here.
+**The four states do not arrive through one channel, and the unification is where
+one of them disappears.** Three come from an exit status — `0`, `1`, `128` — and
+the fourth, git absent, arrives in Rust as a **spawn error**, an `Err` raised
+before any status exists. Merging two channels into one enum is ordinary-looking
+code, and it is exactly where a stray `unwrap_or`, `.ok()` or `?` collapses
+absence into the `1` arm: *not ignored*, rendered **tracked**, which is the
+inventing direction §5 exists to block and the one that reads as reassurance.
+
+So this is the call site where the negative control matters most, and **its
+fixture is not the obvious one: it needs a `PATH` with no `git` on it**,
+constructed rather than hoped for — ADR-0002 §7's rule that a precondition you
+did not construct is not a precondition. Through a shell that absence measures as
+`127`, established here with a positive control (`exit 3` through the identical
+channel returns `3`). **The Rust-side observable is owed by that diff, not
+asserted here**, and it is owed *with* its control rather than as a claim.
 
 ### 9. No launch integration, and this is not open
 
@@ -346,7 +362,9 @@ has not been enough.
   looking exactly like proof.
 - **The `128` and `127` paths need their own assertions**, since they are the
   ones a "nonzero means not-ignored" defect renders indistinguishable from
-  tracked.
+  tracked. The git-absent control needs a **constructed `PATH` with no `git`**,
+  and it must assert the state is `unknown` rather than merely *not tracked* —
+  those are one boolean apart and only one of them is a lie.
 - **Any further measurement of Claude Code requires a channel control first** —
   a known input through the identical invocation shape — per ADR-0002 §7's
   channel rule, whose base rate was established by this very round.
@@ -423,3 +441,16 @@ another tool, and both are worse than the visible, honest, partial answer.
 **Not decided here, deliberately:** live agent monitoring, which is P6's second
 feature and rests on hooks rather than on files. It shares this document's
 measurement round and none of its decisions.
+
+**One caveat travels with those shared measurements and must not be dropped on
+the way.** The hook payloads were captured from a fixture **nested inside a
+Claude Code session**, and the child's environment was measured to be
+contaminated by the parent's — `CLAUDE_CODE_EXECPATH` named 2.1.227, the version
+the outer session ran, not the 2.1.228 binary under test. That caveat was
+*dissolved for attribution*, and only for attribution: `cwd`, `transcript_path`
+and `session_id` are inside the payload JSON, so a design that reads the payload
+and never the environment does not inherit it. `CLAUDE_PID` survives too, having
+been cross-checked five times against the PID the launcher reported. **Anything
+else in the monitoring design that depends on how the agent was launched is
+still holding the caveat and must be labelled as measured-from-a-nested-fixture
+until it is re-established from a plain one.**

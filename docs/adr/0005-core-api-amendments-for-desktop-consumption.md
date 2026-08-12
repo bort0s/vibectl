@@ -472,6 +472,50 @@ down. A fourth program — or a `gh` release that adds a config key naming a
 binary — is the next instance, and the rule is what makes it a checklist item
 rather than a discovery.
 
+**4a asks one question where two are needed, and applying it correctly can
+destroy the thing it protects.** *Amended 2026-08-12, from the `git check-ignore`
+call site ADR-0010 §8 adds — the first instance where a key in a per-user config
+is not a hazard but the answer.*
+
+That call site has both kinds in the same file, each measured by planting a
+hostile `HOME` and pairing it against an empty one:
+
+- **`core.fsmonitor` is spawned by `git check-ignore`.** A read-only-looking
+  query is an execution surface. Neutralise.
+- **`core.excludesFile` changes the answer** — a control file moved from exit
+  `1` to exit `0` between the two configs. It is the entire reason for asking
+  `git` rather than parsing `.gitignore` ourselves, because git honours the
+  redirects a project may legitimately depend on. **Neutralising it yields a
+  confidently wrong answer while following this rule exactly.**
+
+So the enumeration is two questions, not one: **which keys make the program
+execute something, and which keys carry the answer we are asking the program
+for.** The first set is neutralised with constructed constants; the second is
+honoured, and honouring it is the point of invoking the program at all.
+
+This is also a fourth reason to decline `GIT_CONFIG_GLOBAL`, and the first one
+that is about correctness rather than cost. A neutralisation whose granularity
+is *the whole config* cannot express the split above — it would take
+`core.excludesFile` with it. The three reasons recorded below are functional
+losses a user might choose to accept; this one makes the answer wrong.
+
+**And this is not the fourth instance the paragraph above predicted.** It is not
+a fourth program and not a new `gh` key. It is `git` — instance one — reached
+through a **different subcommand**, with a key that is *not on the list this rule
+wrote for git*: "transports, `core.sshCommand`, external diff/merge drivers,
+aliases, hooks". `core.fsmonitor` was missing from an enumeration this document
+presents as the example of the work being tractable.
+
+The weakening is the useful part, so it is recorded rather than patched. 4a
+claims the surface "is enumerable per program, in a way *what else might a config
+do?* is not". Measured, the per-program list for `git` was **already incomplete
+when it was written**, and nothing revealed that until a new subcommand was
+invoked. **The surface is enumerable per invocation, not per program.** A list
+written while adding `git clone` does not cover `git check-ignore`, so the
+enumeration obligation recurs with every new `(program, subcommand)` pair rule 1
+admits — the same granularity the allowlist already keys on, which is where it
+should have been keyed from the start.
+
 **5. `CreateFile` containment canonicalizes the parent, not the path.**
 `canonicalize()` fails on a path that does not yet exist, which is every path a
 `CreateFile` op names. So: canonicalize the deepest existing ancestor, verify

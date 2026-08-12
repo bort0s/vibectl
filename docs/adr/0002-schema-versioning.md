@@ -670,6 +670,36 @@ mechanism**, travels in prose, and is exactly what this project has now had to
 retract repeatedly. Suspecting the instrument first is cheap — one control run —
 and it is the only step that fails safe.
 
+**The repair is structural now, because the rate earned it.** Seven instances,
+roughly one per boundary. That rate is not carelessness — Windows plus
+PowerShell plus Git Bash plus MSYS plus markdown is a genuinely hostile
+measurement environment, and the rate is evidence for that rather than against
+the measurer. But a rule remembered at each invocation pays its cost every time,
+and this project's own standard is no machinery before the third caller. This is
+the seventh.
+
+`scratchpad/probe.js` is a search that **cannot report a zero without a passing
+control in the same invocation**: it echoes argv as received, so a channel that
+split or rewrote an argument is visible rather than inferred; it exits `2` and
+prints no target count when the control matches nothing; and it reads UTF-8 and
+matches with JS regex, so no shell locale decides what a character is. It lives
+in the scratchpad rather than the crate, because it is an instrument and not a
+product.
+
+**It produced a false zero on its first real use, and that is the more valuable
+half.** The first version matched **line by line**, so a phrase spanning a
+newline could never match — the exact blindness it was built to prevent, inside
+the prevention mechanism. Its control passed throughout, because the control was
+a single-line string that exercised nothing of the hazard. Only comparing the
+result against a prior measurement from a *different* instrument caught it.
+
+**So a control proves only the hazard class it exercises**, and that is the part
+which generalises past this tool. A control showing the file was read does not
+show that a multi-line pattern could have matched; an ASCII control says nothing
+about a non-ASCII target. **The control must be of the same shape as the
+target**, or its green covers a narrower claim than the one being made — the
+instrument rule above, arriving inside the positive control itself.
+
 **A precondition you did not construct is not a precondition.** Worked example,
 because it is genuinely surprising: *"no git identity configured" is not a
 deterministic state.* When `user.name`/`user.email` are unset, `git` may

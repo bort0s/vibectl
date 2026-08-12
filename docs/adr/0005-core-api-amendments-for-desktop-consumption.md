@@ -580,11 +580,21 @@ git 2.54.0.windows.1, against the same planted-`HOME` fixture:
 
   **The costing changes accordingly.** The observer is not intrinsically clean;
   it is unspawned under a condition we happen to control, and it therefore
-  inherits an obligation rather than being free of one — never hand the child a
-  terminal, and set `GIT_PAGER=` blank as a constructed constant regardless.
-  That neutralisation costs nothing because output is piped, which is the same
-  reasoning 4a already applied to `GH_PAGER=`, and it has the advantage of not
-  resting on the premise the control could not establish.
+  inherits an obligation rather than being free of one.
+
+  **The neutralisation is `git --no-pager`, an argv flag — not `GIT_PAGER=`.**
+  An earlier draft chose the empty environment variable for the right reason,
+  that it does not rest on the premise the control could not establish, and it
+  was the wrong instrument: **what an *empty* `GIT_PAGER` means, and how it
+  ranks against `core.pager` and `PAGER`, is itself an unmeasured fact about
+  git** — the same shape as the claim being corrected, one layer down. Setting
+  it would trade a premise for an assumption.
+
+  `--no-pager` is deterministic, independent of any environment interpretation,
+  and constructed by us in the fixed argv of the op, so rule 2's ban on
+  config-injecting flags does not reach it — it is neither `-c` nor a value in a
+  positional slot. Strictly stronger at zero cost, and unlike `GH_PAGER=` it does
+  not need the environment to mean anything in particular.
 - It needs no repository — exit `0` outside one.
 - Key names are reported **lower-cased** (`excludesFile` → `core.excludesfile`),
   so any comparison against a recognised set must case-fold. Exactly the detail

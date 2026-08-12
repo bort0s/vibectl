@@ -164,10 +164,24 @@ is stated rather than waved at:
 - **Windows:** `GetProcessTimes`. Measured available on this machine at 100 ns
   resolution and stable across reads — and **not universally readable**: one
   process in a four-row sample returned an empty start time, because the datum
-  is access-controlled. The agent runs as the same user, so it should be
-  readable, but *"start time unavailable"* is a third outcome and must not
-  collapse into either alive or gone. That is the same `NotAttempted` line one
-  level down.
+  is access-controlled. *"Start time unavailable"* is therefore a third outcome
+  and must not collapse into either alive or gone. That is the same
+  `NotAttempted` line one level down.
+
+  **And that arm is probably unproducible for this subject**, which is a
+  testability problem rather than a correctness one. The process being inspected
+  is always a `claude`/`node` process the user launched, readable by
+  construction; the empty row came from a protected system process, which this
+  code will never be pointed at. So the state is **required for correctness and
+  may have no reachable fixture** — the unrecognised-`Severity` arm one level
+  down.
+
+  The repair is the one used then, and it is a requirement on the diff rather
+  than a note: **factor the body into a function over the raw outcome, test that
+  function directly with a synthesised "unavailable", and leave only the dispatch
+  uncovered.** What must not happen is the arm shipping as untestable with
+  nothing recorded — an unreachable arm and a forgotten one look identical in a
+  coverage report.
 - **Or one crate covering all three**, which is a dependency added to a library
   every embedder links — the cost ADR-0008 §4 weighed when it declined 18 crates
   for a TLS stack. Not weighed here, because that is a decision for the diff.
@@ -245,12 +259,28 @@ transport worked, the payload arrived. A session with no such marker is
 
 This is `VIBE_REQUIRE_GH`'s shape (ADR-0002 §7) applied to the channel rather
 than to a control: the *result* carries the evidence that the mechanism ran, so
-nothing has to be remembered or checked on the side. It also inherits that rule's
-limit, and the limit must be stated or it will be over-read — **a delivered
-`SessionStart` proves the wiring worked at session start, not that it is working
-now.** A hook removed mid-session, or one that fails on a later event only, is
-not covered. That is the environment-shaped hole closed and the code-shaped one
-left open, exactly as ADR-0002 §7 records for the original.
+nothing has to be remembered or checked on the side.
+
+**The proof is stronger than `SessionStart`, and the strengthening does not help
+where it matters. Both halves are recorded, because either alone misleads.**
+
+- **Stronger:** *every* delivered event proves the channel live **at its own
+  timestamp**, not merely at session start. A hook removed mid-session stops
+  refreshing the proof, so the uncovered window is **"since the last received
+  event"** rather than "since session start" — a much smaller and
+  self-narrowing hole, which any traffic at all closes again.
+- **And useless exactly where it is needed:** that window is precisely the
+  *silent* one, which is when the question is being asked. Traffic refreshes the
+  proof; **absence of traffic is simultaneously the question and the hole.** An
+  agent that has said nothing for an hour is the case a monitor exists for, and
+  it is the one case where the freshness of the wiring proof is at its weakest.
+
+So the limit stands in its sharpened form: **a delivered event proves the wiring
+worked when it was delivered, and nothing about now.** That is the
+environment-shaped hole closed and the code-shaped one left open, exactly as
+ADR-0002 §7 records for the original — and it is why §5's liveness check is not
+redundant with this one. They fail in different directions, which is the only
+reason to have both.
 
 It follows that **monitoring is opt-in per project** — hooks fire only where
 installed — and that an uninstrumented project renders as unknown rather than

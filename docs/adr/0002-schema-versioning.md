@@ -457,6 +457,36 @@ must observe the environment the capability will actually run in.** A test
 harness measuring the wrong world costs a day of debugging; a product measuring
 the wrong world ships.
 
+**The fifth sighting was a `grep`, and it is the one that shows how wide this
+is.** Removing a name from the repository, the search was
+`grep -rniE "ens(ō|o)\b"`. It reported **zero matches over a tree containing
+three** — and reported it in the tone of a completed removal. The disagreement:
+the pattern held a non-ASCII character, `-i` was applied to it, and the shell's
+locale was never declared by either side, so the regex engine and the files
+disagreed about **what a character is**. Neither the harness nor the subject was
+wrong on its own terms; they were reading different worlds, and the environment
+that separated them was one nobody had thought of as an environment at all.
+
+Three things make this the useful instance rather than a footnote:
+
+- **The failure direction inverted.** The previous four produced a *false red*
+  accusing an innocent subject. This produced a **false green** endorsing a
+  removal that had not happened, which nothing downstream would have questioned.
+- **It was not in a test.** It was in a verification step — the thing that
+  checks the work, where a wrong answer is trusted precisely because it came
+  from a check.
+- **It arrived before the anticipated one.** ADR-0008 §9 names a hostile-`gh`
+  fixture as a *deliberate* future instance; that one is now the sixth and is
+  still hypothetical. This one came from a locale, from outside anywhere anyone
+  was watching, which is the argument for indexing on the failure rather than on
+  the case: a rule about test fixtures would not have caught a `grep`, and the
+  next one will not be a `grep` either.
+
+The repair is the same as ever — declare the environment instead of inheriting
+it — and here that means a pattern whose behaviour does not depend on an
+undeclared locale: plain ASCII, no `-i` over non-ASCII, and a **positive
+control** proving the search can find something before its silence is believed.
+
 **A precondition you did not construct is not a precondition.** Worked example,
 because it is genuinely surprising: *"no git identity configured" is not a
 deterministic state.* When `user.name`/`user.email` are unset, `git` may
@@ -591,6 +621,22 @@ instead of passing it.
 This is why the sabotage table above is worth reading in one direction only: a
 row that says *red* is self-proving, and a row that says *green* is a claim
 about the harness as much as about the subject.
+
+**It generalises past sabotages to any search whose expected result is empty.**
+"No occurrences remain", "no call site does this", "nothing else branches on
+that" — each is a green whose two readings are *the thing is absent* and *the
+search was blind*. The fifth harness-versus-subject sighting above is exactly
+that failure, and it produced a clean-looking confirmation of a removal that had
+not happened.
+
+**The repair is the `VIBE_REQUIRE_GH` shape, and it belongs beside that rule
+rather than filed as a searching tip.** Pair the empty result with a **positive
+control in the same invocation**: a pattern known to be present, run through the
+identical tooling, whose non-zero count proves the instrument was working when
+it reported the zero. That is the same property as a missing `gh` panicking —
+**the result carries the proof that the mechanism ran**, so nobody has to
+remember to check separately, and no second channel has to be read. An empty
+result with no positive control is a skipped test wearing a green tick.
 
 Where output genuinely must escape, `$GITHUB_STEP_SUMMARY` is readable without
 authentication. **A credential that reads CI logs is not the answer**: this

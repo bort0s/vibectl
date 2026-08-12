@@ -705,11 +705,18 @@ is a fixture, not a flag, and it is named here and not designed.
 **Two things must be recorded with that name, or the trap is sprung by the time
 someone builds it.**
 
-*It is the fifth instance of "the harness and the subject must agree about which
-environment is under test" (ADR-0002 §7), and the first deliberate one.* The
-previous four were accidents — a fixture and a subject reading different config,
-the last of them in production code. This one **constructs** the disagreement on
-purpose: a `PATH` where `gh` is not `gh`. That is legitimate, because the
+*It would be the **sixth** instance of "the harness and the subject must agree
+about which environment is under test" (ADR-0002 §7), and the first deliberate
+one.* Numbered sixth rather than fifth because the fifth arrived first and
+unplanned, on 2026-08-12: a `grep` whose non-ASCII pattern and the tree
+disagreed about what a character is, under a locale neither declared, reporting
+zero matches over three. **Anticipating one instance did not stop an
+unanticipated one landing first**, which is the argument for indexing the rule
+on the failure rather than on the case.
+
+The previous five were accidents — a fixture and a subject reading different
+config, one of them in production code, one of them a search. This one
+**constructs** the disagreement on purpose: a `PATH` where `gh` is not `gh`. That is legitimate, because the
 environment being disagreed about is the thing under test rather than a
 precondition being assumed, but it means the rule's usual repair ("stop reading
 ambient state") is inverted here, and anyone applying the rule mechanically will

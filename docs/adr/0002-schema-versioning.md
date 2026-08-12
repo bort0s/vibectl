@@ -555,13 +555,27 @@ missing `--test` target both reported `exit=0` — **`tail`'s status, not
 **Every recorded exit-code finding was then audited, not just that one**, since
 one misread makes the class suspect rather than the instance:
 
-| Finding | Form | Result |
-| --- | --- | --- |
-| `git diff --quiet` byte-identity (§9) | `;`-separated, unpiped | `0`, and a positive control on two *different* trees gives `1` |
-| `--exact` filter matching nothing | redirected, unpiped | `0` — matches the record |
-| missing `--test` target | redirected, unpiped | `101` — matches the record |
-| `grep -c` positive control on the rename | stdout, not `$?` | `3` — not an exit code at all |
-| unscoped `--name-only` identity proof | stdout, not `$?` | two ADR files — not an exit code at all |
+| Finding | Reads | Re-measured | Result |
+| --- | --- | --- | --- |
+| `git diff --quiet` byte-identity (§9) | `$?`, unpiped | yes | `0`, and a positive control on two *different* trees gives `1` |
+| `--exact` filter matching nothing | `$?`, unpiped | yes | `0` — matches the record |
+| missing `--test` target | `$?`, unpiped | yes | `101` — matches the record |
+| `grep -c` positive control on the rename | **stdout**, not `$?` | yes | `3` — matches the record |
+| unscoped `--name-only` identity proof | **stdout**, not `$?` | yes | the same two ADR files — matches the record |
+
+**All five were re-run; none was reasoned about.** The column exists because the
+last two belong to a different class, and a row that only said "not an exit
+code" would be a classification sitting where a reader looks for a verification
+status — promoted to *checked* by adjacency to the rows above it. Stating the
+class without stating the status is the same ambiguity this audit exists to
+remove.
+
+The class distinction is worth keeping for a reason beyond bookkeeping: **for a
+stdout finding the pipeline failure mode is the safe one.** A dying producer
+yields empty output, so an expected count simply fails to arrive and the check
+fails — where a dying producer in an exit-code chain yields somebody else's
+zero and the check *passes*. That is why the positive control is expressed as a
+count rather than as a status wherever there is a choice.
 
 Nothing recorded was wrong. **Reporting which findings were checked, not only
 which changed, is the point**: an audit that names only its hits leaves a reader

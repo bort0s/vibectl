@@ -1,4 +1,4 @@
-# ADR-0009: Ensō (GUI) — deferred to after P7, and the constraints that are not stylistic
+# ADR-0009: The Tauri frontend (GUI) — deferred to after P7, and the constraints that are not stylistic
 
 ## Status
 
@@ -7,8 +7,13 @@ records the constraints that must hold *whatever* the design turns out to be, so
 that they are decided before a brief is written rather than argued after a
 screen exists.
 
-First ADR to name the desktop frontend **Ensō**; earlier ADRs call it "a Tauri
-frontend" or "the desktop consumer", and those references mean this.
+**Vocabulary, so it stays fixed.** The GUI is called **the Tauri frontend**, as
+in ADR-0001 and ADR-0005, or "the desktop consumer" where that reads better.
+**It has no name of its own.** The project is VibeCtl and this is its frontend,
+not a second product sharing a library — a name would imply a boundary that does
+not exist and would make every ADR that says "a Tauri frontend" look like it
+means something else. The application icon is unaffected by this: a mark is not
+a name, and it belongs to VibeCtl.
 
 ## Context
 
@@ -75,8 +80,8 @@ The distinction to hold: *"we did not detect this"* and *"this project has no
 stack"* are different facts and must not render the same. That is the same
 `NotAttempted`-versus-`NoEvidence` line ADR-0003 draws, one medium over.
 
-**d. Core mute, frontend speaking.** `vibe-core` produces no prose; Ensō writes
-its own sentences exactly as `vibectl` writes its own. Already decided and
+**d. Core mute, frontend speaking.** `vibe-core` produces no prose; the Tauri
+frontend writes its own sentences exactly as `vibectl` writes its own. Already decided and
 argued in **ADR-0001 §4**, including why two frontends writing different
 sentences for the same reason is correct rather than duplication — cross-
 referenced here, not restated.

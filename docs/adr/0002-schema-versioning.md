@@ -593,6 +593,83 @@ has evidence few rules get.** Recorded here rather than smoothed over, because
 the temptation is to present the discovery and not the immediate relapse, and
 the relapse is the stronger half of the argument.
 
+**The channel between the harness and the subject alters what is sent, and the
+result reads as a measurement of the subject.** Measure the channel with a known
+input before measuring anything through it.
+
+This is a sibling of the environment rule above, not an instance of it, and the
+distinction is worth holding because the repair differs. There, harness and
+subject each read their own world and *disagreed*; the inputs arrived intact.
+Here the two agree about the world and **the input never arrives as sent** — a
+shell, a path translator, an encoder or a variable table rewrites it in transit.
+The subject then answers a question nobody asked, correctly, and the answer is
+recorded against the question that was intended.
+
+The tell is that the subject is innocent *and* blameless-looking: no error, no
+red, a plausible result. Three of the six instances below produced a publishable
+false fact about someone else's tool, and one produced the same false fact
+twice, byte-identically, which is what a stable measurement looks like.
+
+**The repair is the positive control moved one level up**: send a *known* input
+through the identical channel and read back what arrived, before sending the
+input whose answer you do not know. `node -e 'console.log(process.argv)'` on the
+same invocation shape settles in one run what argument survives, and it does not
+need to know which of the channel's many transformations was going to fire —
+which is exactly why it survives the next one. Cause-bound fixes ("quote it",
+"set the locale") close only the transformation already met; six instances in
+one session is the evidence that there is always another.
+
+The instances, named rather than numbered for the reason recorded above, all
+from 2026-08-12 and all on Windows:
+
+- **The dropped empty argument.** PowerShell 5.1 discards `""` from a native
+  command line, so `--tools ""` reached the subject as a bare `--tools` and the
+  run never happened. A harness that then read "the newest transcript" reported
+  the *previous* run's bytes. Two different invocations produced identical
+  output, which read as a reproducible finding rather than as a stale file.
+- **The split quoted argument.** The same shell turned one argv entry into two,
+  and the result read as *Claude Code truncating a quoted slash-command
+  argument*. It does not; it groups by quotes correctly. The false finding was
+  already written down when the control retracted it.
+- **The space-split `Start-Process` argument list.** `-ArgumentList` joins its
+  elements with spaces and quotes nothing, so a prompt arrived as its first
+  word. The subject asked what it was meant to do, and three experiments were
+  scored as *"the model declined the task"* — an inference about a model's
+  behaviour drawn from a string it never received.
+- **The MSYS-rewritten leading slash.** Git Bash converted `/probe2 …` to
+  `C:/Program Files/Git/probe2 …`. The one channel whose transformation is
+  documented and still unguessable from the failure.
+- **The BOM ahead of the slash.** A UTF-8 BOM emitted into the child's stdin
+  meant the prompt did not begin with `/`. It read as *"stdin does not expand
+  slash commands"* — a clean, quotable, entirely false capability claim.
+- **The clobbered case-insensitive variable.** `$s` overwrote `$S`, the scratch
+  path, because PowerShell variable names do not distinguish case. The channel
+  here is the harness's own name table, which is why the rule is about channels
+  and not about shells.
+
+Note what the list does *not* contain: a case where the subject was wrong. Six
+for six, the tool under test behaved correctly and the instrument reported
+otherwise.
+
+**So the base rate is the operating rule, not a moral at the end of a list: when
+the instrument and the subject disagree, suspicion goes to the instrument
+first.** Not second, and not "consider both" — first, and the subject is not
+touched until the channel has been shown to be intact with a known input.
+
+The evidence is a whole measurement round rather than a selected case. Every
+discrepancy observed while measuring Claude Code 2.1.228 on 2026-08-12 was the
+instrument; the count of exceptions is zero. That is the number the ordering has
+to be set by, and it is not close enough to argue about.
+
+The cost of the other ordering is already paid and worth naming, because it is
+not a wasted experiment. Three kill attempts were recorded as *"the model
+declined the long task"* — a conclusion about a third party's behaviour, drawn
+from a prompt that reached it as its first word. Wrong claims about our own code
+are caught by tests; **a wrong claim about someone else's tool has no such
+mechanism**, travels in prose, and is exactly what this project has now had to
+retract repeatedly. Suspecting the instrument first is cheap — one control run —
+and it is the only step that fails safe.
+
 **A precondition you did not construct is not a precondition.** Worked example,
 because it is genuinely surprising: *"no git identity configured" is not a
 deterministic state.* When `user.name`/`user.email` are unset, `git` may

@@ -541,10 +541,31 @@ with `[/\\]` raised `PatternError` instead of returning empty.
 died where someone saw it.** In a shell pipeline without `pipefail`, a stage
 that dies mid-chain produces empty output and a zero exit downstream — the exact
 false green this rule defends against, manufactured by the failure mode the
-naive phrasing files as safe. `cmd | head` reports `head`'s status, and that has
-already bitten once in this project, where an exit code read as the tool's was
-`tail`'s. So: **loud only counts where the loudness is observed**, and a crash
-inside a pipeline is not.
+naive phrasing files as safe. `cmd | head` reports `head`'s status. So: **loud
+only counts where the loudness is observed**, and a crash inside a pipeline is
+not.
+
+That has bitten here, and the case is named because a passing mention of it
+would be the same burial this section exists to prevent. `cargo test … --exact
+definitely_no_such_test 2>&1 | tail -3; echo "exit=$?"` and the same form for a
+missing `--test` target both reported `exit=0` — **`tail`'s status, not
+`cargo`'s.** Caught immediately and re-run unpiped, which is where the recorded
+`0` and `101` in ADR-0008 §9 come from; the piped pair never reached a document.
+
+**Every recorded exit-code finding was then audited, not just that one**, since
+one misread makes the class suspect rather than the instance:
+
+| Finding | Form | Result |
+| --- | --- | --- |
+| `git diff --quiet` byte-identity (§9) | `;`-separated, unpiped | `0`, and a positive control on two *different* trees gives `1` |
+| `--exact` filter matching nothing | redirected, unpiped | `0` — matches the record |
+| missing `--test` target | redirected, unpiped | `101` — matches the record |
+| `grep -c` positive control on the rename | stdout, not `$?` | `3` — not an exit code at all |
+| unscoped `--name-only` identity proof | stdout, not `$?` | two ADR files — not an exit code at all |
+
+Nothing recorded was wrong. **Reporting which findings were checked, not only
+which changed, is the point**: an audit that names only its hits leaves a reader
+unable to tell a clean class from an unexamined one.
 
 **The positive control covers this case too, which is the argument for leaning
 on it rather than on failure modes.** A known count that fails to arrive is a

@@ -8,8 +8,8 @@ constraints that hold *whatever* the design turns out to be — the shape ADR-00
 used for the frontend, and for the same reason: "nothing recorded" and "no
 constraints" are different things.
 
-The decisions still open are listed in §7 as open, with what each would cost.
-They are not decided here because they are not mine to decide.
+The decisions still open are listed in §8, and both are blocked on measurement
+or are display design rather than on anyone's preference.
 
 ## Context
 
@@ -144,20 +144,58 @@ reported the last event still exists. That is the only measured way to separate
 **It does not restore certainty, and reading it as though it did would repeat the
 error one level down.** A live PID says a process exists, not that the agent is
 healthy or making progress; and PIDs are reused by the operating system, so a
-live PID is not proof it is *the same* process — the honest reading pairs the PID
-with something that identifies the run, and `session_id` is in the payload for
-exactly that.
+live PID is not proof it is *the same* process.
 
-The composite that is actually supported by evidence is therefore two facts, kept
-separate rather than collapsed: **what was last reported, and whether the
-reporter still exists.** How many display states that yields, and what each is
-called, is design and is open.
+**Pairing the PID with `session_id` does not fix that, and an earlier draft of
+this section said it did.** `session_id` comes from the payload — it is static
+data written to a file by a process that may no longer exist. It identifies the
+*run*; it says nothing about the process currently holding that PID. On reuse,
+"PID 320 is alive" is a true statement about something else entirely, and no
+amount of payload data touches it. **So "process alive" is itself a potentially
+invented value, sitting inside the fact that is supposed to keep the rest
+honest.**
 
-**What is not available from any measurement here:** a way to distinguish
-*thinking*, *running a long tool*, and *waiting for approval* while the process
-is alive and quiet. `PermissionRequest` and `Notification` exist and were never
-observed firing; whether they close that gap is unmeasured and is the first thing
-to measure when this is picked up.
+**The fix is composite identity — `(pid, start_time)` — where a mismatched start
+time means the PID was recycled.** Its cost is genuinely cross-platform work and
+is stated rather than waved at:
+
+- **Linux:** field 22 of `/proc/<pid>/stat`. No dependency.
+- **macOS:** `sysctl` `KERN_PROC_PID` → `kinfo_proc`. `libc` plus `unsafe`.
+- **Windows:** `GetProcessTimes`. Measured available on this machine at 100 ns
+  resolution and stable across reads — and **not universally readable**: one
+  process in a four-row sample returned an empty start time, because the datum
+  is access-controlled. The agent runs as the same user, so it should be
+  readable, but *"start time unavailable"* is a third outcome and must not
+  collapse into either alive or gone. That is the same `NotAttempted` line one
+  level down.
+- **Or one crate covering all three**, which is a dependency added to a library
+  every embedder links — the cost ADR-0008 §4 weighed when it declined 18 crates
+  for a TLS stack. Not weighed here, because that is a decision for the diff.
+
+**Without something of that shape, liveness is an inference wearing the costume
+of a fact**, and it belongs in the same category as the silence this whole design
+refuses to read.
+
+**How much is actually unresolved while a process is alive and quiet — narrower
+than an earlier draft claimed.** The measured pairs close part of it: `PreToolUse`
+carries `tool_use_id` and `PostToolUse` closes it with the same value
+(`toolu_01AfLoKWUmCsA7LtkYkBNsaS`, observed in both), and the mid-tool kill left
+an opened id with no close. So **an unmatched `tool_use_id` with the reporter
+alive is a tool in flight — a reported fact, not an inference from silence, and
+it is not thinking.**
+
+What remains is one distinction, possibly two, not three:
+
+- **Inside an open `tool_use_id`:** a slow tool and an agent waiting for approval
+  are indistinguishable — *if* approval is requested within the tool window,
+  which is **unmeasured**. Headless invocation auto-denies, so no fixture here
+  produced an approval prompt.
+- **With no open `tool_use_id` and the reporter alive:** thinking or streaming.
+
+`PermissionRequest` and `Notification` were never observed firing and are what
+would close the first bullet. Measuring them is the first thing to do when this
+is picked up, and the second is establishing whether an approval wait sits inside
+the tool window at all.
 
 ### 6. What must be true of the display, whatever it looks like
 
@@ -173,27 +211,60 @@ to measure when this is picked up.
   "stopped". This is the same `NotAttempted`-versus-`NoEvidence` line ADR-0003
   draws and ADR-0010 §6 applies to shadowing.
 
-### 7. Open, and not mine to decide
+### 7. Vibe may write hook config, as one explicit act — and the wiring carries its own proof
 
-Listed with what each costs, so the next round starts with numbers.
+**Decided.** An earlier draft left this open on the ground that hooks create a
+consistency relationship between two artifacts, which is the shape ADR-0010 §3
+rejected for prompts, and doubted whether the reasoning transferred *because the
+second artifact is configuration rather than content*. **That was the wrong
+distinction.** ADR-0010 §3 did not reject writing; it rejected **sync** — a
+standing obligation to keep two things equal, discharged silently and repeatedly.
 
-1. **Where hook configuration lives, and who writes it.** `settings.json` is
-   shared and versioned by the same argument ADR-0010 §3 makes for prompts;
-   `settings.local.json` is per-machine and conventionally ignored. Both load
-   (§2), so the choice is not about whether it works. The cost that makes this a
-   real decision: **vibe writing hook config is not the singular user-initiated
-   write ADR-0010 §3 permitted itself.** Hooks must stay in step with what vibe
-   expects to receive, which is a consistency relationship between two artifacts
-   — the shape ADR-0010 rejected for prompts. Whether that reasoning transfers is
-   the question, and it may not: the second artifact here is configuration rather
-   than a copy of content.
-2. **Whether monitoring is opt-in per project.** Hooks only fire where they are
-   installed, so an uninstrumented project is invisible — and per §6 invisible
-   must not render as stopped.
-3. **Whether `PermissionRequest` and `Notification` are used**, which cannot be
-   decided before they are measured.
+So the permitted shape is the one ADR-0010 §3 already permitted itself: **an explicit
+`vibe monitor install` — singular, user-initiated, never automatic.** What must
+not exist is silent repair of drift.
 
-### 8. Negative-control obligations for whatever gets built
+**And drift is not answered by syncing; it is answered by versioning the
+contract.** The installed hook declares which contract version it implements,
+vibe reads that declaration, and **a mismatch is reported, never repaired.** A
+repair would be sync under another name, and it would do it at the moment the
+user is least able to see it.
+
+**The larger hazard is not the write, and it outranks it: silent
+non-delivery.** If the hook is missing, misconfigured, broken, or removed, vibe
+receives nothing — and **"no events" is indistinguishable from "the agent is not
+running"**. That is constraint 5 at the centre of this feature, in its worst
+form, because the default reading is the reassuring one: an empty monitor looks
+like a quiet machine.
+
+**Therefore the governing constraint is not about writing at all: the wiring must
+carry its own proof, per session.** A session that has delivered a `SessionStart`
+has demonstrated its wiring **live, for that session** — the hook ran, the
+transport worked, the payload arrived. A session with no such marker is
+**unknown**, never idle, and no amount of subsequent silence upgrades it.
+
+This is `VIBE_REQUIRE_GH`'s shape (ADR-0002 §7) applied to the channel rather
+than to a control: the *result* carries the evidence that the mechanism ran, so
+nothing has to be remembered or checked on the side. It also inherits that rule's
+limit, and the limit must be stated or it will be over-read — **a delivered
+`SessionStart` proves the wiring worked at session start, not that it is working
+now.** A hook removed mid-session, or one that fails on a later event only, is
+not covered. That is the environment-shaped hole closed and the code-shaped one
+left open, exactly as ADR-0002 §7 records for the original.
+
+It follows that **monitoring is opt-in per project** — hooks fire only where
+installed — and that an uninstrumented project renders as unknown rather than
+idle, per §6.
+
+### 8. Open, and not mine to decide
+
+1. **Whether `PermissionRequest` and `Notification` are used**, which cannot be
+   decided before they are measured (§5).
+2. **The display shape and the state names.** How many states the two facts of §5
+   yield, and what each is called, is design; §6 constrains it and does not
+   settle it.
+
+### 9. Negative-control obligations for whatever gets built
 
 - **The third state needs a paired control**, per ADR-0002 §7's rule against
   one-sided ones: an agent killed mid-tool must render as the third state, **and
@@ -202,6 +273,12 @@ Listed with what each costs, so the next round starts with numbers.
 - **The dedupe needs a control that both files are declaring hooks**, or it tests
   nothing — the union in §2 is the precondition, and a fixture with hooks in one
   file only would pass while the defect ships.
+- **The wiring proof needs its own paired control**, because it is the one thing
+  everything else rests on: a session with hooks installed must render as
+  *observed*, **and the same session with the hook config removed must render as
+  unknown rather than idle**. A build that renders unknown only when it has no
+  events at all satisfies neither half meaningfully, and the failure is silent by
+  construction.
 - **Any further measurement of Claude Code needs a channel control first** —
   ADR-0002 §7's channel rule, whose base rate came from this feature's own
   measurement round, where six of six discrepancies were the instrument.
@@ -222,6 +299,6 @@ partial by construction. The alternative — inferring state from liveness or fi
 timestamps — covers everything and is wrong in a way the user cannot see, which
 is the trade this project has consistently refused.
 
-**Not decided here, deliberately:** every question in §7, plus the shape of the
-display. Those need one more measurement round and one decision that is the
-owner's.
+**Not decided here, deliberately:** the two questions in §8. One is blocked on
+measuring `PermissionRequest` and `Notification`; the other is display design,
+which §6 constrains and does not settle.

@@ -553,11 +553,38 @@ git 2.54.0.windows.1, against the same planted-`HOME` fixture:
 - `git config --list --show-origin --show-scope` reports **every key in effect**
   with its scope and originating file. Paired: all four planted keys appear
   under the hostile `HOME`, none under an empty one.
-- **The observer does not spawn what it observes.** Under the identical hostile
+- **The observer does not spawn `core.fsmonitor`.** Under the identical hostile
   config, `git config --list` produced an empty stderr and exit `0`, while
-  `git check-ignore` produced the `core.fsmonitor` spawn error. That property is
-  what makes the mechanism usable at all, and it was measured rather than
-  assumed.
+  `git check-ignore` produced the spawn error. Paired, both directions, one key.
+
+  **That result was first written up as the general claim "it does not spawn
+  what it observes", and the generalisation was wrong** — corrected the same
+  day, on challenge, before it was relied on. `core.pager` was among the four
+  planted keys and did not fire either, but *not firing* proves nothing on its
+  own here: git consults the pager only when stdout is a terminal, so the
+  experiment may simply have ended before the mechanism, which is §7's unreached
+  guard.
+
+  The control settles which: **`git --paginate log -1` — the canonical pager
+  user — also spawns nothing** under this fixture, with the pager named by the
+  per-user config *and* separately by `GIT_PAGER`. So the instrument cannot
+  observe a pager spawn at all under non-terminal stdout, and the honest reading
+  is not "this subcommand is pager-free" but **"no pager is spawned when stdout
+  is not a terminal, for any of the three commands tried"**.
+
+  **That control is one-sided and is recorded as such.** The paired half —
+  mechanism present *with* a terminal, absent without — could not be run: no pty
+  is constructible in this environment (`script` is absent). So the result
+  establishes that the hazard is absent under our condition and does **not**
+  establish that the condition is what suppresses it.
+
+  **The costing changes accordingly.** The observer is not intrinsically clean;
+  it is unspawned under a condition we happen to control, and it therefore
+  inherits an obligation rather than being free of one — never hand the child a
+  terminal, and set `GIT_PAGER=` blank as a constructed constant regardless.
+  That neutralisation costs nothing because output is piped, which is the same
+  reasoning 4a already applied to `GH_PAGER=`, and it has the advantage of not
+  resting on the premise the control could not establish.
 - It needs no repository — exit `0` outside one.
 - Key names are reported **lower-cased** (`excludesFile` → `core.excludesfile`),
   so any comparison against a recognised set must case-fold. Exactly the detail

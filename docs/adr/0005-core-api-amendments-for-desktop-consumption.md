@@ -499,6 +499,12 @@ is *the whole config* cannot express the split above — it would take
 `core.excludesFile` with it. The three reasons recorded below are functional
 losses a user might choose to accept; this one makes the answer wrong.
 
+**Cost and correctness do not add, they order.** Filing this as a fourth bullet
+alongside the others would invite someone to weigh three acceptable losses
+against one and conclude the balance had shifted. It has not: an option that
+returns a wrong answer is out regardless of how the functional costs weigh, and
+the three below only ever mattered while the option was still admissible.
+
 **And this is not the fourth instance the paragraph above predicted.** It is not
 a fourth program and not a new `gh` key. It is `git` — instance one — reached
 through a **different subcommand**, with a key that is *not on the list this rule
@@ -515,6 +521,69 @@ written while adding `git clone` does not cover `git check-ignore`, so the
 enumeration obligation recurs with every new `(program, subcommand)` pair rule 1
 admits — the same granularity the allowlist already keys on, which is where it
 should have been keyed from the start.
+
+**And "per invocation" inherits the optimism it corrects, so 4a's outputs are
+mitigations rather than closures — including this one.** Applied reflexively,
+because ADR-0010 records that a mitigation written as a closure is how a gap
+becomes a claim, and a rule that produces such labels must wear one itself.
+
+The new claim rests on exactly the confidence the old one did; it is only harder
+to falsify. Note *how* the incompleteness surfaced: **an accident found it, not a
+check.** A subcommand was invoked for an unrelated reason and a spawn error
+appeared. Nothing in this rule would have caught it, and nothing in the amended
+rule would catch the same thing one level down.
+
+Staleness arrives on two channels and only one has a trigger:
+
+- **New call sites** — covered, because a new `(program, subcommand)` pair is a
+  diff someone reviews. That is the trigger this amendment installs.
+- **Upstream releases adding config keys** — **not covered at all.** `git` and
+  `gh` add keys on their own schedule, with no diff on our side and nothing to
+  review. A list that is complete on 2.54 is silently a mitigation on 2.55, and
+  no reader can tell the two states apart.
+
+So the honest form of any 4a result is *"the surfaces we found on this version"*,
+with the version recorded beside it — never *"the surfaces"*. That is the same
+discipline §7 requires of an instrument's measured properties, applied to the
+output of a rule instead of to a tool.
+
+**A mechanism that inverts the failure mode, costed and not taken.** Measured on
+git 2.54.0.windows.1, against the same planted-`HOME` fixture:
+
+- `git config --list --show-origin --show-scope` reports **every key in effect**
+  with its scope and originating file. Paired: all four planted keys appear
+  under the hostile `HOME`, none under an empty one.
+- **The observer does not spawn what it observes.** Under the identical hostile
+  config, `git config --list` produced an empty stderr and exit `0`, while
+  `git check-ignore` produced the `core.fsmonitor` spawn error. That property is
+  what makes the mechanism usable at all, and it was measured rather than
+  assumed.
+- It needs no repository — exit `0` outside one.
+- Key names are reported **lower-cased** (`excludesFile` → `core.excludesfile`),
+  so any comparison against a recognised set must case-fold. Exactly the detail
+  that makes a match silently miss.
+- Noise is small in practice: **28 keys in effect** in this repository on this
+  machine, across ten sections, with no global scope present at all.
+
+**What it buys:** the failure inverts from *"we forgot a key"*, which is silent
+and unbounded, to *"there is a key here we do not recognise"*, which is
+observable and flaggable. That is rule 1's closed-enum pattern applied to
+configuration — a known-benign set where an unrecognised key is a finding — and
+it goes stale in the safe direction.
+
+**What it does not buy, which is the bound:** it does not say which of the
+present keys *execute* something. It converts an unbounded unknown into a
+bounded one and does not close the enumeration; two versions can agree on a
+key's name and differ on whether it spawns.
+
+**What it costs:** it runs on the user's machine at run time, so it is not a
+static guarantee, and it is another subprocess per invocation. And **the
+observer is itself a call site under rule 1**, so adopting it means enumerating
+its own surface — measured empty above for the one hazard we have, on that
+version, which is a fact about the version and not a property of the subcommand.
+
+Not taken. Recorded costed so the next call site decides with numbers rather
+than from scratch.
 
 **5. `CreateFile` containment canonicalizes the parent, not the path.**
 `canonicalize()` fails on a path that does not yet exist, which is every path a

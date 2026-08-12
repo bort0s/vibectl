@@ -365,6 +365,12 @@ has not been enough.
   tracked. The git-absent control needs a **constructed `PATH` with no `git`**,
   and it must assert the state is `unknown` rather than merely *not tracked* —
   those are one boolean apart and only one of them is a lie.
+- **That control must be paired**, for the reason §7 gives for every one-sided
+  control: `PATH` without `git` must yield `unknown`, **and the same input with
+  `git` present must yield `tracked` or `not tracked`**. A implementation that
+  returns `unknown` unconditionally — a broken invocation, a swallowed error, a
+  state machine wired to one arm — satisfies the unpaired half perfectly, and
+  the green would mean nothing.
 - **Any further measurement of Claude Code requires a channel control first** —
   a known input through the identical invocation shape — per ADR-0002 §7's
   channel rule, whose base rate was established by this very round.

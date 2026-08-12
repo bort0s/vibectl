@@ -365,12 +365,39 @@ has not been enough.
   tracked. The git-absent control needs a **constructed `PATH` with no `git`**,
   and it must assert the state is `unknown` rather than merely *not tracked* —
   those are one boolean apart and only one of them is a lie.
-- **That control must be paired**, for the reason §7 gives for every one-sided
-  control: `PATH` without `git` must yield `unknown`, **and the same input with
-  `git` present must yield `tracked` or `not tracked`**. A implementation that
-  returns `unknown` unconditionally — a broken invocation, a swallowed error, a
-  state machine wired to one arm — satisfies the unpaired half perfectly, and
-  the green would mean nothing.
+- **That control must be paired**, for the reason ADR-0002 §7 gives for every
+  one-sided control: `PATH` without `git` must yield `unknown`, **and the same
+  input with `git` present must yield `tracked` or `not tracked`**. An
+  implementation that returns `unknown` unconditionally — a broken invocation, a
+  swallowed error, a state machine wired to one arm — satisfies the unpaired
+  half perfectly, and the green would mean nothing.
+- **And it must be paired on the second axis too, which the first pair never
+  touches.** Both halves above stay inside the `Err`-versus-`Ok` split. The
+  collapse that matters is *inside* `Ok`: a `128` read as a `1`, an error
+  rendered as **tracked**. So a second pair, same `git` present: one input
+  yielding `128` (a path outside the repository, or no repository) and one
+  yielding `1`.
+- **There is a third outcome source, and it is the one written by default.**
+  `CommandOutput::status` is `Option<i32>`, so the sources are `Err` (spawn
+  failed), **`Ok` with no exit code**, and `Ok` with a code. `success()` is
+  `false` for the middle one, so the natural `if success() { … } else { … }`
+  renders it as **not tracked** — the inventing direction reached without anyone
+  making a mistake, by writing the obvious branch.
+
+  **The arm is named for its consequence, not its cause: "no exit code".** On
+  Unix the cause is termination by signal; on Windows there are no signals and a
+  code is returned for essentially everything, so `None` there is the
+  *we-do-not-understand-this* class — which has an even stronger claim to
+  `unknown`. The cause varies by platform and the mapping does not.
+
+  **Coverage, and this is not the unreachable-arm case.** The mapping is
+  factored into a function over the raw outcome and tested on all three
+  platforms with a synthesised no-exit-code value — *and*, because the outcome is
+  genuinely reachable on two of the three runners, **a real test that `SIGKILL`s
+  the child, gated to Unix**. Windows keeps mapping-only coverage, recorded as a
+  declared platform limit rather than a choice. Filing a synthesised value as the
+  best available on all three would be calling something unreachable while it is
+  in reach on two runners out of three.
 - **Any further measurement of Claude Code requires a channel control first** —
   a known input through the identical invocation shape — per ADR-0002 §7's
   channel rule, whose base rate was established by this very round.

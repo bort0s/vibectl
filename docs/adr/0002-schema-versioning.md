@@ -424,20 +424,31 @@ A test that constructs its preconditions differently from how the code under
 test observes them is measuring something else — and it fails in the direction
 that looks like a finding about the subject.
 
-This is the class the previous three rules are instances of, named late because
-it took three sightings to see it:
+This is the class several earlier rules are instances of, named late because it
+took three sightings to see it.
 
-- **P2, `Interest` and root-relative paths.** The fixture built paths one way,
-  the walker resolved them another, and the disagreement read as a detector bug.
-- **The `git()` fixture helper.** It discarded exit status, so a failed
-  `git commit` let the hooks control report "the probes never fired" — a false
-  negative accusing a subsystem that was innocent.
-- **`new_git_cli` and the git identity.** The test probed `git config
-  user.email` in *its own* environment; `vibe` runs `git` under `env_clear()`
-  plus `GIT_CONFIG_NOSYSTEM=1`. A system-level `gitconfig` is visible to one and
-  invisible to the other, so the two disagreed about whether an identity
-  existed. It passed on Linux and Windows and failed on macOS, and the failure
-  named `vibe`.
+**The instances are named, not numbered, and this list is the only place that
+knows how many there are.** Ordinals were tried and are a bad identifier in this
+corpus: "the fifth" already means three unrelated things across these documents
+— an instance of *this* rule, a member of the negative-control family, and
+product constraint 5 — so an ordinal disambiguates nothing on its own. Worse,
+every new instance renumbers the ones after it, and the mechanism that would
+have to catch a missed renumber is a repository-wide search, which is the thing
+that has now failed twice in two days. A name survives insertion, does not
+collide across series, and cannot be silently stale.
+
+- **The root-relative path fixture** (P2, `Interest`). The fixture built paths
+  one way, the walker resolved them another, and the disagreement read as a
+  detector bug.
+- **The exit-status-discarding `git()` helper.** It swallowed exit status, so a
+  failed `git commit` let the hooks control report "the probes never fired" — a
+  false negative accusing a subsystem that was innocent.
+- **The ambient-`gitconfig` identity probe** (`new_git_cli`). The test read
+  `git config user.email` in *its own* environment; `vibe` runs `git` under
+  `env_clear()` plus `GIT_CONFIG_NOSYSTEM=1`. A system-level `gitconfig` is
+  visible to one and invisible to the other, so the two disagreed about whether
+  an identity existed. It passed on Linux and Windows and failed on macOS, and
+  the failure named `vibe`.
 
 The fix is never a better probe. It is to stop reading ambient state: plant the
 environment the test intends — a `HOME`, a config directory, a `PATH` — and pass
@@ -445,7 +456,8 @@ it to the subject the same way the subject will read it. A probe and a subject
 that consult different sources will eventually disagree, and the disagreement
 surfaces as a platform-specific red that costs a day.
 
-**The fourth sighting was in shipping code, not in a test, and that is worse.**
+**The inherited-environment `gh` probe — the first sighting in shipping code
+rather than in a test, and that is worse.**
 `repo::gh_available()` span `gh --version` with the *inherited* environment,
 while the `gh` invocation it gates would have run under `env_clear()` plus an
 allowlist. Same two sources, same eventual disagreement — except that no test
@@ -457,8 +469,8 @@ must observe the environment the capability will actually run in.** A test
 harness measuring the wrong world costs a day of debugging; a product measuring
 the wrong world ships.
 
-**The fifth sighting was a `grep`, and it is the one that shows how wide this
-is.** Removing a name from the repository, the search was
+**The locale-blind `grep` — the one that shows how wide this is.**
+Removing a name from the repository, the search was
 `grep -rniE "ens(ō|o)\b"`. It reported **zero matches over a tree containing
 three** — and reported it in the tone of a completed removal. The disagreement:
 the pattern held a non-ASCII character, `-i` was applied to it, and the shell's
@@ -469,23 +481,47 @@ that separated them was one nobody had thought of as an environment at all.
 
 Three things make this the useful instance rather than a footnote:
 
-- **The failure direction inverted.** The previous four produced a *false red*
-  accusing an innocent subject. This produced a **false green** endorsing a
-  removal that had not happened, which nothing downstream would have questioned.
+- **The failure direction inverted, and that is the whole point.** Every earlier
+  instance produced a *false red* accusing an innocent subject — loud, and
+  somebody investigates a red. This produced a **false green** endorsing a
+  removal that had never happened, and **nobody investigates a green.** Same
+  class, opposite consequence, and the second is the one that survives.
 - **It was not in a test.** It was in a verification step — the thing that
   checks the work, where a wrong answer is trusted precisely because it came
   from a check.
-- **It arrived before the anticipated one.** ADR-0008 §9 names a hostile-`gh`
-  fixture as a *deliberate* future instance; that one is now the sixth and is
-  still hypothetical. This one came from a locale, from outside anywhere anyone
-  was watching, which is the argument for indexing on the failure rather than on
-  the case: a rule about test fixtures would not have caught a `grep`, and the
-  next one will not be a `grep` either.
+- **It arrived before the anticipated one.** ADR-0008 §9 had already named a
+  hostile-`gh` fixture as a *deliberate* future instance of this rule. That one
+  is still hypothetical; this one landed first, from a locale, from outside
+  anywhere anyone was watching. **Anticipating one instance did not stop an
+  unanticipated one arriving first**, which is the argument for indexing on the
+  failure rather than on the case: a rule about test fixtures would not have
+  caught a `grep`, and the next one will not be a `grep` either.
 
-The repair is the same as ever — declare the environment instead of inheriting
-it — and here that means a pattern whose behaviour does not depend on an
-undeclared locale: plain ASCII, no `-i` over non-ASCII, and a **positive
-control** proving the search can find something before its silence is believed.
+**The two repairs are not peers, and filing them as equals would teach the wrong
+lesson.** Within minutes of writing the paragraph above, the same author's next
+search was blind again — `"sixth instance"` against `**sixth** instance`, where
+markdown emphasis sits between the two words. That second case was **entirely
+ASCII**, so the cause-bound repair from the first case would not have caught it.
+
+- **Cause-bound, and it will keep failing:** avoid what made *this* search
+  blind — plain ASCII patterns, no `-i` over non-ASCII, no assumption about the
+  locale. Necessary, and it only ever closes the causes already met.
+- **Cause-indifferent, and it caught both:** the **positive control**. A pattern
+  known to be present, run through the identical tooling in the same
+  invocation, whose non-zero count proves the instrument was working when it
+  reported the zero. **It does not need to know why the tool might be blind**,
+  which is exactly why it survives the next cause.
+
+A third failure the same hour is worth contrasting, because it is the *safe*
+mode: a Python pattern built with `[/\\]` raised `PatternError` instead of
+returning empty. A tool that dies is harmless; a tool that returns nothing is
+not. Where a search cannot be made robust, **make it fail loudly rather than
+quietly** — the same preference the availability guards encode.
+
+**A rule that earns its keep on its own author within minutes of being written
+has evidence few rules get.** Recorded here rather than smoothed over, because
+the temptation is to present the discovery and not the immediate relapse, and
+the relapse is the stronger half of the argument.
 
 **A precondition you did not construct is not a precondition.** Worked example,
 because it is genuinely surprising: *"no git identity configured" is not a
@@ -625,9 +661,8 @@ about the harness as much as about the subject.
 **It generalises past sabotages to any search whose expected result is empty.**
 "No occurrences remain", "no call site does this", "nothing else branches on
 that" — each is a green whose two readings are *the thing is absent* and *the
-search was blind*. The fifth harness-versus-subject sighting above is exactly
-that failure, and it produced a clean-looking confirmation of a removal that had
-not happened.
+search was blind*. The locale-blind `grep` above is exactly that failure, and it
+produced a clean-looking confirmation of a removal that had not happened.
 
 **The repair is the `VIBE_REQUIRE_GH` shape, and it belongs beside that rule
 rather than filed as a searching tip.** Pair the empty result with a **positive

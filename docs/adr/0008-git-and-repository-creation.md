@@ -650,8 +650,12 @@ sentence that is true, and the one to cite:
 
 > **The assertions in `gh_argv` that consume `GhOp::argv` executed.**
 
-That is the `VIBE_REQUIRE_GH` narrowing one level down, and the fourth instance
-of the shape ADR-0002 §7's instrument rule now names. Note that this section's
+That is the `VIBE_REQUIRE_GH` narrowing one level down, and another instance of
+the shape ADR-0002 §7's instrument rule names — the scoped mutants run's
+granularity is a symbol, so its green means "a symbol's assertions ran" and not
+"a file's did". (Described rather than numbered: an ordinal here would name a
+position in a list this document does not hold, and would go stale the moment
+one is inserted above it.) Note that this section's
 own requirement — *one invocation per control* — does **not** reach it, because
 "control" there means a file and the granularity available here is a symbol.
 Test-level granularity would close it and is deliberately not taken: the cost
@@ -705,17 +709,16 @@ is a fixture, not a flag, and it is named here and not designed.
 **Two things must be recorded with that name, or the trap is sprung by the time
 someone builds it.**
 
-*It would be the **sixth** instance of "the harness and the subject must agree
-about which environment is under test" (ADR-0002 §7), and the first deliberate
-one.* Numbered sixth rather than fifth because the fifth arrived first and
-unplanned, on 2026-08-12: a `grep` whose non-ASCII pattern and the tree
-disagreed about what a character is, under a locale neither declared, reporting
-zero matches over three. **Anticipating one instance did not stop an
-unanticipated one landing first**, which is the argument for indexing the rule
-on the failure rather than on the case.
+*It would be **the hostile-`gh` fixture** instance of "the harness and the
+subject must agree about which environment is under test" (ADR-0002 §7), and the
+first deliberate one.* Named rather than numbered, because that list is
+insertion-ordered and an ordinal here would go stale the moment one lands
+between — as one did: the **locale-blind `grep`** was recorded on 2026-08-12,
+after this paragraph was written and before the fixture it describes exists.
+**Anticipating one instance did not stop an unanticipated one arriving first.**
 
-The previous five were accidents — a fixture and a subject reading different
-config, one of them in production code, one of them a search. This one
+Every instance so far has been an accident — a fixture and a subject reading
+different config, one of them in production code, one of them a search. This one
 **constructs** the disagreement on purpose: a `PATH` where `gh` is not `gh`. That is legitimate, because the
 environment being disagreed about is the thing under test rather than a
 precondition being assumed, but it means the rule's usual repair ("stop reading

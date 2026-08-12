@@ -195,8 +195,8 @@ from `git check-ignore` on git 2.54.0.windows.1:
 
 | Condition | Observable | Rendered as |
 | --- | --- | --- |
-| path ignored | exit `0` | not tracked |
-| path not ignored | exit `1` | **tracked** |
+| path ignored | exit `0` | **ignored** |
+| path not ignored | exit `1` | **not ignored** |
 | not a git repository | exit `128` | unknown |
 | no path given / path outside the repository | exit `128` | unknown |
 | **git absent** | **`127` from the shell — no git status at all** | unknown |
@@ -204,14 +204,39 @@ from `git check-ignore` on git 2.54.0.windows.1:
 `128` is **three distinct conditions sharing one number**, and absence is not in
 that space. Code that reads "nonzero" as *not ignored* turns an error into
 *"you're versioned, all good"* — the inventing direction, and the same class as
-the exit-code audit in ADR-0002 §7. **Unknown renders as neither tracked nor
-untracked**, in both of its conditions.
+the exit-code audit in ADR-0002 §7. **Unknown renders as neither ignored nor
+not-ignored**, in every one of its conditions.
 
-**The label is `tracked`, never `published`.** Versioned and published are
-different facts and vibe can only measure the first: a private remote versions
-without publishing. A label claiming publication asserts something about a remote
-that has not been checked, and the path that could check it is permanently
-untested (ADR-0008 §9).
+**One state, but the cause is carried in the message.** Collapsing the sources
+into a single state is right for the display — none of them supports a claim
+about the file. It is wrong for the user if the cause is dropped: *"git is not
+installed"* and *"this is not a repository"* are both `unknown` and have
+**opposite remedies**, and an unknown with no cause is honest and unactionable.
+So the state is one and the diagnostic is specific, which is also what
+`ErrorPayload`'s `{ code, params }` shape (ADR-0005 §6) exists to carry.
+
+**The labels are `ignored` and `not ignored` — not `tracked`, and not
+`published`. This name is on its third pass, and each earlier one asserted more
+than the instrument measures.**
+
+- **`published` was too strong.** Versioned and published are different facts and
+  vibe measures neither: a private remote versions without publishing, and the
+  path that could check a remote's visibility is permanently untested
+  (ADR-0008 §9).
+- **`tracked` is too strong for the same reason, one step in.** Exit `1` means
+  **no ignore rule applies**, which is not the same as git having the file.
+  A prompt created ten seconds ago and never `git add`ed is *not ignored* and
+  *not tracked* simultaneously. `check-ignore` answers a question about exclusion
+  rules; the index is a different question, which is why §4's polarity table was
+  measured with `git add -A -n` and not with this command. **Two tools because
+  they are two questions**, and borrowing one's label for the other's answer is
+  the overclaim.
+
+**`ignored` / `not ignored` is exactly what is measured**, and it is also the
+right frame for the question the feature exists to answer. Under polarity B the
+hazard is exposure, and **`not ignored` means a `git add -A` picks the file
+up** — which is the thing to know. Tracked-ness is not the question; exposure
+is.
 
 The positive control on the `127` row is recorded because the first reading of it
 was wrong: `env -i … | head -2; echo $?` reported **`head`'s** status, `0`. Re-run
@@ -323,7 +348,7 @@ one of them disappears.** Three come from an exit status — `0`, `1`, `128` —
 the fourth, git absent, arrives in Rust as a **spawn error**, an `Err` raised
 before any status exists. Merging two channels into one enum is ordinary-looking
 code, and it is exactly where a stray `unwrap_or`, `.ok()` or `?` collapses
-absence into the `1` arm: *not ignored*, rendered **tracked**, which is the
+absence into the `1` arm: *not ignored*, rendered **not ignored**, which is the
 inventing direction §5 exists to block and the one that reads as reassurance.
 
 So this is the call site where the negative control matters most, and **its
@@ -355,33 +380,33 @@ has not been enough.
 
 - **Any assertion that a prompt is private must be negative-controlled** by
   breaking the ignore rule and observing the state flip — a test that reads
-  `not tracked` from a fixture where everything is ignored proves nothing about
+  `not ignored` from a fixture where everything is ignored proves nothing about
   the mechanism.
 - **The control must be reached.** A fixture where `git` fails for its own
   reasons before the state is computed is the unreached guard, and it fails while
   looking exactly like proof.
 - **The `128` and `127` paths need their own assertions**, since they are the
   ones a "nonzero means not-ignored" defect renders indistinguishable from
-  tracked. The git-absent control needs a **constructed `PATH` with no `git`**,
-  and it must assert the state is `unknown` rather than merely *not tracked* —
+  not ignored. The git-absent control needs a **constructed `PATH` with no `git`**,
+  and it must assert the state is `unknown` rather than merely *not ignored* —
   those are one boolean apart and only one of them is a lie.
 - **That control must be paired**, for the reason ADR-0002 §7 gives for every
   one-sided control: `PATH` without `git` must yield `unknown`, **and the same
-  input with `git` present must yield `tracked` or `not tracked`**. An
+  input with `git` present must yield `ignored` or `not ignored`**. An
   implementation that returns `unknown` unconditionally — a broken invocation, a
   swallowed error, a state machine wired to one arm — satisfies the unpaired
   half perfectly, and the green would mean nothing.
 - **And it must be paired on the second axis too, which the first pair never
   touches.** Both halves above stay inside the `Err`-versus-`Ok` split. The
   collapse that matters is *inside* `Ok`: a `128` read as a `1`, an error
-  rendered as **tracked**. So a second pair, same `git` present: one input
+  rendered as **not ignored**. So a second pair, same `git` present: one input
   yielding `128` (a path outside the repository, or no repository) and one
   yielding `1`.
 - **There is a third outcome source, and it is the one written by default.**
   `CommandOutput::status` is `Option<i32>`, so the sources are `Err` (spawn
   failed), **`Ok` with no exit code**, and `Ok` with a code. `success()` is
   `false` for the middle one, so the natural `if success() { … } else { … }`
-  renders it as **not tracked** — the inventing direction reached without anyone
+  renders it as **not ignored** — the inventing direction reached without anyone
   making a mistake, by writing the obvious branch.
 
   **The arm is named for its consequence, not its cause: "no exit code".** On
@@ -413,12 +438,14 @@ because writing a mitigation nobody has built is how a gap becomes a claim.
    is not an answer — and a reader who takes `NotAttempted` for *"fine"* gets a
    wrong result from a correct display. The enrichment flag can settle it for a
    user who asks; nothing settles it for one who does not.
-2. **`tracked` is not `published`, and the gap is unmeasurable from here.** Vibe
-   reads the ignore state; the remote's visibility is a different fact, reachable
-   only through a path this project has recorded as permanently untested. A user
-   who reads `tracked` as *"safe, it's only in git"* on a public repository is
-   wrong, and the label cannot prevent that without asserting something it has
-   not checked.
+2. **`not ignored` is neither `tracked` nor `published`, and both gaps are
+   unmeasurable from here.** Vibe reads the exclusion rules only. Whether git
+   *has* the file is the index's question and is not asked; whether a remote
+   shows it to anyone is reachable only through a path recorded as permanently
+   untested. A user who reads `not ignored` as *"it is in git, so it is safe"* is
+   wrong on both counts, and the label cannot prevent that without asserting
+   something unchecked. What it does support is the one inference that matters
+   under §4: a `git add -A` would pick this file up.
 3. **Vibe writes into a directory it does not own, under someone else's
    schema.** There is no mirror, so nothing is overwritten or deleted to keep two
    copies equal — but tolerance of unknown frontmatter keys is a property of

@@ -851,8 +851,9 @@ the reason this project has now paid for twice — **the next person writing a
 control will be reading the rules, and will not open the prompts ADR.**
 
 **What phase 3 added, and the one sabotage that came back green.** *Added
-2026-08-13.* Seventeen guards across the wire codes, the renderer and the CLI
-wiring were each sabotaged; sixteen went red on the first run. The four
+2026-08-13.* Twenty-one guards were sabotaged — four on the wire codes, thirteen
+on the renderer, four on the CLI wiring — and twenty went red on the first run.
+The four
 `is_complete()` producers get a control each — two roots × `Unreadable`'s two
 branches — and the two *roots* are asserted to read differently, because a
 project root that could not be read means prompts may be **missing** while a user

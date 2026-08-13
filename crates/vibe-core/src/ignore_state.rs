@@ -264,29 +264,101 @@ impl UnknownCause {
         "unrecognised",
     ];
 
-    /// A stable identifier, safe to branch on and safe to print as data.
+    /// The `(key, code)` pair, from one exhaustive match.
     ///
     /// **Exhaustive on purpose.** `#[non_exhaustive]` does not constrain the
     /// crate that owns the type, so this match is the compile-time break that
     /// makes a new cause impossible to add silently.
+    ///
+    /// **One match rather than two**, because a variant that answered `key` in
+    /// one place and `code` in another could be given a copied code with both
+    /// matches still exhaustive and the compiler still satisfied. Here the two
+    /// literals sit on one line, and
+    /// [`the_code_is_the_key_in_the_wire_format`](self) checks their shape
+    /// agrees — the pair cannot be computed at const time from a single
+    /// literal, so the relationship is asserted rather than derived, and that
+    /// is stated instead of being left to look like duplication.
+    fn identity(&self) -> (&'static str, &'static str) {
+        match self {
+            UnknownCause::GitNotRun { .. } => ("git_not_run", "VIBE_S_IGNORE_GIT_NOT_RUN"),
+            UnknownCause::NotARepository => ("not_a_repository", "VIBE_S_IGNORE_NOT_A_REPOSITORY"),
+            UnknownCause::PathOutsideRepository => (
+                "path_outside_repository",
+                "VIBE_S_IGNORE_PATH_OUTSIDE_REPOSITORY",
+            ),
+            UnknownCause::TimedOut => ("timed_out", "VIBE_S_IGNORE_TIMED_OUT"),
+            UnknownCause::NoExitCode => ("no_exit_code", "VIBE_S_IGNORE_NO_EXIT_CODE"),
+            UnknownCause::Unrecognised { .. } => ("unrecognised", "VIBE_S_IGNORE_UNRECOGNISED"),
+        }
+    }
+
+    /// A stable identifier, safe to branch on and safe to print as data.
     #[must_use]
     pub fn key(&self) -> &'static str {
-        match self {
-            UnknownCause::GitNotRun { .. } => "git_not_run",
-            UnknownCause::NotARepository => "not_a_repository",
-            UnknownCause::PathOutsideRepository => "path_outside_repository",
-            UnknownCause::TimedOut => "timed_out",
-            UnknownCause::NoExitCode => "no_exit_code",
-            UnknownCause::Unrecognised { .. } => "unrecognised",
-        }
+        self.identity().0
+    }
+
+    /// The wire code, one per cause.
+    ///
+    /// **One code per cause, exactly as [`CoreError::code`](crate::CoreError)
+    /// gives one per variant, so a consumer learns one rule: branch on `code`.**
+    /// This replaced a single `VIBE_S_IGNORE_UNKNOWN` shared by all six, under
+    /// which `NotARepository`, `PathOutsideRepository`, `TimedOut` and
+    /// `NoExitCode` carried no params either and were distinguishable only by
+    /// the `message` — so telling *install git* from *`git init`*, the pair §5
+    /// separates precisely because their remedies are opposite, meant parsing
+    /// prose.
+    ///
+    /// The rejected alternative was a mandatory `params["cause"]`: `params` is a
+    /// `BTreeMap`, so "mandatory" would be a convention enforced by a test where
+    /// `code` is a field enforced by the type — a contract asserted in prose
+    /// about a container that cannot carry it, which is the defect this change
+    /// removes, rebuilt one slot over.
+    ///
+    /// **What the split costs.** `VIBE_S_IGNORE_UNKNOWN` was also a single
+    /// handle for *the class*, and six codes are not. That is affordable because
+    /// this type exists only inside [`IgnoreState::Unknown`], so the class is
+    /// always in hand where a payload is built and already travels as
+    /// `state: "unknown"` on [`IgnoreState`]'s own `Serialize`. The payload
+    /// carries the diagnostic; the state carries the class. A consumer logging
+    /// payloads stripped of their states is the one case that loses it.
+    ///
+    /// The `VIBE_S_` prefix survives and keeps its one job: an unknown state is
+    /// **not an error** (`VIBE_E_`), it is a measurement that did not land.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        self.identity().1
     }
 
     /// The `{ code, params }` projection (ADR-0005 §6).
     ///
     /// The state is one and the diagnostic is specific, and this is the shape
-    /// that carries the specific half: a consumer renders its own sentence from
-    /// `code` plus `params`, and the `message` is a fallback rather than a
-    /// contract.
+    /// that carries the specific half. Each slot carries a different thing and
+    /// none of them substitutes for another: **`code` identifies, `message`
+    /// describes, `params` carries the variable data — and the *remedy* is the
+    /// frontend's** (ADR-0001 §4).
+    ///
+    /// # `message` is a description, and that is a contract
+    ///
+    /// This doc once said the `message` was *"a fallback rather than a
+    /// contract"*. That was false when it was written: `vibectl` renders
+    /// `ErrorPayload::message` verbatim to users, so the only frontend that
+    /// exists already relies on it. Calling a relied-on field a fallback does
+    /// not make it one; it just leaves the reliance unrecorded.
+    ///
+    /// The honest split, which is also what `error_lines` has always done —
+    /// `error: {description}` then `hint: {remedy}`:
+    ///
+    /// - **Core owns the description.** For this type it is the *only* English
+    ///   that exists: `UnknownCause` has no `Display`, so a frontend with no
+    ///   description of its own has nothing else to print.
+    /// - **The frontend owns the remedy**, keyed on [`UnknownCause::code`].
+    ///   ADR-0010 §5 separates these causes *by remedy* in the first place, so
+    ///   the per-cause catalogue a frontend writes is a remedy catalogue and is
+    ///   not a second description of the same six things.
+    ///
+    /// What stopped being supported is **branching on `message`**, which the
+    /// one-code-per-cause split above is what makes unnecessary.
     ///
     /// [`ErrorPayload`] is reused rather than duplicated even though an unknown
     /// state is **not an error** — it is a measurement that did not land. The
@@ -315,7 +387,7 @@ impl UnknownCause {
         };
 
         ErrorPayload {
-            code: "VIBE_S_IGNORE_UNKNOWN",
+            code: self.code(),
             message,
             path: None,
             path_lossy: false,
@@ -604,9 +676,15 @@ mod tests {
 
     // --- taxonomy hygiene --------------------------------------------------
 
-    #[test]
-    fn every_cause_has_a_key_and_the_keys_are_distinct() {
-        let all = [
+    /// One value per variant, for the checks that must visit all of them.
+    ///
+    /// A hand-written list, and therefore the same bounded thing
+    /// [`UnknownCause::ALL_KEYS`] is: what makes it hard to leave stale is that
+    /// `every_cause_has_a_key_and_the_keys_are_distinct` compares its length
+    /// against `ALL_KEYS`, and `ALL_KEYS` sits beside an exhaustive match that
+    /// does not compile when a variant is added.
+    fn all_causes() -> [UnknownCause; 6] {
+        [
             UnknownCause::GitNotRun { why: "w".into() },
             UnknownCause::NotARepository,
             UnknownCause::PathOutsideRepository,
@@ -616,7 +694,12 @@ mod tests {
                 status: 128,
                 stderr: "s".into(),
             },
-        ];
+        ]
+    }
+
+    #[test]
+    fn every_cause_has_a_key_and_the_keys_are_distinct() {
+        let all = all_causes();
         let mut keys: Vec<&str> = all.iter().map(UnknownCause::key).collect();
         assert_eq!(
             keys.len(),
@@ -648,6 +731,84 @@ mod tests {
         );
     }
 
+    /// **The thing the one-code-per-cause split exists for.**
+    ///
+    /// Before it, these four carried the same `code` *and* no params, so the
+    /// only way to tell them apart on the wire was the `message` — prose. Two of
+    /// them are the pair ADR-0010 §5 separates precisely because the remedies
+    /// are opposite: *install git* versus *`git init`*.
+    #[test]
+    fn the_four_paramless_causes_are_told_apart_by_their_codes() {
+        let bare = [
+            UnknownCause::NotARepository,
+            UnknownCause::PathOutsideRepository,
+            UnknownCause::TimedOut,
+            UnknownCause::NoExitCode,
+        ];
+        let wires: Vec<ErrorPayload> = bare.iter().map(UnknownCause::to_wire).collect();
+
+        // The premise, asserted rather than assumed: these really do carry no
+        // params, so `code` is the *whole* discriminant and not a convenience
+        // beside one. Without this the test below would pass on a build where
+        // params had quietly become the discriminant instead.
+        for wire in &wires {
+            assert!(wire.params.is_empty(), "{} gained params", wire.code);
+        }
+
+        let mut codes: Vec<&str> = wires.iter().map(|w| w.code).collect();
+        codes.sort_unstable();
+        let before = codes.len();
+        codes.dedup();
+        assert_eq!(before, codes.len(), "two causes share a code: {codes:?}");
+    }
+
+    #[test]
+    fn every_cause_has_its_own_code() {
+        let all = all_causes();
+        let mut codes: Vec<&str> = all.iter().map(UnknownCause::code).collect();
+        codes.sort_unstable();
+        let before = codes.len();
+        codes.dedup();
+        assert_eq!(before, codes.len(), "duplicate cause codes: {codes:?}");
+    }
+
+    /// The two literals in `identity` cannot be computed from each other at
+    /// const time, so their agreement is checked instead of derived.
+    ///
+    /// This is what catches the copy-paste a single exhaustive match otherwise
+    /// permits: a new variant given a neighbour's code compiles perfectly.
+    #[test]
+    fn the_code_is_the_key_in_the_wire_format() {
+        for cause in all_causes() {
+            assert_eq!(
+                cause.code(),
+                format!("VIBE_S_IGNORE_{}", cause.key().to_ascii_uppercase()),
+                "`{}` and `{}` do not agree",
+                cause.key(),
+                cause.code()
+            );
+        }
+    }
+
+    /// **Two discriminants reach the wire and they must not drift.**
+    ///
+    /// `code` comes from a literal in `identity`; `cause.cause` comes from
+    /// serde's `rename_all` over the *variant name*. Renaming a variant moves
+    /// the second and leaves the first, and nothing else in this crate would
+    /// notice — a frontend keyed on one would then disagree with a frontend
+    /// keyed on the other about the same value.
+    #[test]
+    fn the_serialised_tag_is_the_key() {
+        for cause in all_causes() {
+            let json = serde_json::to_value(&cause).expect("serialize");
+            assert_eq!(
+                json["cause"],
+                cause.key(),
+                "serde tag and key disagree for {cause:?}"
+            );
+        }
+    }
+
     /// The diagnostic is specific even though the state is one, and the
     /// structured discriminants travel next to the prose rather than inside it
     /// (ADR-0005 §6).
@@ -658,7 +819,7 @@ mod tests {
             stderr: "fatal: whatever".to_owned(),
         }
         .to_wire();
-        assert_eq!(wire.code, "VIBE_S_IGNORE_UNKNOWN");
+        assert_eq!(wire.code, "VIBE_S_IGNORE_UNRECOGNISED");
         assert_eq!(wire.params["status"], "128");
         assert_eq!(wire.params["stderr"], "fatal: whatever");
 

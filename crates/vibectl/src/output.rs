@@ -190,9 +190,6 @@ fn detected_or_dash<T: std::fmt::Display>(d: &vibe_core::Detected<T>) -> String 
     }
 }
 
-/// Turn a structured diagnostic into a sentence.
-///
-/// The catalogue lives here, not in core: core emits a stable code plus named
 /// The label for a severity this build cannot place.
 ///
 /// **Factored out so the text is testable.** The arm that reaches it needs a
@@ -215,6 +212,9 @@ fn unranked_severity_label(name: Option<&str>) -> String {
     )
 }
 
+/// Turn a structured diagnostic into a sentence.
+///
+/// The catalogue lives here, not in core: core emits a stable code plus named
 /// params and this decides the English.
 pub fn diagnostic_line(d: &Diagnostic) -> String {
     // **This label is a claim about the diagnostic, so an unknown severity does
@@ -288,10 +288,12 @@ fn hint_for(err: &CoreError) -> Option<&'static str> {
         // nothing (ADR-0007 §4).
         CoreError::RenderRefused { state, .. } => Some(match state {
             vibe_core::RenderState::Foreign => {
-                "vibe did not generate this file, so it will not overwrite it —                  not even with --force. Move it aside if you want a generated one."
+                "vibe did not generate this file, so it will not overwrite it — \
+                 not even with --force. Move it aside if you want a generated one."
             }
             vibe_core::RenderState::Modified => {
-                "you edited this generated file. Re-run with --force to discard                  those edits, or move the file aside to keep them."
+                "you edited this generated file. Re-run with --force to discard \
+                 those edits, or move the file aside to keep them."
             }
             // Named, rather than left to the wildcard. This arm's text was
             // written for `Unverifiable` and reached it through a `_`, which
@@ -301,12 +303,15 @@ fn hint_for(err: &CoreError) -> Option<&'static str> {
             // `--force` half of the ADR-0007 §4 mistake: the two refusals must
             // not read the same, and neither must a third nobody has looked at.
             vibe_core::RenderState::Unverifiable => {
-                "vibe's marker on this file carries a claim this build cannot                  evaluate — most likely a newer marker version. Upgrade vibe, or                  move the file aside. `--force` overwrites it."
+                "vibe's marker on this file carries a claim this build cannot \
+                 evaluate — most likely a newer marker version. Upgrade vibe, or \
+                 move the file aside. `--force` overwrites it."
             }
             // The genuine unknown: a state from a newer core. No remedy is
             // offered because none can be known to apply.
             _ => {
-                "vibe refused to write this file for a reason this build does not                  understand. Upgrade vibe; do not assume --force applies."
+                "vibe refused to write this file for a reason this build does not \
+                 understand. Upgrade vibe; do not assume --force applies."
             }
         }),
         _ => None,

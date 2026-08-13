@@ -761,13 +761,42 @@ consume the mutated symbol executed*. What it cannot prove is that the file's
 other assertions ran — `classify`'s callers and its stderr classifier are
 different symbols, and a scoped run reports per symbol.
 
-**And the count the revisit trigger keys on has moved: four control files are
-now gated on a `VIBE_REQUIRE_*` variable**, not two — `gh_containment`,
-`gh_argv`, `ignore_state_git`, `prompts_listing`. The trigger is a seventh, so
-it has not fired, and the number is recorded here because it is the kind of fact
-that goes stale silently while the sentence around it still reads true. It went
-stale once between being written and being committed, which is the argument for
-recording it rather than leaving it to be counted.
+**The count this section's revisit trigger keys on is no longer written down
+here, and that is a repair rather than an omission.** *Amended 2026-08-13.* It
+was recorded as "three", then as "four", the second time because the very commit
+that wrote the number added a control and invalidated it before being pushed.
+
+**A trigger whose input drifts inside one commit window cannot be relied on to
+fire** — which is the failure this trigger was chosen to avoid. The rejected
+alternative was *"when the controls outgrow what a reviewer checks by eye"*,
+rejected because the reviewer who can no longer check by eye is exactly the one
+not noticing; a hand-maintained integer reaches the same place by a different
+road, since the person who forgets to update it is the person who would have
+had to notice.
+
+So the number is **derived and gated** rather than maintained:
+`crates/vibe-core/tests/control_inventory.rs` counts the integration-test
+targets mentioning the marker and fails when the count reaches seven. Three
+properties are what make it worth having over a documented command:
+
+- **It fires where someone is already looking** — the ordinary `Test` job, on
+  every platform. This is the second of the two shapes §7 permits, the first
+  being on-demand with the invocation written down. A trigger that has to be
+  *run* is hostage to somebody remembering.
+- **It is two-sided.** A wrong workspace root, a changed layout or a renamed
+  variable all produce **zero**, and a gate asserting *"fewer than seven"*
+  passes on zero perfectly. So it asserts the corpus was found and the marker
+  still matches something, per §7's empty-result rule. Without those halves the
+  trigger could quietly cease to exist while reporting green — which is worse
+  than the stale integer it replaces.
+- **It excludes itself, by construction.** The marker is assembled with
+  `concat!` so the file does not contain the literal it searches for. Spelled
+  out, the inventory would count itself and be off by one from the day it
+  landed.
+
+What it does **not** do is decide the question: firing means re-deciding whether
+a per-control mutation gate is worth building, on the arguments above. Raising
+the constant to clear a red is the one response that is wrong.
 
 **What is left uncovered, named precisely so nobody re-derives the struck
 design.** `gh_containment.rs` imports only `std`: it asserts on `gh`'s

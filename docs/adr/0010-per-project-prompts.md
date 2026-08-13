@@ -687,9 +687,18 @@ would have shown it.
 
 The repair is a second control on a deterministic, portable version of the other
 branch — a tree nested past the walk's depth bound, where a permission failure
-would be neither. **The general form is worth carrying: one outcome reached by
-two branches needs two controls, and the count of branches is not visible from
-the assertion.**
+would be neither: `chmod 000` does not deny root and the runners differ on who
+they run as, so the realistic fixture is the one that can go quiet without
+failing.
+
+**The general form is in ADR-0002 §7, not here** — *count the branches that
+produce the observable you are asserting on, and require one control per
+branch*. It is filed there as a named instance of *a control proves only the
+hazard class it exercises*, rather than as a new rule, because that is what it
+is: the class is "a partial listing reported as complete" and the control
+exercised one member of it. It is recorded there and not in this document for
+the reason this project has now paid for twice — **the next person writing a
+control will be reading the rules, and will not open the prompts ADR.**
 
 ## The four residual failure modes
 
@@ -755,6 +764,20 @@ Observable events, not judgements that go quiet when they start mattering.
 - **A second agent is actually to be supported.** That is when §1's single module
   becomes a second module, and the moment to ask whether anything is genuinely
   shared. Not before: nothing about Codex has been measured.
+- **Anyone measuring Claude Code again for any reason.** Add one question to
+  that round: **does it load `daily.MD`?** *Added 2026-08-13.* Phase 2 matches
+  the extension case-sensitively because only `.md` was measured, and the gap
+  runs **both ways** — case-insensitive matching invents a prompt on a
+  case-sensitive filesystem, and case-sensitive matching omits one on Windows
+  and default macOS, which are case-insensitive and where the file may
+  genuinely load. **Under polarity B the omission is the worse half**, because
+  an unlisted prompt is one whose exposure nobody sees, and that is the
+  direction the current build takes.
+
+  It is a revisit trigger rather than a residual because it is **one run, not a
+  new harness**: the resolved list on the `system/init` record with a `.md` file
+  in the same directory as the positive control, which is the identical shape
+  that established the `notmd.txt` row in §2.
 - **The first frontmatter key vibe writes itself.** That is when residual 3's
   tolerance stops being background and becomes load-bearing, and it arrives as a
   diff someone reviews.

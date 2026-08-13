@@ -58,10 +58,33 @@ const COMMANDS_DIR: &str = "commands";
 ///
 /// §2 measured `commands/notmd.txt` as absent from the resolved list, against a
 /// positive control of 56 present commands from the same directory. What was
-/// *not* measured is `.MD`, and this build does not guess: matching
-/// case-insensitively would list files on a case-sensitive filesystem that
-/// Claude Code may never load, which is inventing a prompt. Recorded as a gap
-/// rather than closed by assumption (ADR-0010 §1's recorded-blank shape).
+/// **not** measured is `.MD`, and this build does not guess.
+///
+/// # The gap runs both ways, and the direction this build takes is not the safe
+/// one
+///
+/// Stating only one half of this was the first draft's error, so both are here:
+///
+/// - **Matching case-insensitively invents a prompt.** On a case-sensitive
+///   filesystem, `daily.MD` may be a file Claude Code never loads, and listing
+///   it reports a prompt that does not exist.
+/// - **Matching case-sensitively omits one.** Windows and default macOS are
+///   case-insensitive, so `daily.MD` may genuinely load there — and **under
+///   polarity B an unlisted prompt is one whose exposure nobody sees**, which
+///   is the failure §5 exists against. This is the direction that matters, and
+///   it is the direction this constant takes.
+///
+/// So this is a gap held open deliberately, not a decision that the risk is
+/// gone. It is recorded rather than closed because closing it by assumption is
+/// what §1's recorded blank refuses.
+///
+/// # It costs one run, not a new harness
+///
+/// The question is *"does Claude Code load `daily.MD`"*, and the instrument
+/// already exists: the resolved command list on the `system/init` record of
+/// `--output-format stream-json`, with a `.md` file in the same directory as the
+/// positive control — the identical shape that established the `notmd.txt` row.
+/// ADR-0010's revisit triggers carry it.
 const PROMPT_EXT: &str = "md";
 
 /// A bound on how deep the walk goes, so a pathological tree cannot run away.

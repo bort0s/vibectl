@@ -395,6 +395,42 @@ Two things to take from it:
    window between the two snapshots was widest there. "macOS is special" would
    have been a premise, and a wrong one, built from a sample of two.
 
+**The fixture that ran on the subject's budget — the same class, and the
+cheapest instance yet to miss.** *Added 2026-08-13, from ADR-0010 phase 2.* A
+fixture called `git init` through `SystemRunner::default()`, whose timeout is
+**1500 ms** because that is the *product's detector* budget. A cold start
+exceeded it once, and the test failed with `git init runs: Timeout` — pointing
+at the listing under test, which had not run yet.
+
+Same shape as `scan_never_writes`: the harness produced an observation about
+itself and it arrived labelled as the subject. The repair is the same kind too —
+remove it at the source rather than filter it — but the source here is a
+*budget* rather than an asynchronous process: setup gets 30 s, and **every
+assertion keeps the default runner, because there the budget is part of what is
+under test.**
+
+Two things make it worth the entry rather than a line in a changelog:
+
+- **It was latent and green.** The identical fixture had been in
+  `ignore_state_git.rs` since phase 1 and had passed CI on nine jobs. A flake
+  that has not fired yet is indistinguishable from one that cannot, and the only
+  reason this one was found is that it fired on a developer machine rather than
+  on a runner.
+- **The direction is the base rate's.** Instrument wrong, subject right.
+
+**But it does not increment the six-for-six, and the distinction matters.** That
+count is a *scoped* tally: six channel-alters-input instances, all from
+2026-08-12, all on Windows, all while measuring Claude Code. This is a Rust test
+fixture and a timeout, which is a different population, and quietly folding it in
+would make the count mean something looser than the sentence that carries it.
+
+**What it does strengthen is the ordering rule itself** — *suspicion goes to the
+instrument first* — and it strengthens it more than a seventh instance from the
+same round would have, because it is evidence that the pattern is not a property
+of Windows shells. A rule supported from two independent domains is in better
+shape than one supported six times from one. The tally stays where it is; the
+rule it was cited for gets a second population.
+
 **An uncompiled test is a test that has not run.** The same family again, one
 step earlier: the rules above are about a control that executes and proves less
 than it appears to. This one is about a control that never executed at all.
@@ -699,6 +735,32 @@ show that a multi-line pattern could have matched; an ASCII control says nothing
 about a non-ASCII target. **The control must be of the same shape as the
 target**, or its green covers a narrower claim than the one being made — the
 instrument rule above, arriving inside the positive control itself.
+
+**The convergent-branch instance, and it is an instance rather than a new
+rule.** *Added 2026-08-13, from ADR-0010 phase 2.* `RootOutcome::Unreadable` is
+produced by **two** branches — a root's own `read_dir` failing for a reason
+other than absence, and the walk not finishing. The control constructed the
+first, asserted the outcome, and read as covering the thing. Sabotaging the
+second branch left it **green**.
+
+Filed here rather than as its own rule because it is the paragraph above applied
+one level in: the hazard class is *"a partial listing reported as complete"*,
+the control exercised one member of it, and its green covered the narrower
+claim. Giving it a rule of its own would dilute an index whose whole recent
+repair was to stop the list growing entries that are the same thing twice.
+
+**What it adds, and this is why it is named rather than merely counted: the
+mismatch is invisible from the control's side.** Every earlier instance of this
+rule is a property of the *control* — a single-line pattern, an ASCII pattern —
+so comparing the control against the target can find it. Here the two branches
+converge on **one observable**, and there is nothing in `assert_eq!(outcome.key(),
+"unreadable")` to suggest a second producer exists. Same-shape-as-the-target
+cannot be checked by looking at the control at all.
+
+So the check the rule needs, stated as an action: **count the branches that
+produce the observable you are asserting on, and require one control per
+branch.** That is a question about the subject, asked while writing a control —
+which is the only place it is answerable.
 
 **A precondition you did not construct is not a precondition.** Worked example,
 because it is genuinely surprising: *"no git identity configured" is not a

@@ -258,12 +258,19 @@ jobs:
       # --test-threads=1 - verified by running it, since the child has its own
       # harness and the parent only waits on a process - so the serial form is
       # kept for the same reason the gh step uses it: a failure names one test.
-      - name: Verify the ignore-state instrument (ADR-0010 §5, §8, §10)
+      # prompts_listing is phase 2's half of the same question: the instrument
+      # can be right while the listing walks past every private prompt, or
+      # reports an unreadable directory as a project with none. Its controls are
+      # paired the same way - a private prompt listed and its state flipping
+      # with the rule under it, user-level shadowing against the same file
+      # removed, a user-level prompt not asked about against a project one that
+      # is, and a partial walk against a complete one.
+      - name: Verify the ignore-state instrument and the listing (ADR-0010 §5, §8, §10)
         env:
           VIBE_REQUIRE_GIT: "1"
         run: >
           cargo test --locked -p vibe-core
-          --test ignore_state_git
+          --test ignore_state_git --test prompts_listing
           -- --nocapture --test-threads=1
 
   msrv:

@@ -45,6 +45,7 @@ pub mod manifest;
 pub mod model;
 pub mod ops;
 pub mod plan;
+pub mod prompts;
 pub mod registry;
 pub mod render;
 pub mod repo;
@@ -67,6 +68,10 @@ pub use manifest::{FieldEdit, ManifestDocument, SchemaVersion};
 pub use model::{Confidence, Detected, Manifest, Status, UnknownReason, Visibility};
 pub use ops::SyncNotes;
 pub use plan::{ApplyOutcome, ApplyReport, FileOp, PlanIntent, WritePlan};
+pub use prompts::{
+    Exposure, PluginNamespace, Prompt, PromptListing, PromptRoot, RootOutcome, RootReport,
+    Shadowed, list_prompts,
+};
 pub use registry::{NewRequest, Registry};
 pub use render::{RenderState, RenderTarget};
 pub use repo::{RemoteBlocked, RepoReport};

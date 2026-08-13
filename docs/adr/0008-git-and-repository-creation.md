@@ -761,11 +761,13 @@ consume the mutated symbol executed*. What it cannot prove is that the file's
 other assertions ran — `classify`'s callers and its stderr classifier are
 different symbols, and a scoped run reports per symbol.
 
-**And the count the revisit trigger keys on has moved: three control files are
+**And the count the revisit trigger keys on has moved: four control files are
 now gated on a `VIBE_REQUIRE_*` variable**, not two — `gh_containment`,
-`gh_argv`, `ignore_state_git`. The trigger is a seventh, so it has not fired,
-and the number is recorded here because it is the kind of fact that goes stale
-silently while the sentence around it still reads true.
+`gh_argv`, `ignore_state_git`, `prompts_listing`. The trigger is a seventh, so
+it has not fired, and the number is recorded here because it is the kind of fact
+that goes stale silently while the sentence around it still reads true. It went
+stale once between being written and being committed, which is the argument for
+recording it rather than leaving it to be counted.
 
 **What is left uncovered, named precisely so nobody re-derives the struck
 design.** `gh_containment.rs` imports only `std`: it asserts on `gh`'s

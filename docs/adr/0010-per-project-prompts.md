@@ -12,9 +12,20 @@ the two share a measurement round and nothing else.
 **Implementation, phase 1 of 3 (2026-08-12).** The ignore-state instrument:
 `GitOp::CheckIgnore`, its 4a enumeration, and the outcome-to-state mapping, in
 `crates/vibe-core/src/ignore_state.rs` with its controls in
-`crates/vibe-core/tests/ignore_state_git.rs`. Phase 2 is the filesystem layer —
-reading `.claude/commands` and `~/.claude/commands` and applying the measured
-precedence (§6) — and phase 3 is the display (§7).
+`crates/vibe-core/tests/ignore_state_git.rs`.
+
+**Phase 2 of 3 (2026-08-13).** The filesystem layer, in
+`crates/vibe-core/src/prompts.rs` with its controls in
+`crates/vibe-core/tests/prompts_listing.rs`: both roots read, the measured name
+derivation, §6's precedence applied at read time, the plugin namespace as
+`NotAttempted`, and §5a's `(root, Option<IgnoreState>)` pair. Phase 3 is the
+display (§7), and this layer renders nothing.
+
+Three things fell out of building it, all recorded where they belong rather than
+here: **§5a** settles the per-repository question and the state shape, **§5b**
+refuses the batched instrument, and §5's label genealogy gains a fourth pass.
+A fourth is smaller and is in §10 — sabotage found a control covering one of two
+branches that produce the same outcome.
 
 The instrument comes first because it is the only part that can be *silently*
 wrong: §5's whole argument is that the safety property lives in the state being
@@ -273,8 +284,8 @@ hope — the causes are asserted against the real `git` on the machine under
 quietly widening the residual arm.
 
 **The labels are `ignored` and `not ignored` — not `tracked`, and not
-`published`. This name is on its third pass, and each earlier one asserted more
-than the instrument measures.**
+`published`. This name is on its fourth pass, and every earlier one asserted
+more than the instrument measures — always in the same direction.**
 
 - **`published` was too strong.** Versioned and published are different facts and
   vibe measures neither: a private remote versions without publishing, and the
@@ -295,11 +306,161 @@ hazard is exposure, and **`not ignored` means a `git add -A` picks the file
 up** — which is the thing to know. Tracked-ness is not the question; exposure
 is.
 
+- **`different root` is the fourth pass, and it repeats the pattern one level
+  out.** *Added 2026-08-13, with §5a's decision.* A user-level prompt carries
+  that label instead of an exposure state, on the ground that the exposure that
+  matters is the project repository's. The overclaim is that **provenance is a
+  path, not an inode.** Vibe decides the label by which directory it read the
+  file from — `~/.claude/commands` versus `<project>/.claude/commands` — and
+  those are two strings. If `~/.claude` sits inside the project tree, or is
+  symlinked into it, the project repository's `git add -A` **would** pick the
+  file up, and the label says the question belongs somewhere else. Bounded and
+  unusual; understating in the direction that matters, which is the one this
+  label exists to catch.
+
+**The genealogy is the finding, not the four labels.** Each pass named a fact
+one step further in than the instrument reaches, and each was caught only by
+asking what the instrument actually touches:
+
+| Pass | Claimed | Instrument reaches |
+| --- | --- | --- |
+| `published` | a remote shows it to someone | never contacts a remote |
+| `tracked` | git has the file | exclusion rules, not the index |
+| `ignored` / `not ignored` | an exclusion rule applies | true — **for the root asked**, and only that one |
+| `different root` | this repository cannot expose it | two path strings, not two inodes |
+
+Same direction four times, which is what makes it a pattern rather than four
+mistakes: **the label reaches one step past the instrument, and every step is
+towards reassurance.** The third row is the one to watch, because it is correct
+as written and its correctness is conditional on something the label does not
+say — which is exactly how the fourth arrived.
+
 The positive control on the `127` row is recorded because the first reading of it
 was wrong: `env -i … | head -2; echo $?` reported **`head`'s** status, `0`. Re-run
 unpiped it is `127`, and `exit 3` through the identical channel returns `3`,
 which is what establishes that the `127` is git's absence rather than the channel
 flattening everything.
+
+### 5a. The question is per-repository, and the answer carries which root it was asked against
+
+*Added 2026-08-13, from phase 2's first constraint. Numbered `5a` rather than
+inserted as a new §6, for the reason ADR-0005's renumbering note records.*
+
+**`check-ignore` answers a question about one repository, and §6's two
+directories are not in the same one.** §5's state table assumes a single root.
+`.claude/commands` is in the project; `~/.claude/commands` is not, and is often
+itself versioned in a dotfiles repository. Asking about a user-level prompt with
+`project_dir = <project>` returns `PathOutsideRepository` — correct, and it
+reads as a fault, when the honest answer is that the question belongs elsewhere.
+
+**Decided: exposure is computed only for project prompts, against the project
+root.** Under polarity B the exposure that matters is the project repository's,
+and a user-level prompt is not exposed by that repository whatever its own does.
+User-level prompts carry a distinct label meaning **different root** — not
+`unknown`, not an error, and not `PathOutsideRepository`.
+
+**The label carries no cause, and the reason is structural rather than a count.**
+`UnknownCause` exists because a *measurement* failed in ways with opposite
+remedies — install git, `git init`, fix the path. **`different root` is not a
+measurement outcome. It is a routing decision taken before git is invoked, and
+git is never invoked at all**, so there is no failure to have causes.
+
+A second reason was looked for and none reaches the label:
+
+- **Plugin-supplied prompts** cannot: §6's base layer never reads plugin
+  directories, so they are never listed as files in the first place.
+- **A project with no repository** is `unknown { NotARepository }` — a real
+  measurement with a real remedy.
+- **A project root that differs from the git root** — a subdirectory of a larger
+  repository, a worktree — is a question git answers normally.
+- **Shadowing is orthogonal.** A shadowed project prompt is still a file in the
+  project repository with a real exposure state; §6's resolution state and this
+  label do not collide.
+
+**It does carry one datum, and that datum is not a cause: which root the
+question belongs to.** Not to explain why — to tell a reader where to look. One
+always-present field, no variants. If a second cause ever seems needed here,
+that is evidence the state is wrong rather than that it needs enriching.
+
+**The shape is `(root_asked, Option<IgnoreState>)`, and a fourth `IgnoreState`
+variant is refused because it forecloses in the dangerous direction.** The
+foreseeable next feature is letting a user-level prompt opt into being asked
+about *its own* repository — the dotfiles case, which has an honest answer.
+Nothing is built for it now; the question is only whether the shape permits it.
+
+- **A fourth variant does not permit it.** `DifferentRoot { root }` carries the
+  root inside the variant, so **computing a real answer destroys the field that
+  said which root it was about.** The result is `NotIgnored`, byte-identical to
+  a project prompt's `NotIgnored`, and under polarity B that reads as *"a
+  `git add -A` in my project would pick this up"* — which is false. The opt-in
+  would turn into a hazard.
+- **The pair does permit it.** `IgnoreState` stays exactly what it is: the answer
+  for **one** root. The prompt-level type carries the root beside it, and
+  *different root* is the case where the root is the user's and no state was
+  computed. The opt-in is then purely additive — fill the `Option`, change no
+  variant, break no consumer — and the pair still says which root the answer is
+  about, which is the property the variant loses.
+
+**Phase 1 forecloses nothing.** `check_ignore` already takes the root as a
+parameter, so asking a dotfiles repository about its own prompt is expressible
+today with no change to the instrument. Only the state shape could have closed
+this off, and it is the display-adjacent decision rather than the instrument
+that had to be got right.
+
+### 5b. N spawns, and no batched instrument — decided on a limit, not on a cost
+
+*Added 2026-08-13, from the measurement phase 2 was told to take first.*
+
+**Decided: N spawns of phase 1's instrument, unchanged. The batched,
+stdout-parsing alternative is refused.**
+
+**The reason is structural and does not trade against the timing.** Today
+`ignored` and `not ignored` are reachable **only** from exit `0` and exit `1`,
+and that is precisely what bounds §5's version-dependence: an unrecognised
+stderr message costs a *diagnostic* and cannot invent a *state*. A batched
+instrument reads the per-file answer off **stdout** — `::\tplain.md` for a
+non-match against `.gitignore:1:secret.md\tsecret.md` for a match, re-measured
+on git 2.54.0.windows.1 — so the state itself would come from a text format, and
+a format change could move it. **That is a limit surrendered, not a cost paid,
+and the two do not weigh on the same scale. Even if the batched form were free,
+the answer would be the same.**
+
+**Poisoning compounds it independently.** Measured: one path outside the
+repository makes the whole batch exit `128` with **no stdout for the good
+paths**. Fifty-six per-file answers become one whole-listing `unknown`, so an
+exposed prompt goes invisible because of an unrelated file. Under polarity B
+that is the direction this feature cannot take — §5 exists so exposure is
+noticed, and this converts a noticed exposure into silence.
+
+**The cost, recorded with the platform it belongs to.** Measured 2026-08-13,
+release build, N = 56 (§2's corpus size), five rounds, through the real
+`check_ignore` and `SystemRunner` so the constructed environment and
+`--no-pager` are included:
+
+| Arm | Median |
+| --- | --- |
+| 56 spawns via `check_ignore` | **814 ms** — 14.53 ms per spawn |
+| 1 spawn via `check_ignore` | 14.2 ms |
+| 1 raw batched spawn, `-n -v`, 56 paths | 16.6 ms — a lower bound, it builds no environment |
+
+The one-spawn arm against the per-spawn figure shows the cost **is** process
+creation: this crate's environment construction adds nothing measurable. The
+positive control ran in the same invocation — `ignored=42, not_ignored=14,
+unknown=0`, a real mix rather than 56 failures wearing a timing.
+
+> **This is a Windows number and must not become a fact about three
+> platforms.** Windows 10 Pro 19045, git 2.54.0.windows.1. **Linux and macOS are
+> unmeasured**, and process-spawn cost is the single thing that varies most
+> between them, so the ratio here does not transfer. It is recorded as the
+> likely worst case, and *likely* is an inference rather than a measurement.
+
+**The obvious optimisation is unsound, and is named so it is not
+rediscovered.** Asking about the two *directories* instead of the 56 files is
+two spawns, but `check-ignore` on a directory does not establish that every file
+under it shares that answer: one per-file rule, or one negation, makes a file
+differ from its directory — which is exactly the case worth catching. This is
+not §5's "do not infer privacy from the directory *name*" — it is asking git and
+still getting a confidently wrong per-file answer.
 
 ### 6. Resolution: filesystem inference is the base, and the plugin namespace is `NotAttempted`
 
@@ -506,6 +667,29 @@ has not been enough.
 - **Any further measurement of Claude Code requires a channel control first** —
   a known input through the identical invocation shape — per ADR-0002 §7's
   channel rule, whose base rate was established by this very round.
+
+**What phase 2 added, and the one thing sabotage found.** *Added 2026-08-13.*
+The listing's controls are paired on four axes and each was sabotaged and seen
+to go red before being committed: a private prompt listed with its state
+flipping when the rule under it changes; user-level shadowing against the same
+file removed; a user-level prompt not asked about against a project one in the
+same listing that is, with the *invocations* counted rather than inferred from
+the result; and a partial walk against a complete one.
+
+**The finding is the fifth sabotage, which came back green.** A root whose
+`.claude/commands` could not be read and a walk that did not finish produce the
+**same `Unreadable` outcome from two different branches**, and the control that
+looked like it covered them covered only the first — the fixture fails at the
+root's own `read_dir` and returns before the walk begins. Breaking the mid-walk
+branch left the test green. That is the unreached-guard rule (ADR-0002 §7)
+*inside* a control that read as complete, and nothing but running the sabotage
+would have shown it.
+
+The repair is a second control on a deterministic, portable version of the other
+branch — a tree nested past the walk's depth bound, where a permission failure
+would be neither. **The general form is worth carrying: one outcome reached by
+two branches needs two controls, and the count of branches is not visible from
+the assertion.**
 
 ## The four residual failure modes
 

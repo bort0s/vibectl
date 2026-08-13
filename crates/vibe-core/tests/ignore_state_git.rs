@@ -98,7 +98,13 @@ fn write(path: &Path, contents: &str) {
 /// every assertion below would be measuring a fixture our own code cannot
 /// produce.
 fn a_repository(root: &Path) {
-    let exec = SystemRunner::default();
+    // Not `SystemRunner::default()`: that allows 1500 ms, which is the
+    // product's detector budget and not a setup budget. A cold start made an
+    // identical fixture `init` exceed it in `prompts_listing.rs`, and a fixture
+    // that times out reports as a failure of the subject — the harness
+    // producing a finding about itself (ADR-0002 §7). Every assertion below
+    // still uses the default runner, because there the budget is under test.
+    let exec = SystemRunner::with_timeout(std::time::Duration::from_secs(30));
     exec.run_git_op(&GitOp::Init {
         cwd: root.to_path_buf(),
     })

@@ -14,6 +14,7 @@ mod cli;
 mod cmd;
 mod exit;
 mod output;
+mod prompts;
 mod reporter;
 
 use std::io::Write;
@@ -21,7 +22,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use cli::{AgentsCommand, Cli, Command, NewArgs, ScanArgs};
+use cli::{AgentsCommand, Cli, Command, NewArgs, PromptCommand, ScanArgs};
 use exit::Exit;
 use vibe_core::{Config, NewRequest, Registry, ScanRequest};
 
@@ -55,6 +56,10 @@ fn run(cli: &Cli) -> Result<Exit, vibe_core::CoreError> {
             AgentsCommand::Add(args) => agents::add(args),
             AgentsCommand::Remove(args) => agents::remove(args),
             AgentsCommand::Sync(args) => agents::sync(args),
+        },
+        Command::Prompt(sub) => match sub {
+            PromptCommand::List(args) => cmd::prompt_list(args),
+            PromptCommand::Show(args) => cmd::prompt_show(args),
         },
     }
 }

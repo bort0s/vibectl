@@ -37,6 +37,47 @@ pub enum Command {
     /// Manage the agents a project declares
     #[command(subcommand)]
     Agents(AgentsCommand),
+    /// Show the prompts this project defines, and whether git would expose them
+    #[command(subcommand)]
+    Prompt(PromptCommand),
+}
+
+/// `vibe prompt` — ADR-0010's display.
+///
+/// There is no `add`, no `edit` and no `run`. §9: vibe does not spawn `claude`,
+/// does not open an editor, and does not print a paste-ready shell command — a
+/// prompt file preserves backticks and `$(…)` verbatim, so a shell string built
+/// from one is command substitution waiting for a shell. What the CLI shows is
+/// the slash command name to type.
+#[derive(Debug, Subcommand)]
+pub enum PromptCommand {
+    /// List prompts with their exposure state
+    List(PromptListArgs),
+    /// Show one prompt's file, exactly as it is on disk
+    Show(PromptShowArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PromptListArgs {
+    /// Project directory
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+
+    #[command(flatten)]
+    pub format: FormatFlags,
+}
+
+#[derive(Debug, Args)]
+pub struct PromptShowArgs {
+    /// The invoked name, as `vibe prompt list` shows it — `daily`, `shared:deploy`
+    pub name: String,
+
+    /// Project directory
+    #[arg(long, default_value = ".")]
+    pub path: PathBuf,
+
+    #[command(flatten)]
+    pub format: FormatFlags,
 }
 
 #[derive(Debug, Args)]

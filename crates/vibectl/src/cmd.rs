@@ -5,11 +5,13 @@
 
 use std::io::Write;
 
-use vibe_core::{Config, CoreError, Query, Registry, ScanRequest};
+use vibe_core::{Config, CoreError, Query, Registry, ScanRequest, SystemRunner};
 
-use crate::cli::{ArchiveArgs, ListArgs, RenderArgs, ShowArgs, SyncArgs};
+use crate::cli::{
+    ArchiveArgs, ListArgs, PromptListArgs, PromptShowArgs, RenderArgs, ShowArgs, SyncArgs,
+};
 use crate::exit::Exit;
-use crate::{output, reporter};
+use crate::{output, prompts, reporter};
 
 pub fn list(args: &ListArgs) -> Result<Exit, CoreError> {
     let registry = Registry::open(Config::discover());
@@ -142,6 +144,101 @@ pub fn archive(args: &ArchiveArgs, archived: bool) -> Result<Exit, CoreError> {
         let _ = output::write_apply_human(&mut stdout, &report);
     }
     Ok(Exit::Success)
+}
+
+/// List the prompts, with the exposure state shown by default.
+///
+/// **Not behind a flag, and that is ADR-0010 §5's whole argument.** The safety
+/// property does not come from the `.gitignore` lines; it comes from the
+/// per-file state being visible without being asked for, because the failure
+/// this defends against is *"I didn't notice"* and a state available on demand
+/// does not guard against not noticing.
+pub fn prompt_list(args: &PromptListArgs) -> Result<Exit, CoreError> {
+    let listing = read_prompts(&args.path);
+
+    let mut stdout = std::io::stdout();
+    if args.format.json {
+        let json = serde_json::to_string_pretty(&listing)
+            .expect("PromptListing is a plain data structure and always serialises");
+        let _ = writeln!(stdout, "{json}");
+    } else {
+        let _ = prompts::write_prompt_list_human(&mut stdout, &listing);
+    }
+
+    // **`Partial` means the listing is partial, and nothing else.** An `unknown`
+    // exposure does not set it: there the walk finished and the row is present
+    // and honest, and folding the two together would leave a script unable to
+    // tell "a directory could not be read" from "git could not answer about one
+    // file" — which are the two things ADR-0002 §3's exit contract exists to
+    // keep apart.
+    if listing.is_complete() {
+        Ok(Exit::Success)
+    } else {
+        Ok(Exit::Partial)
+    }
+}
+
+/// Show one prompt's file, byte for byte.
+pub fn prompt_show(args: &PromptShowArgs) -> Result<Exit, CoreError> {
+    let listing = read_prompts(&args.path);
+
+    // Resolved first, then shadowed. A shadowed file found here is displayed
+    // *with* the file that owns its name, never as though typing the name would
+    // run it.
+    let found = listing
+        .prompts
+        .iter()
+        .find(|p| p.name == args.name)
+        .map(|p| (p, None))
+        .or_else(|| {
+            listing
+                .shadowed
+                .iter()
+                .find(|s| s.prompt.name == args.name)
+                .map(|s| (&s.prompt, Some(s.shadowed_by.as_path())))
+        });
+
+    let Some((prompt, shadowed_by)) = found else {
+        let mut stderr = std::io::stderr();
+        let _ = writeln!(stderr, "error: no prompt named `{}`", args.name);
+        // The same gate as the listing's empty case, one command over: "there is
+        // no such prompt" is only a fact when every root was read to the end.
+        if !listing.is_complete() {
+            let _ = writeln!(
+                stderr,
+                "  vibe could not finish reading every prompt location, so this is \
+                 \"not found\" rather than \"does not exist\"."
+            );
+        }
+        return Ok(Exit::Failure);
+    };
+
+    let body = std::fs::read_to_string(&prompt.path).map_err(|source| CoreError::Io {
+        path: prompt.path.clone(),
+        source,
+    })?;
+
+    let mut stdout = std::io::stdout();
+    if args.format.json {
+        // `body` travels beside the prompt rather than inside it: core's `Prompt`
+        // indexes what is on disk and does not carry file contents.
+        let payload = serde_json::json!({ "prompt": prompt, "body": body });
+        let _ = writeln!(
+            stdout,
+            "{}",
+            serde_json::to_string_pretty(&payload).expect("plain data serialises")
+        );
+    } else {
+        let _ = prompts::write_prompt_show_human(&mut stdout, prompt, &body, shadowed_by);
+    }
+    Ok(Exit::Success)
+}
+
+/// The one place the two prompt commands agree about how a listing is obtained.
+fn read_prompts(path: &std::path::Path) -> vibe_core::PromptListing {
+    let exec = SystemRunner::default();
+    let home = vibe_core::prompts::user_home();
+    vibe_core::list_prompts(path, home.as_deref(), &exec)
 }
 
 /// Generate one file from the manifest.

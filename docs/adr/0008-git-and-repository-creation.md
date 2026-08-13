@@ -595,6 +595,24 @@ So the claim is now this, and no more:
 > level up. If the layout ever changes, this claim is void until something else
 > establishes it.
 
+**This narrowing was written here and not swept, and it cost exactly what that
+predicts.** *Added 2026-08-13.* The claim above was corrected in this document
+on 2026-08-11; the `ci.yml` comment asserting the disproved half was left
+standing. On 2026-08-12 the diff adding a `VIBE_REQUIRE_GIT` step reproduced it
+**twice more** — in `ci.yml` and in the new control file's guard — because the
+author writing a second verify step read the neighbouring comment rather than
+this section. Four sites, two of them authored after the experiment that
+disproved them.
+
+Repaired 2026-08-13, and repaired at the *copy site* rather than only here: the
+narrowed claim is now stated once above the group of verify steps in `ci.yml`,
+each step's own comment asserts nothing about what the green proves, and both
+`gh_argv.rs` and `ignore_state_git.rs` carry it on the availability guard that
+gets copied with the function. **The general rule that this instance produced is
+in ADR-0002 §7** — *retracting is not finished until the residue is swept* —
+recorded there rather than here, because the next person to retract something
+will be reading the rules and not this section.
+
 The distinction generalises, and it is the useful part: **`VIBE_REQUIRE_GH`
 closes an environment-shaped hole, not a code-shaped one.** It converts "this
 machine has no `gh`, so the control skipped" — the `ext::`-era failure, where a
@@ -716,6 +734,38 @@ remembering to run the invocation**, which is a weaker guarantee than the struck
 job would have given and is accepted for exactly the reasons in the paragraph
 above: two controls, a reviewer who can still hold the argument. The trigger to
 revisit is the one recorded there, not a feeling that this is covered.
+
+**The same capability exists for `ignore_state_git`, and it is recorded as a
+capability rather than as a result.** *Added 2026-08-13.* That control routes
+through library code — `vibe_core::check_ignore`, `GitOp::CheckIgnore` and
+`classify` — so unlike `gh_containment.rs` it is reachable by this mechanism at
+all, re-derived with the `grep -q vibe_core` loop below rather than assumed. The
+scoped invocation is:
+
+```
+cargo mutants --package vibe-core \
+  --file crates/vibe-core/src/ignore_state.rs -- --test ignore_state_git
+```
+
+**Nothing has been run. This paragraph establishes that the experiment is
+expressible, which is the precondition for a decision and not the decision** —
+the same line the `--list` measurement above draws, and the same reason the
+comments in `ci.yml` and in the two control files state only what holds
+continuously. A capability available on request must never be written where a
+reader will take it for a standing guarantee; that is the capability/continuity
+split above, and a comment is exactly where it gets lost.
+
+What such a run could prove, at the granularity the evidence would have, is the
+`gh_argv` sentence one subject over: *the assertions in `ignore_state_git` that
+consume the mutated symbol executed*. What it cannot prove is that the file's
+other assertions ran — `classify`'s callers and its stderr classifier are
+different symbols, and a scoped run reports per symbol.
+
+**And the count the revisit trigger keys on has moved: three control files are
+now gated on a `VIBE_REQUIRE_*` variable**, not two — `gh_containment`,
+`gh_argv`, `ignore_state_git`. The trigger is a seventh, so it has not fired,
+and the number is recorded here because it is the kind of fact that goes stale
+silently while the sentence around it still reads true.
 
 **What is left uncovered, named precisely so nobody re-derives the struck
 design.** `gh_containment.rs` imports only `std`: it asserts on `gh`'s

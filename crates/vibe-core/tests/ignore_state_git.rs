@@ -53,8 +53,22 @@ const FSMONITOR_PROBE: &str = "vibe-nonexistent-fsmonitor-probe";
 ///
 /// The `VIBE_REQUIRE_GH` shape (ADR-0002 §7), applied to `git`: a skipped test
 /// and a passing test are the same green tick, so CI sets `VIBE_REQUIRE_GIT=1`
-/// and a missing `git` becomes a failure rather than a shrug. **The step
-/// passing is itself the proof the controls ran.**
+/// and a missing `git` becomes a failure rather than a shrug.
+///
+/// # What the green step proves, which is narrower than it reads
+///
+/// **It proves** this target exists, compiles and passes — `cargo test --test
+/// ignore_state_git` exits `101` if it is deleted or renamed — and that every
+/// call to this function which *executed* found `git`, because a missing one
+/// panics.
+///
+/// **It does not prove that any assertion in this file ran.** Zero calls to
+/// this function and one hundred are the same green. That is measured, not
+/// cautious: ADR-0008 §9 sabotaged the two `gh` control files to return before
+/// this same guard and the step stayed green on all three runners.
+/// `VIBE_REQUIRE_GIT` closes an environment-shaped hole — a runner without
+/// `git` silently voiding these controls — and not a code-shaped one, because
+/// an exit status has nothing to observe about what a test asserted.
 fn git_available() -> bool {
     let present = Command::new("git")
         .arg("--version")

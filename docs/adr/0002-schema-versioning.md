@@ -857,10 +857,55 @@ adding channels to them, which is the same argument that rejected an askpass
 helper in ADR-0008 §4, and it does not stop applying because the beneficiary is
 the person debugging.
 
+**Retracting a claim is not finished when the retraction is written. It is
+finished when the residue is swept — across code and comments, not only where
+the retraction is recorded.** A claim that has been disproved and left standing
+somewhere a writer reads is not dormant; it is the version that gets copied.
+
+Added 2026-08-13, from a two-sided instance in this project's own corpus. The
+practice already existed and was applied intermittently, which is the finding:
+
+- **Swept.** When `VIBE_INJECT_HAZARD` was struck (ADR-0008 §9), a residue
+  search followed the strike, and no orphaned mention of the struck design
+  survived.
+- **Not swept.** When the `VIBE_REQUIRE_GH` claim was *narrowed* by two
+  sabotage runs — a green step does not prove a control file executed — the
+  retraction went into ADR-0008 §9 and the comment in `ci.yml` that asserted
+  the disproved half was left alone.
+
+**The consequence arrived weeks later and arrived by copying.** The diff adding
+a `VIBE_REQUIRE_GIT` step reproduced the disproved claim **twice** — once in
+`ci.yml` and once in the new control file's guard — because the author read the
+neighbouring comment rather than the ADR. Four sites in total, two of them
+authored long after the experiment that disproved them.
+
+Three things make this a rule rather than an anecdote:
+
+- **The failure direction is the dangerous one.** A retraction that lives only
+  in an ADR leaves a *false green* in place: the wrong claim reads as
+  established, is adjacent to working code, and nobody investigates it. Same
+  shape as the locale-blind `grep` above — nobody investigates a green.
+- **Distance from the retraction is what decides who reads which version.** The
+  ADR is where the argument is settled; the comment is where the next author
+  actually stands. **Correctness must be placed at the copy site**, not merely
+  recorded at the decision site. Where several call sites will be written from
+  a template, the corrected claim belongs *once, above the group* — a per-site
+  restatement is a per-site opportunity to restate it wrongly.
+- **The sweep is a search, so it takes a positive control** like any other, per
+  the rule immediately above. "No other site asserts this" is an empty result,
+  and an empty result with no control is a skipped test wearing a green tick.
+
+The mechanical form: when a claim is retracted or narrowed, search the whole
+tree for the *claim*, not for the identifier — the wrong sentence travels in
+prose and paraphrase, so a search for `VIBE_REQUIRE_GH` finds the variable and
+misses the assertion made about it three lines down.
+
 The corollary, from `W_SCHEMA_MINOR_NEWER`: a warning defined and never emitted
 is a policy that exists only in this document. A test asserting a diagnostic is
 reported must check that something *produces* it, not merely that a consumer
-would render it if given one.
+would render it if given one. **A retraction left unswept is the same failure
+with the polarity reversed** — a claim that exists everywhere *except* this
+document, which is where it was withdrawn.
 
 The regression test that matters, and that must exist before the first write
 feature ships: a corpus of manifests in `crates/vibe-core/tests/corpus/` — each

@@ -194,12 +194,42 @@ jobs:
       - name: Run tests
         run: cargo test --locked --workspace --all-features
 
+      # =====================================================================
+      # What a VIBE_REQUIRE_* verify step proves. Read this before adding
+      # another one, and copy this claim rather than writing a new one.
+      #
+      # PROVES: the named test targets exist, compile and pass - `cargo test
+      #   --test <name>` exits 101 when a target is missing, so deleting or
+      #   renaming a control turns the step red. And that every availability
+      #   call which executed found the tool, because a missing one panics
+      #   under the variable.
+      #
+      # DOES NOT PROVE: that any assertion inside those files ran. Zero guard
+      #   calls and one hundred are the same green.
+      #
+      # The second half is measured rather than cautious. ADR-0008 §9
+      # sabotaged both gh control files to return before their guard, and the
+      # step stayed green on all three runners - runs 31480318558 and
+      # 31480321845. An earlier version of this comment asserted the executed
+      # half; the retraction went into that ADR and this comment kept the
+      # disproved claim, which was then copied into two further places when
+      # the git step was added. That is why the wording lives once, above the
+      # group, instead of inside each step.
+      #
+      # In this project's own terms (ADR-0002 §7): VIBE_REQUIRE_* closes an
+      # environment-shaped hole - a runner without the tool silently voiding a
+      # check - and not a code-shaped one, because an exit status has nothing
+      # to observe about what a test asserted.
+      #
+      # PRECONDITION for the first half: one control, one integration-test
+      # target. Fold a control into a module of a shared target and it dies
+      # silently - the target still exists and `--test <shared>` still exits 0.
+      # =====================================================================
+
       # Run the gh controls by name, with output, and with the skip disabled.
       # ADR-0008 §6 gates the `gh` path on these, and a control that returned
       # early at its availability check produces the same green tick as one
       # that ran - which a whole-suite result cannot distinguish.
-      # VIBE_REQUIRE_GH turns a missing `gh` into a failure rather than a skip,
-      # so this step passing is itself the proof that both files executed.
       #
       # gh_containment: can a per-user config redirect `gh repo create`?
       # gh_argv:        does this gh still accept the argv GhOp constructs?
@@ -213,8 +243,8 @@ jobs:
 
       # The same shape for `git`, and for the same reason: every control in
       # ignore_state_git returns early when `git` is absent, which is the green
-      # tick a passing run also produces. VIBE_REQUIRE_GIT turns that into a
-      # failure, so this step passing is the proof the file executed.
+      # tick a passing run also produces, and VIBE_REQUIRE_GIT turns that into
+      # a failure.
       #
       # What it protects (ADR-0010 §5, §8, §10): the exit-code mapping that
       # renders a prompt's privacy. A defect here reports "not ignored" - read

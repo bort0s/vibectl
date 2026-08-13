@@ -50,8 +50,22 @@ use vibe_core::gh::{GhOp, RepoVisibility};
 /// The `VIBE_REQUIRE_GH` shape, identical to `gh_containment.rs` and for the
 /// identical reason: a skipped test and a passing test are the same green tick,
 /// so CI sets the variable and a missing `gh` becomes a failure rather than a
-/// shrug. **The step passing is itself the proof the control ran** — no log
-/// needs reading, and no credential is needed to read one (ADR-0002 §7).
+/// shrug — with no log to read and no credential needed to read one
+/// (ADR-0002 §7).
+///
+/// # What the green step proves, which is narrower than it reads
+///
+/// **It proves** this target exists, compiles and passes — `cargo test --test
+/// gh_argv` exits `101` if it is deleted or renamed — and that every call to
+/// this function which *executed* found `gh`, because a missing one panics.
+///
+/// **It does not prove that any assertion in this file ran.** Zero calls to
+/// this function and one hundred are the same green. That is measured, not
+/// cautious: ADR-0008 §9 sabotaged this file to return before this call and
+/// the step stayed green on all three runners. `VIBE_REQUIRE_GH` closes an
+/// environment-shaped hole — a runner without `gh` silently voiding the
+/// control — and not a code-shaped one, because an exit status has nothing to
+/// observe about what a test asserted.
 fn gh_available() -> bool {
     let present = Command::new("gh")
         .arg("--version")

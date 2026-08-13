@@ -14,6 +14,20 @@ the two share a measurement round and nothing else.
 `crates/vibe-core/src/ignore_state.rs` with its controls in
 `crates/vibe-core/tests/ignore_state_git.rs`.
 
+**Phase 3 of 3 (2026-08-13).** The display, in
+`crates/vibectl/src/prompts.rs` with its controls in
+`crates/vibectl/src/prompts/tests.rs` and `crates/vibectl/tests/prompt_cli.rs`:
+`vibe prompt list` and `vibe prompt show`, the four display states, the unknown
+cause reaching the reader with a remedy, and `is_complete()` gating whether an
+empty list may be read as an answer. Recorded in **§7a**.
+
+Two things fell out of building it. **§5's `{ code, params }` sentence did not
+survive its own projection** — six causes shared one wire code and four carried
+no params, so the pair with opposite remedies was distinguishable only by prose;
+amended in place, along with the `message` field's retracted *"fallback rather
+than a contract"*. And **§5's label genealogy gains a fifth row, the first that
+steps back**: the displayed label is `not asked`, not `different root`.
+
 **Phase 2 of 3 (2026-08-13).** The filesystem layer, in
 `crates/vibe-core/src/prompts.rs` with its controls in
 `crates/vibe-core/tests/prompts_listing.rs`: both roots read, the measured name
@@ -243,6 +257,55 @@ installed"* and *"this is not a repository"* are both `unknown` and have
 So the state is one and the diagnostic is specific, which is also what
 `ErrorPayload`'s `{ code, params }` shape (ADR-0005 §6) exists to carry.
 
+**That sentence did not survive its own projection, and phase 3 is where it was
+caught.** *Amended 2026-08-13.* `UnknownCause::to_wire()` emitted a single
+`VIBE_S_IGNORE_UNKNOWN` for all six causes, and four of them — *not a
+repository*, *path outside the repository*, *timed out*, *no exit code* —
+carried no params either. On the wire they were identical but for the `message`,
+which the same doc comment called *"a fallback rather than a contract"*. So
+telling *install git* from *`git init`* — **the very pair this section separates
+because the remedies are opposite** — meant parsing prose. The specific half was
+specific everywhere except where it travels.
+
+**Decided: one code per cause, from a single exhaustive `(key, code)` match**,
+which is exactly what `CoreError` already does with one code per variant. A
+frontend learns one rule — *branch on `code`* — rather than one rule for errors
+and another for states.
+
+- **The rejected alternative was a mandatory `params["cause"]`.** `params` is a
+  `BTreeMap`, so *mandatory* would be a convention a test enforces where `code`
+  is a field the type enforces. That is a contract asserted in prose about a
+  container that cannot carry it — the same defect as the `message` comment,
+  rebuilt one slot over.
+- **What the split costs** is the single string that meant *the class*. Six codes
+  do not give one. It is affordable because `UnknownCause` exists only inside
+  `IgnoreState::Unknown`, so the class is always in hand where a payload is built
+  and already travels as `state: "unknown"` on the state's own `Serialize`. **The
+  payload carries the diagnostic; the state carries the class.** A consumer
+  logging payloads stripped of their states is the one case that loses it.
+- **A prefix is not a substitute and was not counted as one.** `VIBE_S_IGNORE_`
+  is a structured convention rather than prose, so recognising the class by
+  prefix would have worked; it is simply not needed, which is a better reason
+  than the one first offered for the same conclusion.
+- **Settled now because it was free now.** `to_wire()` had no caller outside its
+  own tests, so the change cost no migration — and would have cost one per
+  consumer from the first frontend onwards.
+
+**And `message` is a description, which is a contract.** *Amended 2026-08-13.*
+Calling it a fallback was false when written: `vibectl` renders
+`ErrorPayload::message` verbatim to users, so the only frontend that exists
+already relied on it. The split that matches what the code does — and what
+`error_lines` has always done — is **core owns the description, the frontend owns
+the remedy**. For this type the description is the *only* English that exists,
+since `UnknownCause` has no `Display`.
+
+That is not the duplication ADR-0001 §4 sends toward the frontend, and the test
+is which slot the frontend's own sentences fill: **they are remedies.** This
+section separates these causes *by remedy* in the first place, so a per-cause
+catalogue in a frontend is a remedy catalogue and is not a second description of
+the same six things. What stopped being supported is *branching* on `message`,
+which the per-cause codes make unnecessary.
+
 **The `128` row above merged two causes under one label, and the instrument
 turns out to distinguish them.** *Amended 2026-08-12, from the phase 1 diff.*
 The status does not separate them; **stderr does**, and the reason to look was
@@ -328,12 +391,29 @@ asking what the instrument actually touches:
 | `tracked` | git has the file | exclusion rules, not the index |
 | `ignored` / `not ignored` | an exclusion rule applies | true — **for the root asked**, and only that one |
 | `different root` | this repository cannot expose it | two path strings, not two inodes |
+| **`not asked`** | **vibe took no measurement** | **true, and it is a fact about vibe rather than about the file** |
 
 Same direction four times, which is what makes it a pattern rather than four
 mistakes: **the label reaches one step past the instrument, and every step is
 towards reassurance.** The third row is the one to watch, because it is correct
 as written and its correctness is conditional on something the label does not
 say — which is exactly how the fourth arrived.
+
+**The fifth row is the first that steps back, and it is phase 3's.** *Added
+2026-08-13.* `different root` stays the name of the *decision* in §5a — the
+routing is real and the shape is unchanged — but the **displayed label** is
+`not asked`, because `different root` asserts that another repository exists and
+that this one is not it, when what vibe did was compare two path strings and
+route. The sentence that goes false when `~/.claude` is symlinked into the
+project tree is *"your project's `git add -A` cannot pick this file up"*, and
+that is the reassuring direction again.
+
+`not asked` names vibe's own action, which vibe observes completely, so there is
+no step to be shy by. It also loses nothing a reader needs, because §5a's datum —
+*which root the question belongs to* — was never in the label; it is the field
+beside it. The genealogy's lesson holds either way: **every pass that moved
+towards a fact about the file overclaimed, and the one that moved towards a fact
+about the tool did not.**
 
 The positive control on the `127` row is recorded because the first reading of it
 was wrong: `env -i … | head -2; echo $?` reported **`head`'s** status, `0`. Re-run
@@ -521,6 +601,76 @@ and silent about identity, and identity is what a reader acts on.
 So the display is three things: **the raw file, the derived name, and the
 resolution state** — with the plugin part marked `NotAttempted` per §6.
 
+### 7a. What phase 3 decided, and the two words that must not be one word
+
+*Added 2026-08-13, from the display diff.* `vibe prompt list` and
+`vibe prompt show`, in `crates/vibectl/src/prompts.rs`. Core stays mute; every
+sentence is the frontend's, per ADR-0001 §4 — which is the document that decides
+this, not ADR-0007, whose subject is rendered *files*.
+
+**The unknown state reaches the reader as two lines, not one.** Core's
+description then this crate's remedy, which is `error_lines`' existing shape one
+subject over. Keeping them separate is what stops the remedy reading as part of
+the measurement: only the second is this build's opinion. The catalogue is keyed
+on the per-cause code and driven by `ALL_KEYS`, so a new cause reds a frontend
+test until somebody writes its remedy — ADR-0001 §4's chain, instantiated.
+
+**It has three outcomes, and that is not a detail.** A remedy, an explicit *no
+action available*, and a fallback for a cause this build has no entry for.
+`NoExitCode` and `Unrecognised` genuinely have no remedy, so an absent one must
+be an **answer** rather than a gap — otherwise it is `hint_for`'s `_ => None`,
+the wildcard that was found serving `Unverifiable`'s sentence and its `--force`
+advice to every other `RenderState` (ADR-0007 §4).
+
+**A name shown is never a claim that the name resolves here, and this is
+unconditional.** Two things can falsify it: a user-level file of the same name,
+which core reports and the display puts in its own section naming the file the
+name actually runs; and a plugin, which the base layer cannot see at all. Since
+the second is permanent (residual 1), **no listing can ever promise resolution**,
+so the listing presents *the name this file would be invoked by* — a property of
+the path — and never a resolved name.
+
+**A shadowed prompt keeps its exposure, and that is the trap the section is
+written around.** Unreachable by name is not unexposed: the file is still on disk
+and still in the repository, so a `git add -A` picks up a `not ignored` shadowed
+prompt exactly as it picks up a reachable one.
+
+**`NotAttempted` is printed once in the footer, unconditionally, including over
+an empty list.** Unconditionally because the failure is a reader taking silence
+for absence; once rather than per row because it is one fact about the whole
+namespace, and 56 copies would be the per-site restatement ADR-0002 §7 argues
+against. It names the action rather than a result — *"no conflicts found"* would
+be false, and a warning would be wrong because nothing failed.
+
+**The two unasked questions get different words, and the reason is the direction
+of the misreading.** A user-level row and the plugin footer are both *"vibe did
+not ask"*, and this codebase already has `NotAttempted` for the second. Reusing
+it for the first would be confusion rather than consistency: the footer is
+harmless and permanent, the row carries **exposure**, and a reader who has
+discharged the footer — *plugins, understood* — carries that discharge into the
+row. Reassurance flowing from the harmless instance to the load-bearing one is
+the direction polarity B cannot take. So the row says `not asked` and no bare
+*"not attempted"* appears on screen at all.
+
+Note there was **no collision in core to inherit**: `Exposure` expresses the
+unasked case as `state: None`, not as a variant sharing the word. The display
+could have created one and declined to.
+
+**`is_complete()` gates three things, and it is the most direct case of
+constraint 5 in the tool:**
+
+| Condition | May render |
+| --- | --- |
+| empty, every root `Read`/`Absent` | *"This project defines no prompts."* — a fact |
+| empty, any root `Unreadable` | never that sentence; the root, the cause, and that the count is not a fact |
+| non-empty, any root `Unreadable` | the rows, labelled partial, and **no total** |
+
+It also decides the exit code: an incomplete listing is `Partial` (2). **An
+`unknown` exposure is not**, deliberately — there the walk finished and the row
+is present and honest, and folding the two together would leave a script unable
+to tell *a directory could not be read* from *git could not answer about one
+file*, which is the distinction ADR-0002 §3's exit contract exists for.
+
 ### 8. The git call site is new, and the containment argument is re-made rather than inherited
 
 Asking git rather than parsing `.gitignore` is right precisely because git
@@ -699,6 +849,31 @@ is: the class is "a partial listing reported as complete" and the control
 exercised one member of it. It is recorded there and not in this document for
 the reason this project has now paid for twice — **the next person writing a
 control will be reading the rules, and will not open the prompts ADR.**
+
+**What phase 3 added, and the one sabotage that came back green.** *Added
+2026-08-13.* Seventeen guards across the wire codes, the renderer and the CLI
+wiring were each sabotaged; sixteen went red on the first run. The four
+`is_complete()` producers get a control each — two roots × `Unreadable`'s two
+branches — and the two *roots* are asserted to read differently, because a
+project root that could not be read means prompts may be **missing** while a user
+root that could not be read means any listed prompt may be **shadowed** by a file
+vibe could not see. One sentence for both would be phase 2's finding one level
+up in the display.
+
+**The green one is the finding, and it was in a control rather than in the
+subject.** The test that `not asked` says where to look asserted that the user
+root's path appeared *in the output*. Deleting the note that prints it left the
+test green — because the same path is already spelled out in the FILE column of
+every user-level row. **One observable, two producers, and the control exercised
+the one it was not about.**
+
+That is the same rule as phase 2's and it is worth one line here because the
+*shape* is new: phase 2's two branches converged on one enum value, where this
+one converges on a **substring of rendered text**. In a text assertion every
+other line of output is a candidate producer, so the branch count is larger and
+far less visible than in an enum. The repair was to anchor the assertion to the
+note's own line. **The general form stays in ADR-0002 §7**, for the reason
+directly above.
 
 ## The four residual failure modes
 

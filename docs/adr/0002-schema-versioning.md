@@ -762,6 +762,28 @@ produce the observable you are asserting on, and require one control per
 branch.** That is a question about the subject, asked while writing a control —
 which is the only place it is answerable.
 
+**And the count is hardest where the observable is a string.** *Added
+2026-08-13, from ADR-0010 phase 3. Not a second instance — the same one, in a
+domain that changes how the counting goes.* A display control asserted that a
+root path *appeared in the rendered output*. Deleting the line that prints it
+left the control **green**: the same path is already spelled out in a table
+column elsewhere on the screen.
+
+Same rule, and the reason to record it rather than let it sit under the entry
+above is that the enum case flatters the rule's difficulty. There the producers
+are branches in a function and counting them is reading code. **In a text
+assertion the producers are every line of output that could contain the
+substring** — a column, a path, a quoted filename, a diagnostic that happens to
+interpolate the same value — and there is no function to read. `contains` over a
+whole render is the widest possible observable, so it has the most producers and
+shows none of them.
+
+The repair generalises and is cheap: **anchor a text assertion to the line it is
+about**, not to the document. `text.lines().find(…)` then assert on that line
+turns an unbounded producer set into one. Where that is not available, assert on
+something only the subject can emit — the same move as naming a program that
+cannot exist so `git` prints what it *tried* to spawn.
+
 **A precondition you did not construct is not a precondition.** Worked example,
 because it is genuinely surprising: *"no git identity configured" is not a
 deterministic state.* When `user.name`/`user.email` are unset, `git` may

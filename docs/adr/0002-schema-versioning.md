@@ -1021,6 +1021,42 @@ the exit status. A control whose **result** carries the proof does not care
 which channels are open; one that needs its output read is hostage to whichever
 channel happens to be available that week.
 
+**A fixture with N=1 cannot tell "one" from "exactly one".** *Added 2026-08-17,
+after three instances inside three messages of ADR-0011's transport work.*
+
+**This is not the branch-counting rule above, and the difference is the whole
+value.** There, one observable had several distinct *producers*, and the repair
+is to enumerate them. Here there is **one producer that can exist in copies**,
+and the fixture contained exactly one of it — so every claim of the form *"there
+is one X per Y"* was read off a setup that never gave a second X the chance to
+appear.
+
+The three instances share one silent dimension, **multiplicity**:
+
+- **One session in the fixture**, so *"one file per session"* looked like it said
+  something.
+- **One hook per settings file**, so *"settings source"* looked like it named a
+  writer. It does not: a settings file can declare many hooks for one event, and
+  the design shipped a file key that collided.
+- **One settings file per event in the control**, so a control written
+  specifically to be *"about the naming rather than about a fixture"* was about a
+  fixture again — written minutes after its author named that exact shape.
+
+**The tell is that such a fixture is not wrong, merely singular**, which is why
+review does not catch it. Every assertion in it is true. The untested claim is
+the **quantifier**, and no assertion in the file mentions a quantifier at all —
+so there is nothing on the page for a reader to disagree with.
+
+So: **when a design rests on a count, the fixture must exercise more than one, or
+it establishes nothing about the count.** In practice N=2 is the whole of it. The
+step from one to two is where *"a"* becomes *"exactly one"*; further copies add
+nothing.
+
+**And the cheap form, usable while writing rather than after:** read every *"per"*
+in a design sentence as a claim that needs its own fixture. *One file per writer*,
+*one identity per hook*, *one answer per root* — each *"per"* is a quantifier, and
+a fixture holding one of the thing on its right-hand side tests none of them.
+
 **A threshold specified with the task is an instrument, and the ordering rule
 does not care who supplied it.** *Added 2026-08-17, from ADR-0011's
 concurrent-append question.*

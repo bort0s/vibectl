@@ -550,9 +550,20 @@ These are **parts of the design, not cost lines**, and they are written as
 requirements because the reversal moved them from *"a price `http` avoids"* to
 *"work this transport must do"*.
 
-- **One file per writer — `(session_id, settings source)` — so concurrent append
-  does not exist.** *Decided 2026-08-17.* Multiple sessions, and the duplicate
-  delivery §2 measures, would otherwise write one sink at once.
+- **One file per writer — `(session_id, declared writer identity)` — so
+  concurrent append does not exist.** *Decided 2026-08-17.* Multiple sessions,
+  and the duplicate delivery §2 measures, would otherwise write one sink at once.
+
+  **The key said `settings source` for half a day, and that was wrong.**
+  *Corrected 2026-08-17.* It was read off a fixture in which each settings file
+  declared exactly one hook per event, so one source meant one writer. That is a
+  property of the fixture. Measured from the schema: the per-event value is an
+  **array of matcher-groups, each holding an array of hooks**, so one settings
+  file can declare N×M command hooks for a single event. All of them share a
+  source, all of them would open one file, and **concurrent append returns inside
+  the design whose entire justification is that it cannot occur.** The identity
+  must therefore be the one the hook itself declares, one per installed hook, and
+  never a property of the file it was declared in.
 
   **Two shapes were rejected and the first was inadmissible rather than worse.**
   A shared file relying on append atomicity has a failure — a split or
@@ -640,6 +651,39 @@ requirements because the reversal moved them from *"a price `http` avoids"* to
   was delivered through* — §2's two deliveries are distinguishable only by
   something the hook itself supplies. Under D that identity is half the filename,
   so it moves into §7's contract declaration alongside the version.
+
+  **Uniqueness is enforced, not remembered, and the enforcement point is the
+  config rather than the records.** A duplicated identity collides silently and
+  is exactly the failure this shape exists to make unrepresentable, so a rule
+  someone follows is not enough.
+
+  **The writer cannot be the detector, and the obvious design does not work.**
+  Creating the file exclusively catches nothing: a writer appends across every
+  event of a session, so from the second event onward the file legitimately
+  exists, and **an existing file is indistinguishable from a twin's** — exclusive
+  creation can only ever fire once, on the first event, when there is nothing yet
+  to collide with. Locking would serialise twins rather than detect them, and it
+  would reintroduce exactly the cross-platform guarantee this shape was chosen to
+  stop depending on.
+
+  **So the check is static and runs in two places, both of which vibe already
+  visits.** A duplicated identity is a *configuration* fact — fixed before any
+  event fires — so it is decidable without reading a single record:
+
+  1. **`vibe monitor install` refuses an identity already declared**, across both
+     settings files. That covers the path vibe controls, at the moment the user
+     is doing something deliberate.
+  2. **The contract read reports it.** §7 already requires vibe to read each
+     installed hook's declared contract version and report a mismatch. That read
+     enumerates identities at the same time and reports a duplicate as a
+     configuration fault. **This is what covers hand-installed hooks**, which §7
+     permits and which install therefore never sees.
+
+  **Note this is not detection downstream at read time.** The distinction is what
+  is being read: inspecting *records* to notice a collision arrives after both
+  writers have written and after the damage. Inspecting the *config* is a check on
+  a static property that can run before anything is written at all, and it is the
+  only place a hand-installed collision is visible.
 
   **A hand-installed hook that omits it writes a file the reader cannot
   attribute**, and this is the ordinary case rather than the exotic one: §7
@@ -752,12 +796,23 @@ missing transport, which is now §7a. What follows is the state after round 2.*
 
   Two controls, because the design has two claims:
 
-  **a. Distinct paths, paired.** Two sessions, and §2's two settings sources
-  within one session, must produce **four distinct files**. Sabotage by
-  collapsing the naming to a constant and observing the collision — which is what
-  makes the assertion about the *naming* rather than about a fixture that happened
-  to use one session. Without the sabotage half, a build that writes one file per
-  *machine* satisfies the "records are all present" reading perfectly.
+  **a. Distinct paths, paired, and on three axes rather than two.** *Rewritten
+  again 2026-08-17, because the two-axis version had the defect it was written to
+  prevent.* It required two sessions and §2's two settings sources — and used
+  **one hook per source**, so it would have passed against a build keying on the
+  settings file, which is the defect that was actually shipped. The axes are:
+
+  - two **sessions**, one hook each;
+  - two **settings sources** within one session;
+  - **two hooks declared in the same settings file** for the same event — the
+    axis the earlier fixture was silent on, and the one that separates *"one file
+    per declared identity"* from *"one file per settings file"*.
+
+  Every combination must produce a distinct file. Sabotage by collapsing the
+  naming to a constant and observing the collision; sabotage a second time by
+  keying on the settings source and observing **only the third axis go red**,
+  which is what establishes that the third axis is doing work the other two
+  cannot.
 
   **b. A cut-mid-record tail.** Write a file whose final record is truncated
   part-way and assert the reader **reports a partial tail** — not dropping it
@@ -773,6 +828,13 @@ missing transport, which is now §7a. What follows is the state after round 2.*
   — and it would go green on the one platform it could run on, which is how the
   dependency got accepted in the first place.
 
+  **c. Uniqueness is refused, paired.** A config declaring the same identity
+  twice must be **refused by `vibe monitor install` and reported by the contract
+  read**, and the same config with distinct identities must be accepted and
+  produce two files. Sabotage by deleting the uniqueness check and observing the
+  duplicate accepted. The fixture must reach the check rather than failing
+  earlier — a config that is malformed for some other reason proves nothing about
+  it.
 - **Ordering needs a control that the reader refuses rather than guesses.** Two
   records with no ordering relation between them in the payload — different turns,
   no shared `tool_use_id`, no `index` — and stamps that are equal or inverted must

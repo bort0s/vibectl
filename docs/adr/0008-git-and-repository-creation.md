@@ -458,6 +458,22 @@ first.
 > the expensive one — a commit reported as covered because a shortcut outlived
 > the thing that made it true.
 >
+> **And the retirement earned its place on 2026-08-17, from the sequence rather
+> than from the outcome.** A documentation-only commit was authored directly on
+> `main` and pushed **before** its CI ran, inverting the gate — work belongs on a
+> branch, and `main` moves only after green. The run went green, which is exactly
+> why it is worth recording: **under the retired shortcut this sequence was
+> invisible by construction.** A docs-only commit inherited the previous verdict,
+> so "pushed before its own CI" and "covered" were the same state, and nothing
+> distinguished a deliberate inheritance from a skipped gate.
+>
+> The observation is not an excuse for the sequence, and the sequence was not
+> made acceptable by the green. It is the argument for the practice: **a rule
+> that requires every commit to be observed makes an out-of-order push a visible
+> event instead of a permitted one.** The shortcut's cost was never the one
+> aggregate check it saved; it was that it removed the only signal distinguishing
+> these two cases.
+>
 > The enumeration is kept, but as a *fact about the workflow* rather than as a
 > licence: CI runs `fmt`, `clippy`, `test`, `check` and `cargo tree`, plus `jq`
 > over the other jobs' results, and reads Rust sources, manifests and the

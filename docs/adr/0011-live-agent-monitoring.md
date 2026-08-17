@@ -550,11 +550,82 @@ These are **parts of the design, not cost lines**, and they are written as
 requirements because the reversal moved them from *"a price `http` avoids"* to
 *"work this transport must do"*.
 
-- **Concurrent append is a required design element.** Multiple sessions, and the
-  duplicate delivery §2 measures, write to the same sink at once. Append
-  atomicity is not uniform across the three platforms, and a transport whose
-  records interleave produces a corrupted history that reads exactly like a
-  strange one. This gets its own control.
+- **One file per writer — `(session_id, settings source)` — so concurrent append
+  does not exist.** *Decided 2026-08-17.* Multiple sessions, and the duplicate
+  delivery §2 measures, would otherwise write one sink at once.
+
+  **Two shapes were rejected and the first was inadmissible rather than worse.**
+  A shared file relying on append atomicity has a failure — a split or
+  interleaved record — that **cannot be induced on demand**: it depends on
+  filesystem, OS and timing, and may never reproduce on local NTFS or ext4. A
+  failure that cannot be produced deliberately **cannot have a paired control**,
+  and a guard without one has never been accepted here, so it is out before cost
+  is discussed. A shared file with framed records is admissible — framing makes a
+  torn record certainly detectable rather than heuristically so, and its fixture
+  is fully constructible because the hazard moves into the *reader* — but it
+  **detects rather than prevents**, and the torn record's contents are still
+  lost.
+
+  **What decides it is neither of those.** Both shared-file shapes rest on an
+  atomicity guarantee **this project cannot measure on two of its three
+  platforms** from the machine it develops on. That is the same shape as the
+  `PIPE_BUF` assumption that died on contact with measurement (ADR-0002 §7): a
+  cross-platform property taken on authority. **One writer per file does not
+  handle that dependency, it removes it** — the guarantee stops being load-bearing
+  because nothing concurrent happens. Same technique as the missing
+  `FileOp::Delete` and ADR-0005 §10 rule 1's closed enum.
+
+  **The positional bound is the bonus, not the reason.** With one writer,
+  interleaving is impossible and only truncation remains — a crashed hook, a full
+  disk, a killed process — so **only the last record in a file can be partial.**
+  The reader therefore validates a *tail* rather than scanning for corruption
+  anywhere, which is the whole of the framing that survives from the rejected
+  shape.
+
+- **Ordering across files is authored, not observed, and the reader must be able
+  to refuse.** *This is the largest cost D carries and it is recorded before it
+  becomes an implementation detail.*
+
+  **Measured 2026-08-17: no event type carries a timestamp.** Across all eight
+  observed types the payload offers `session_id`, `prompt_id`, `turn_id`,
+  `message_id`, `tool_use_id`, `index` and `duration_ms` — and nothing naming a
+  point in time. Every timestamp in this round's data was added by the
+  measurement harness. So under D, where history is reassembled from several
+  files, **the merge key is a value the writer invents.**
+
+  That is constraint 5 pointed at *ordering* rather than at a value, and it is
+  the more dangerous target: a wrong value is a wrong field, while a wrong order
+  is a **plausible history**. Clock skew between hook processes, or a wall clock
+  stepping backwards under NTP, silently reorders events into a sequence that
+  reads perfectly.
+
+  **What the payload does support, at no cost and with no clock, is a partial
+  order**: `session_id` groups, `prompt_id` groups a turn, `tool_use_id` pairs a
+  `PreToolUse` with its `PostToolUse`, `index` sequences `MessageDisplay` deltas
+  within a message, and the lifecycle constrains the ends. **That is a payload
+  fact and it is the primary ordering.** Authored stamps are the fallback, used
+  only where the payload orders nothing.
+
+  **So the reader's contract is a partial order, not a sequence** — and where two
+  records are unordered by both the payload and the stamps, it must **say so
+  rather than present one**. That cost propagates: it reaches §6's display and
+  ADR-0009's constraints as a third state one level down, *ordered* versus
+  *unordered with respect to each other*, with the second never borrowing the
+  appearance of the first.
+
+  **One check D makes available and a shared file would muddy:** within a single
+  file there is exactly one writer, so stamps must be non-decreasing. **A
+  decreasing stamp inside one file is direct evidence the clock stepped** — a
+  reported fact rather than an inference, detectable with no cross-file
+  reasoning at all.
+
+  **Deliberately not taken yet: a monotonic stamp.** A boot-relative monotonic
+  clock does not step backwards and is understood to be comparable across
+  processes on one boot, which would give a total order within a session — and
+  *"understood to be"* is exactly the standing this section is not going to build
+  on again. It is **unmeasured on all three platforms**, and the last
+  cross-platform property accepted on that standing was `PIPE_BUF`. It becomes
+  available when measured, and not before.
 - **The contract version pins the hook's execution properties, not just its
   payload shape.** §7 requires the installed hook to declare which contract
   version it implements. Hooks carry `timeout`, `async` and `asyncRewake`
@@ -564,8 +635,32 @@ requirements because the reversal moved them from *"a price `http` avoids"* to
   delivery semantics unpinned**, which is the half that decides whether absence
   means anything. `http` would have inherited this identically; the reversal
   does not reduce it.
+- **Writer identity is declared by the hook, so `unattributed` is a state rather
+  than an error.** *Measured: the payload does not name the settings source it
+  was delivered through* — §2's two deliveries are distinguishable only by
+  something the hook itself supplies. Under D that identity is half the filename,
+  so it moves into §7's contract declaration alongside the version.
+
+  **A hand-installed hook that omits it writes a file the reader cannot
+  attribute**, and this is the ordinary case rather than the exotic one: §7
+  permits hooks installed by hand, so the field will be missing somewhere. The
+  reader therefore **lists such a file as `unattributed` and reads its records**
+  — the events are real, the session is named in every payload, and only the
+  *source* is unknown. Discarding it would lose real events; guessing a source
+  would invent one; calling it an error would say something failed when nothing
+  did. It is `NotAttempted`'s neighbour: a fact vibe does not have, named as
+  missing, with everything that does not depend on it still usable.
+
+  **The one thing it costs is dedupe.** §2's duplicate delivery is identified by
+  source, so an unattributed file's records cannot be matched against their twins
+  with certainty. That is a bounded, statable degradation — *this session's
+  duplicates may not be collapsed* — and it must render as such rather than as a
+  session that emitted twice as many events.
+
 - **The sink lives where vibe manages it**, not in a directory a user cleans up,
-  since an append into a deleted inode succeeds silently on POSIX.
+  since an append into a deleted inode succeeds silently on POSIX. One file per
+  writer makes retention a **new and required** piece of work, and it is a
+  deletion story, which this project treats carefully.
 
 **And the residual is stated rather than dissolved:** a file that stops growing
 is indistinguishable from a quiet agent. Neither transport ever fixed that. It is
@@ -586,9 +681,11 @@ missing transport, which is now §7a. What follows is the state after round 2.*
    measurable here**, for want of a constructible pty. What closes it is a fixture
    with a real terminal, not another headless run.
 2. **The display shape and the state names.** Unchanged as a question and
-   **harder as a problem**: §5's retraction means the facts available are fewer
-   than round 1 recorded, so a display cannot lean on *"a tool is running"*.
-   §6 constrains this and does not settle it.
+   **harder as a problem**, now for two reasons: §5's retraction means the facts
+   available are fewer than round 1 recorded, so a display cannot lean on *"a
+   tool is running"*; and §7a's transport makes history a **partial order**, so
+   the display inherits an *unordered with respect to each other* state it cannot
+   render as a sequence. §6 constrains this and does not settle it.
 3. **~~Transport~~ — decided: a file, §7a.** `http` was chosen first on a real
    and unique property and **reversed** when costing showed that property to be
    information about the receiver rather than about the subject. The reversal is
@@ -646,13 +743,43 @@ missing transport, which is now §7a. What follows is the state after round 2.*
   paid for twice: the next person writing a control will be reading the rules,
   and will not open the monitoring ADR.
 
-- **The file transport needs a concurrent-append control, and it is not
-  optional.** *Added 2026-08-17, with §7a's reversal.* Two sessions plus §2's
-  measured duplicate delivery write to one sink at once, so the fixture is
-  several writers appending simultaneously and the assertion is that **every
-  record is present and individually parseable** — not merely that the file is
-  non-empty. Interleaved records produce a history that reads like a strange one
-  rather than like a corrupt one, which is why the assertion is per record.
+- **The one-writer-per-file property needs a control, and "several simultaneous
+  writers" is not it.** *Rewritten 2026-08-17, once §7a settled on D. The first
+  version of this bullet asked for simultaneous writers appending to one sink and
+  per-record parseability, and it would have **passed while proving nothing**: the
+  failure it aimed at is size-dependent, not concurrency-dependent, and small
+  records from several writers reproduce nothing.*
+
+  Two controls, because the design has two claims:
+
+  **a. Distinct paths, paired.** Two sessions, and §2's two settings sources
+  within one session, must produce **four distinct files**. Sabotage by
+  collapsing the naming to a constant and observing the collision — which is what
+  makes the assertion about the *naming* rather than about a fixture that happened
+  to use one session. Without the sabotage half, a build that writes one file per
+  *machine* satisfies the "records are all present" reading perfectly.
+
+  **b. A cut-mid-record tail.** Write a file whose final record is truncated
+  part-way and assert the reader **reports a partial tail** — not dropping it
+  silently, and not parsing a prefix that happens to be valid. Sabotage by
+  deleting the tail check and observing the truncated record either vanish or be
+  accepted as complete. This is constructible by hand precisely because D bounds
+  the hazard positionally; it needs no race, which is the property that made the
+  rejected shared-file shape inadmissible.
+
+  **Note what is deliberately not controlled: append atomicity.** Under D nothing
+  concurrent happens, so there is no atomicity property to test. A control
+  asserting it would be testing an OS guarantee this design no longer depends on
+  — and it would go green on the one platform it could run on, which is how the
+  dependency got accepted in the first place.
+
+- **Ordering needs a control that the reader refuses rather than guesses.** Two
+  records with no ordering relation between them in the payload — different turns,
+  no shared `tool_use_id`, no `index` — and stamps that are equal or inverted must
+  render as **unordered**, not as a sequence. Paired: the same two records with a
+  payload relation present must render **ordered**. A build that always emits a
+  sequence satisfies the second half perfectly, and the failure is a plausible
+  history, which is the one nobody investigates.
 
 - **The contract version needs a control on the delivery properties, not only on
   the payload.** `timeout`, `async` and `asyncRewake` each change whether and

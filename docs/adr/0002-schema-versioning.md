@@ -431,6 +431,40 @@ of Windows shells. A rule supported from two independent domains is in better
 shape than one supported six times from one. The tally stays where it is; the
 rule it was cited for gets a second population.
 
+**A third population, and the quietest failure of the three.** *Added 2026-08-17,
+from ADR-0011's second measurement round.* ADR-0011 §5 recorded that *"one
+process in a four-row sample returned an empty start time, because the datum is
+access-controlled"*, and built a testability argument on that observable. It is
+not what the system does. Re-measured through raw `OpenProcess` +
+`GetProcessTimes` with a positive control, a protected process fails **loudly**,
+with `ERROR_ACCESS_DENIED`. The empty value came from **.NET's
+`Process.StartTime` accessor**, which yields an empty string **and raises
+nothing** — a blank cell in a formatted table.
+
+Not folded into the six-for-six, for the reason the paragraph above gives: that
+count is scoped to channel-alters-input instances from one round on one platform,
+and a .NET property accessor is a different population again — shells, then a
+Rust test fixture and a timeout, now a managed-runtime API wrapper. **Three
+populations is what the ordering rule is now supported by, and the count it was
+originally cited for is untouched.**
+
+**What this instance adds that the other two do not: the instrument did not fail,
+it answered.** The timeout produced a red naming the wrong subject; the channel
+cases produced wrong strings. This produced a **plausible value in the right
+shape** — an empty start time is exactly what "no start time available" would
+look like, so it invited a whole design paragraph about an unreachable arm, and
+that paragraph was written. **A wrapper that degrades to a well-formed value is
+worse than one that throws**, because the reading it produces is not obviously a
+reading at all. It also destroyed a distinction that turned out to matter:
+PID 0 and PID 4 render identically empty, while the syscall separates them, and
+the design consequence sat entirely in that separation.
+
+The repair is the general one and it is cheap: **when a measured property is
+going to carry design weight, take it at the layer the code will use**, not at
+whichever layer was convenient to type. A wrapper is an instrument, and §7's
+instrument rule applies to it — its properties are measured with it, not assumed
+from how it is described.
+
 **An uncompiled test is a test that has not run.** The same family again, one
 step earlier: the rules above are about a control that executes and proves less
 than it appears to. This one is about a control that never executed at all.
@@ -829,6 +863,48 @@ about**, not to the document. `text.lines().find(…)` then assert on that line
 turns an unbounded producer set into one. Where that is not available, assert on
 something only the subject can emit — the same move as naming a program that
 cannot exist so `git` prints what it *tried* to spawn.
+
+**When a claim is retracted, the controls it would have justified must be
+forbidden by name — because nothing else stops them being written.** *Added
+2026-08-17, from ADR-0011's retraction of the `tool_use_id` claim.*
+
+Every rule above is about a control that proves less than it appears to. This one
+is about a control that **has not been written yet and must not be**, and it is a
+distinct failure because the mechanisms above all operate on controls that exist.
+
+The shape: a claim is retracted, the retraction is recorded, and the *obligation*
+the claim created is left behind — a control someone was always going to write
+against it. The retraction does not reach that control, because the control does
+not exist to be swept. Later, somebody reads a sentence near the design, writes
+the obvious control for it, and **it passes** — the implementation matches the
+retracted claim, which is precisely the defect. **A green control certifying the
+thing that was withdrawn is the worst available outcome**, because it converts a
+known-false claim into an apparently verified one.
+
+Note the direction, which is the one this section keeps returning to: nobody
+investigates a green, and this green is *more* convincing than most because it
+comes with a test name.
+
+**Three properties make it worth a rule rather than a note on the case that
+produced it:**
+
+- **It is not caught by the retraction sweep.** That sweep searches for the claim
+  in prose and in code. The control is neither — it is future work, and a search
+  cannot find text nobody has typed.
+- **It is not caught by review.** The control looks correct: it asserts a thing
+  the surrounding document appears to say, and its subject reads as ordinary.
+  Only someone holding the retraction can see the problem, which is exactly the
+  reader the retraction was written for and exactly the reader who will not be
+  present.
+- **The repair is cheap and has to be explicit.** When retracting, ask **what
+  would have been controlled**, and record that as a prohibition next to the
+  other obligations — *this control must not be written, and here is what it
+  would have certified*. A prohibition sitting among requirements is read by the
+  person writing the requirements, which is the one place it fires.
+
+The general form: **a retraction removes a control's subject, and nothing
+inherits the removal.** Record what must not be built beside what must, or the
+gap is filled by the next person acting in good faith on a stale sentence.
 
 **A precondition you did not construct is not a precondition.** Worked example,
 because it is genuinely surprising: *"no git identity configured" is not a

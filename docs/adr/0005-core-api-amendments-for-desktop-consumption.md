@@ -561,6 +561,52 @@ with the version recorded beside it — never *"the surfaces"*. That is the same
 discipline §7 requires of an instrument's measured properties, applied to the
 output of a rule instead of to a tool.
 
+**The uncovered channel has now fired, and the instance is worth more than the
+prediction was.** *Added 2026-08-17, from ADR-0011's second measurement round.*
+
+The bullet above was written as an anticipated hazard: upstream releases add
+things on their own schedule, no diff on our side, nothing to review, and a
+reader cannot tell a complete list from a stale one. It happened, and it happened
+exactly as described:
+
+- Claude Code **2.1.228** — the build ADR-0011's entire corpus was measured on —
+  was replaced on the machine by **2.1.229 and 2.1.233**. Nobody in this project
+  did anything. No commit, no review, no signal of any kind.
+- On re-measurement, an ADR claim was **false**: ADR-0011 §5's *"an unmatched
+  `tool_use_id` with the reporter alive is a tool in flight"*, now retracted. The
+  observed event set had grown from six types to nine.
+
+**Three things make this an instance worth recording rather than a told-you-so.**
+
+1. **It widens the rule's subject past config keys.** This bullet is written
+   about `git` and `gh` adding *configuration keys*. What went stale here was a
+   **behavioural property** — what a tool does, not what its config can name.
+   The channel is the same and the surface is larger than the bullet says: *any*
+   measured property of a third-party tool decays on that tool's release
+   schedule, and 4a's enumerations are one member of that class rather than the
+   class.
+
+2. **It is evidence the prediction did not have.** An anticipated hazard with no
+   instance is an argument; one with a dated instance is a base rate, however
+   small. This is the same distinction ADR-0002 §7 draws when it notes that a
+   rule supported from two independent domains is in better shape than one
+   supported six times from one.
+
+3. **The mitigation is the one already prescribed, and it worked.** *Record the
+   version beside the answer.* Because ADR-0011 recorded **2.1.228** rather than
+   *"Claude Code"*, the staleness was detectable at all — the version was
+   checkable, found absent, and the corpus was re-pinned with the delta named
+   rather than silently adopting the new answer. **The rule cannot stop the
+   decay; it is what makes the decay visible**, and that is the whole claim it
+   should be read as making.
+
+**What it still does not buy, restated so this is not read as a closure:** there
+is no trigger. Nothing fired when the version changed; a person happened to look.
+A tool that pins and checks the version would be one, and is not built here — the
+point is that the honest status is *"undetected until someone looks"*, and the
+version-beside-the-answer discipline is what makes looking sufficient when
+somebody finally does.
+
 **A mechanism that inverts the failure mode, costed and not taken.** Measured on
 git 2.54.0.windows.1, against the same planted-`HOME` fixture:
 

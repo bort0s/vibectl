@@ -8,8 +8,35 @@ constraints that hold *whatever* the design turns out to be — the shape ADR-00
 used for the frontend, and for the same reason: "nothing recorded" and "no
 constraints" are different things.
 
-The decisions still open are listed in §8, and both are blocked on measurement
-or are display design rather than on anyone's preference.
+**Re-pinned to Claude Code 2.1.233 (2026-08-17), and the previous corpus is
+deliberately not re-measured.** The build every fact below was first established
+on — **2.1.228** — no longer exists on this machine; 2.1.229 and 2.1.233 are
+installed in its place. A second round was taken on 2.1.233 and is recorded as
+**deltas against the 2.1.228 record**, not as a replacement for it. Re-measuring
+the whole corpus was considered and declined: it is expensive and it produces
+another corpus that goes stale by the same mechanism on the next release. **The
+value is in the delta**, which is what a reader of a versioned measurement
+actually needs.
+
+**That round retracted a claim rather than adding one, and the retraction is the
+headline.** §5's sentence that an unmatched `tool_use_id` means a tool is in
+flight is **false on 2.1.233 and nothing replaces it.** The gap §5 claimed to
+have narrowed is open. §8's open items are revised accordingly.
+
+**And transport — missing from §8 entirely, which read as complete — is decided
+in §7a, by a decision that was taken and then reversed.** `http` was chosen on a
+property no other variant has, costed, and the costing showed the property to be
+information about the receiver rather than about the subject. The transport is a
+file. **Both halves are kept**, because the reversal is the more useful record: a
+real and unique property is not the same as a decisive one, and this one did not
+survive being priced.
+
+**This round is also the first measured instance of a staleness channel this
+project had only predicted.** ADR-0005 §10 rule 4a records that upstream releases
+are the one channel with no trigger — no diff on our side, nothing to review. It
+happened: a vendor bumped a version and an ADR claim became false with no change
+to this repository. Recorded there rather than here, because the next person
+relying on a measured property of someone else's tool will be reading the rule.
 
 ## Context
 
@@ -21,9 +48,17 @@ Versions, because a property belongs to a build:
 
 | | |
 | --- | --- |
-| Claude Code | **2.1.228**, native binary bundled in the VSCode extension |
+| Claude Code, round 1 (2026-08-12) | **2.1.228**, native binary bundled in the VSCode extension |
+| Claude Code, round 2 (2026-08-17) | **2.1.233**, commit `f8d57569aaf3`, same bundling |
 | OS | Windows 10 Pro 19045; node v24.16.0 |
+| Windows session | **non-elevated**, which §5's start-time fixture depends on |
 | Codex | **not installed — nothing measured**, per ADR-0010 §1 |
+
+**Every claim below carries its round.** Where round 2 contradicts round 1 the
+contradiction is recorded as such rather than resolved by overwriting, because
+which build a behaviour belongs to is the fact, and a document that silently
+adopts the newest answer has thrown away the only thing a version-pinned
+measurement was for.
 
 ## Decision
 
@@ -43,8 +78,8 @@ process or an unchanged file. Hooks replace it with reported facts.
 Measured by installing a node hook that appends its stdin verbatim, then
 invoking the agent headlessly.
 
-**Six event types observed in one run:** `SessionStart`, `UserPromptSubmit`,
-`PreToolUse`, `PostToolUse`, `Stop`, `SessionEnd`.
+**Six event types observed in one run (round 1, 2.1.228):** `SessionStart`,
+`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SessionEnd`.
 
 **`settings.json` and `settings.local.json` both load and both fire — a union,
 not an override.** The two events declared in both produced **two entries each**,
@@ -62,6 +97,41 @@ is the ordinary case once a user has local overrides.
 never fired, because no notification occurred — the positive control is that
 seven other entries from the same config were written in the same run.
 `PermissionRequest` was never exercised at all.
+
+**Round 2 (2.1.233): nine event types, and the union re-established rather than
+inherited.** *Added 2026-08-17.* Three runs against a fixture whose two settings
+files both declare hooks — so the union is a **constructed** precondition, which
+is what §9's dedupe obligation requires and what a fixture with hooks in one file
+only would have failed to provide. Every event fired **twice**, once per file,
+distinguishable only by a label the hook itself supplied. Round 1's finding holds
+on this build.
+
+Two types round 1 does not record: **`MessageDisplay`** and **`PostToolBatch`**.
+So the observed set is nine and the earlier six was never a closed enumeration —
+it was the list of what one run happened to produce, which is the ordinary rate
+at which these tables turn out to be enumerations of what was tried (ADR-0010 §5).
+
+**The build enumerates its own valid event names, and that is a different kind of
+fact from an observation.** `claude doctor` reports an unknown hook event by name
+and prints the valid set — **31 names on 2.1.233**, including `PermissionRequest`,
+`PermissionDenied`, `Notification`, `SubagentStart`, `Elicitation` and
+`TeammateIdle`. That enumeration says which names the build *accepts*; it says
+nothing about which ones *fire*. The two are kept apart deliberately, because
+collapsing them is how a schema becomes a behavioural claim.
+
+**It does close one hole, and that is why it was worth running.** A negative
+result about an event that never fired is worthless if the name was never
+registered — the failure would be in this project's config and would arrive
+labelled as a fact about the subject. Paired both ways: a deliberately bogus name
+(`VibeNonexistentEventProbe`) is reported as *"Unknown hook event … was
+ignored"*, and a file declaring only the real names produces no such report at
+all. So §5's negatives below are about **firing**, not about a typo here.
+
+**The hook *transport* is not one thing on this build, and §7 now depends on
+that.** Five variants: `command` (with an `args` exec form that spawns directly,
+**no shell in the channel** — used by every fixture in round 2), `prompt`,
+`agent`, `http` (POSTs the hook JSON to a URL), and `mcp_tool`. Each carries
+`timeout`, and `command` additionally carries `async` / `asyncRewake`.
 
 ### 3. Attribution comes from the payload, never from the environment
 
@@ -135,6 +205,15 @@ rather than left to the display.
 **So a third state is not a nicety, it is required by the measurement**, and it
 must be distinguishable from both "working" and "stopped".
 
+**Round 2 leaves this argument untouched and makes it stronger, and the
+distinction matters because §5 below changes a great deal.** *Added 2026-08-17.*
+What §5 retracts is a claim about what an unmatched `tool_use_id` *means*; it
+does not touch the reason a third state exists, which is that the last written
+event is not the current state. **The third state's composition is unchanged.
+What changes is how much lives inside it** — round 1 read "alive and quiet" as
+one case plus a hedge, and it is three cases with no discriminator. A third state
+is required by the same measurement and now has more to hold.
+
 ### 5. Liveness is the only measured discriminator, and it is not sufficient alone
 
 `CLAUDE_PID` gives a check the hook record cannot: whether the process that
@@ -162,26 +241,59 @@ is stated rather than waved at:
 - **Linux:** field 22 of `/proc/<pid>/stat`. No dependency.
 - **macOS:** `sysctl` `KERN_PROC_PID` → `kinfo_proc`. `libc` plus `unsafe`.
 - **Windows:** `GetProcessTimes`. Measured available on this machine at 100 ns
-  resolution and stable across reads — and **not universally readable**: one
-  process in a four-row sample returned an empty start time, because the datum
-  is access-controlled. *"Start time unavailable"* is therefore a third outcome
-  and must not collapse into either alive or gone. That is the same
-  `NotAttempted` line one level down.
+  resolution and stable across reads — three identical reads of one process —
+  and **not universally readable**, because the datum is access-controlled.
+  *"Start time unavailable"* is therefore a third outcome and must not collapse
+  into either alive or gone. That is the same `NotAttempted` line one level down.
 
-  **And that arm is probably unproducible for this subject**, which is a
-  testability problem rather than a correctness one. The process being inspected
-  is always a `claude`/`node` process the user launched, readable by
-  construction; the empty row came from a protected system process, which this
-  code will never be pointed at. So the state is **required for correctness and
-  may have no reachable fixture** — the unrecognised-`Severity` arm one level
-  down.
+  **The observable was wrong, and it was the instrument's.** *Corrected
+  2026-08-17.* This bullet read that *"one process in a four-row sample returned
+  an empty start time"*, and an empty start time is not what the syscall does.
+  Re-measured through raw `OpenProcess` + `GetProcessTimes` with a positive
+  control on our own process:
 
-  The repair is the one used then, and it is a requirement on the diff rather
-  than a note: **factor the body into a function over the raw outcome, test that
-  function directly with a synthesised "unavailable", and leave only the dispatch
-  uncovered.** What must not happen is the arm shipping as untestable with
-  nothing recorded — an unreachable arm and a forgotten one look identical in a
-  coverage report.
+  | PID | class | outcome | Win32 |
+  | --- | --- | --- | --- |
+  | own | **positive control** | OK, 100 ns FILETIME | 0 |
+  | a user-launched `node` | **the subject class** | OK | 0 |
+  | 4 | `System`, protected | `OpenProcess` returns NULL | **5** `ACCESS_DENIED` |
+  | 0 | `Idle` | `OpenProcess` returns NULL | 87 |
+  | 999999 | nonexistent | `OpenProcess` returns NULL | **87** |
+
+  The empty string came from **.NET's `Process.StartTime` accessor**, which on a
+  protected process yields an empty value **and raises nothing** — a blank cell
+  in a table, no error to notice. The syscall is loud. Suspicion goes to the
+  instrument first, and it was the instrument again; ADR-0002 §7 carries the
+  general form and explicitly does not fold this into the six-for-six tally,
+  which is a different population.
+
+  **So the arm is reachable, and PID 4 is a real fixture — with the claim it
+  supports stated narrowly.** It exercises the real syscall path to a real
+  unavailable outcome, so no synthesised value is needed on Windows. It does
+  **not** establish that the subject can ever be in that state: the subject is
+  always a user-launched `claude`/`node` process, measured `OK`. The fixture also
+  depends on two facts about the environment rather than about the code — that
+  PID 4 is the protected `System` process on build 19045, and that the session is
+  **non-elevated**. An elevated run holding `SeDebugPrivilege` may not reproduce
+  it; that was not tested. **Both belong in a comment beside the fixture**, or
+  the day it stops failing nobody will know why.
+
+  **And the real hazard is one this bullet did not have: `OpenProcess` returning
+  NULL is two outcomes wearing one observable.** `ACCESS_DENIED` means *the
+  process exists and cannot be read*; `ERROR_INVALID_PARAMETER` means *there is
+  no such process*. Code that branches on the null handle collapses them, and it
+  collapses them in the direction that reads as reassurance: **a live agent whose
+  start time is unreadable renders as stopped.** That is ADR-0010 §5's
+  *"nonzero means not-ignored"* one platform down — an error read as a clean
+  answer — and §9 carries it as a requirement on the diff with its paired
+  control. Branch on `GetLastError`, never on the handle.
+
+- **Linux and macOS: unmeasured, and the asymmetry is therefore unknown.**
+  Round 2 ran on Windows only. Whether either can produce a real *unavailable*
+  through its own route — `/proc/<pid>/stat` field 22, `KERN_PROC_PID` — is not
+  established, and if they cannot, the platform limit inverts ADR-0010 §10's,
+  where Unix had the reachable fixture and Windows had the synthesised one. That
+  inversion is worth recording **if it is measured**; it is not inferred here.
 - **Or one crate covering all three**, which is a dependency added to a library
   every embedder links — the cost ADR-0008 §4 weighed when it declined 18 crates
   for a TLS stack. Not weighed here, because that is a decision for the diff.
@@ -190,26 +302,84 @@ is stated rather than waved at:
 of a fact**, and it belongs in the same category as the silence this whole design
 refuses to read.
 
-**How much is actually unresolved while a process is alive and quiet — narrower
-than an earlier draft claimed.** The measured pairs close part of it: `PreToolUse`
-carries `tool_use_id` and `PostToolUse` closes it with the same value
-(`toolu_01AfLoKWUmCsA7LtkYkBNsaS`, observed in both), and the mid-tool kill left
-an opened id with no close. So **an unmatched `tool_use_id` with the reporter
-alive is a tool in flight — a reported fact, not an inference from silence, and
-it is not thinking.**
+**How much is actually unresolved while a process is alive and quiet — the
+narrowing is RETRACTED, and nothing replaces it.** *Amended 2026-08-17, from the
+2.1.233 round. The retracted sentence is quoted rather than deleted, because a
+retraction a reader cannot see is one they will re-derive.*
 
-What remains is one distinction, possibly two, not three:
+It read: *"an unmatched `tool_use_id` with the reporter alive is a tool in flight
+— a reported fact, not an inference from silence, and it is not thinking."* It
+also conceded one open distinction, conditional on something recorded as
+unmeasured: whether approval is requested inside the tool window.
 
-- **Inside an open `tool_use_id`:** a slow tool and an agent waiting for approval
-  are indistinguishable — *if* approval is requested within the tool window,
-  which is **unmeasured**. Headless invocation auto-denies, so no fixture here
-  produced an approval prompt.
-- **With no open `tool_use_id` and the reporter alive:** thinking or streaming.
+**Both halves were measured. The condition resolves to the bad branch, and the
+sentence is false for a reason that was not on the list at all.**
 
-`PermissionRequest` and `Notification` were never observed firing and are what
-would close the first bullet. Measuring them is the first thing to do when this
-is picked up, and the second is establishing whether an approval wait sits inside
-the tool window at all.
+Three fixtures, each with its precondition constructed rather than hoped for —
+round 1's *"headless auto-denies"* did not reproduce, because the child inherited
+a permission state that simply allowed the tool and nothing ever asked. That run
+proved nothing and is recorded as the unreached guard it was. `permissions.ask`
+in the fixture's own settings is what produced a real decision.
+
+1. **Approval sits INSIDE the window.** A blocking MCP `--permission-prompt-tool`
+   held a real approval for **9 s**: `PreToolUse` opened `toolu_01JtAH…` at
+   3387 ms, the prompt was asked at ~3400 ms and answered at ~12400 ms, and
+   `PostToolUse` closed the same id at 13548 ms. Two snapshots taken *inside* the
+   wait each report exactly one open `tool_use_id` — the one being waited on —
+   and no other events. **In the hook record a 9 s approval wait is byte-identical
+   to a 9 s slow tool.**
+
+2. **A denied tool leaves its `tool_use_id` open permanently.** Same fixture, the
+   decision refused: `PreToolUse` opened `toolu_01KJH…` at 3046 ms, **no
+   `PostToolUse` ever**, `PostToolBatch` at 3143 ms, then `Stop` at 8170 ms and
+   `SessionEnd` at 8305 ms. The subject's own report confirms a real denial
+   (`permission_denials` non-empty, `is_error=true`). **The id is not open until
+   it finishes. It is open by definition, in a session that has stopped.**
+
+3. **`PermissionRequest`, `PermissionDenied` and `Notification` did not fire** in
+   any of it, with the names demonstrably registered (§2) and the mechanism
+   demonstrably run. Positive control: 16 and 18 hook entries from the same
+   config in the same runs, including `PreToolUse` for the very tool whose
+   permission was prompted.
+
+**The retraction is total rather than partial, and that is a decision rather than
+an oversight.** The narrowed form available here is *"either a tool is executing,
+or the agent is waiting for approval, or a tool was denied and nothing is
+running"* — a three-way disjunction over states with no common consequence.
+**That is not a reported fact; it is an absence of information with a list
+inside it**, and writing it as a narrowing would leave this section claiming to
+have bounded something it has not. So: **an unmatched `tool_use_id` with the
+reporter alive supports nothing about the present.** The gap §5 opened with is
+open, and it is wider than when it was written.
+
+**Case 2 is the worst of the three, and the general shape it exposes is worth
+more than the case.** §7 records that absence of events does not prove absence of
+work — an empty monitor looks like a quiet machine. Case 2 is the converse:
+**presence of an unclosed event does not prove presence of work.** An
+unmatched id survives `Stop` and `SessionEnd`, so it is not even evidence the
+session is running.
+
+**The channel is ambiguous in both directions, not one.** That is the sentence to
+carry forward, because every mechanism in this document so far was built against
+the silent direction — the wiring proof, the liveness check, the third state —
+and a design that guards only silence is guarding half of the problem. Silence
+overstates stoppage; an open event overstates activity. Constraint 5 has two
+faces here and they invent in opposite directions.
+
+**`PostToolBatch` is a candidate closer, filed with its bound and not as a
+replacement.** It fired in both runs — 97 ms after the denial that produced no
+`PostToolUse`, and 113 ms after the `PostToolUse` that did — so it closed the
+tool phase in the case where `PostToolUse` never came. **Two observations, both
+single-tool batches, semantics under parallel or nested tool calls unmeasured.**
+It does not rescue the retracted sentence and must not be written up as though it
+did; what it is, is the first thing to measure when this is picked up.
+
+**Where the negatives in point 3 stop.** They are headless, through the MCP
+permission route. Whether the **interactive TUI** path fires them is unmeasured:
+no pty is constructible in this environment, which is the identical one-sided
+limit ADR-0005 §10 records for the pager, from the same cause. So §8's first item
+is answered on one path and open on the other, and the honest form of the result
+is *"not on this path"* rather than *"not used"*.
 
 ### 6. What must be true of the display, whatever it looks like
 
@@ -286,13 +456,148 @@ It follows that **monitoring is opt-in per project** — hooks fire only where
 installed — and that an uninstrumented project renders as unknown rather than
 idle, per §6.
 
+### 7a. Transport: a file — and `http` chosen, costed, and reversed
+
+*Added 2026-08-17. This was missing from §8's list of open decisions, which read
+as complete and was not.* The omission had a reason and the reason was wrong:
+transport looked like a decision for the diff, by analogy with §5's
+cross-platform crate. **It is not analogous.** A crate choice is a dependency;
+transport decides **whether non-delivery is detectable at all**, and
+non-delivery is §7's central hazard. A file append and a socket fail
+differently. That is §7's own question, not an adjacent one.
+
+**Decided: a file, appended to by a `command` hook in the `args` exec form.**
+`prompt` and `agent` cost a model turn and are refused on the ground ADR-0010 §6
+refuses enrichment as a base layer. `mcp_tool` needs a server per session and
+reports failure to the agent rather than to us. `http` was **chosen first, and
+the choice did not survive being costed** — the reversal is recorded below in
+full, because it is more useful than the conclusion.
+
+#### Why `http` was chosen, and why that property did not hold up
+
+The argument was real and no other variant has it: **`http` is the only variant
+where the receiving side holds independent evidence of its own liveness**, so
+*"no events"* splits into *"the receiver was up and heard nothing"* and *"the
+receiver was down"*. A file cannot make that split — a file that stops growing is
+indistinguishable from a quiet agent, which is §7's central hazard exactly.
+
+Costing it produced a narrowing, and following the narrowing reversed it.
+
+**1. The narrowing.** The receiver's evidence covers only the interval it has
+been **continuously up**. Across a restart it cannot separate *"nothing happened
+while I was down"* from *"things happened while I was down"*, because **a process
+that is down cannot record its own downtime.** The repair is for the receiver to
+record its own coverage intervals durably, so *"I have no coverage for this
+window"* is a reported fact — §7's proof-carrying shape applied to the receiver.
+That needs durable state regardless, so `http` does not replace the file; it puts
+a listener in front of one.
+
+**2. Give both transports that coverage log, and the residual is identical.**
+Nothing arrived because the agent was quiet, or because the hook is broken.
+Neither transport touches that, and **the per-session wiring proof of §7 handles
+it identically in both.** So the coverage log equalises them on the only question
+either was being chosen to answer.
+
+**3. And then the asymmetry runs the other way.** *"Receiver down"* is a failure
+mode **that exists only because there is a receiver.** A file has no up or down
+state, so the question never arises. During receiver downtime the hook still
+appends to a file; with `http` those events are **lost**. Sleep, reboot and crash
+are precisely when vibe is not running — so `http` loses events exactly on the
+**long-silence case the monitor exists for**, which is the case §7 already
+identifies as the one where every other proof here is weakest.
+
+**4. So the deciding property was information about the receiver, not about the
+subject.** Its only use is accounting for a loss the file transport does not
+incur. **Information whose sole purpose is explaining your own failure mode is
+not a reason to adopt the failure mode**, and that sentence is the transferable
+part of this reversal.
+
+**The reversal was falsification-tested rather than argued to a stop**, because
+the property being discarded was genuine. The question put was: *name a case
+where `http`'s receiver holds information a file cannot, once both have a
+coverage log.* Seven candidates were tried and each is symmetric:
+
+| Candidate | Why it is not an asymmetry |
+| --- | --- |
+| sink unwritable | file-unwritable ↔ receiver-unreachable; both lose silently |
+| arrival timestamp | the hook stamps its own time in both, and it is one machine, so no skew |
+| synchronous acknowledgment | informs the *agent*, not vibe; `asyncRewake` and exit `2` are open to a `command` hook too |
+| session discovery | the same set, learned at read time rather than at arrival |
+| malformed payload | lands in the file exactly as it lands at the receiver |
+| record deleted or truncated | the receiver's coverage log is itself a file with the same exposure |
+| real-time push | latency, not information; a watcher exists on all three platforms |
+
+**None survived, and the failed falsification is what licenses the reversal.**
+Had one survived, the decision would have stood. Recorded as a list rather than
+as a conclusion so the next reader can attack the same question with a candidate
+nobody here thought of, which is the only way this gets overturned again.
+
+**What `http` would still have cost, kept because the costs are what made the
+narrowing worth chasing:** vibe grows a long-running mode it has never had —
+every command today is one-shot; an inbound socket is a channel *added* to an
+environment, which is the opposite of the move ADR-0005 §10 and ADR-0008 §4 are
+built on, and a local port accepting hook payloads is one **anything on the
+machine can post false events to**, an integrity problem for a tool whose whole
+product is reported facts; and `headers` plus `allowedEnvVars` would make it a
+secret-management problem in a tool that deliberately has none (ADR-0008 §5).
+Those costs did not decide it. **The reversal is on the deciding property
+failing, not on the costs outweighing it** — which matters, because a decision
+reversed on cost is re-opened by cheaper hardware and this one is not.
+
+#### What the file transport is therefore required to carry
+
+These are **parts of the design, not cost lines**, and they are written as
+requirements because the reversal moved them from *"a price `http` avoids"* to
+*"work this transport must do"*.
+
+- **Concurrent append is a required design element.** Multiple sessions, and the
+  duplicate delivery §2 measures, write to the same sink at once. Append
+  atomicity is not uniform across the three platforms, and a transport whose
+  records interleave produces a corrupted history that reads exactly like a
+  strange one. This gets its own control.
+- **The contract version pins the hook's execution properties, not just its
+  payload shape.** §7 requires the installed hook to declare which contract
+  version it implements. Hooks carry `timeout`, `async` and `asyncRewake`
+  (§2), and each changes *whether and when* a record arrives — an `async` hook
+  that is killed at session end delivers nothing, and a `timeout` that fires
+  truncates a record. **A contract that pins only the payload leaves the
+  delivery semantics unpinned**, which is the half that decides whether absence
+  means anything. `http` would have inherited this identically; the reversal
+  does not reduce it.
+- **The sink lives where vibe manages it**, not in a directory a user cleans up,
+  since an append into a deleted inode succeeds silently on POSIX.
+
+**And the residual is stated rather than dissolved:** a file that stops growing
+is indistinguishable from a quiet agent. Neither transport ever fixed that. It is
+§7's hazard, it is answered by the per-session wiring proof and by §5's liveness
+check failing in different directions, and **the transport decision was never
+capable of touching it** — which is the thing the first version of this section
+got wrong.
+
 ### 8. Open, and not mine to decide
 
-1. **Whether `PermissionRequest` and `Notification` are used**, which cannot be
-   decided before they are measured (§5).
-2. **The display shape and the state names.** How many states the two facts of §5
-   yield, and what each is called, is design; §6 constrains it and does not
-   settle it.
+*Revised 2026-08-17. The previous list had two items and read as complete; it was
+missing transport, which is now §7a. What follows is the state after round 2.*
+
+1. **~~Whether `PermissionRequest` and `Notification` are used~~ — answered on one
+   path, open on the other.** They do **not** fire headlessly through the MCP
+   permission route, with the names registered and the mechanism demonstrably run
+   (§5). Whether the interactive TUI path fires them is **unmeasured and not
+   measurable here**, for want of a constructible pty. What closes it is a fixture
+   with a real terminal, not another headless run.
+2. **The display shape and the state names.** Unchanged as a question and
+   **harder as a problem**: §5's retraction means the facts available are fewer
+   than round 1 recorded, so a display cannot lean on *"a tool is running"*.
+   §6 constrains this and does not settle it.
+3. **~~Transport~~ — decided: a file, §7a.** `http` was chosen first on a real
+   and unique property and **reversed** when costing showed that property to be
+   information about the receiver rather than about the subject. The reversal is
+   recorded in full, with the falsification list that licenses it, because the
+   next reader overturns it by finding a candidate that list missed.
+4. **New: whether `PostToolBatch` is the closer `PostToolUse` is not.** Two
+   observations, single-tool batches only; parallel and nested semantics
+   unmeasured (§5). This is the first thing to measure when the feature is picked
+   up, and it is blocked on measurement rather than on preference.
 
 ### 9. Negative-control obligations for whatever gets built
 
@@ -312,6 +617,49 @@ idle, per §6.
 - **Any further measurement of Claude Code needs a channel control first** —
   ADR-0002 §7's channel rule, whose base rate came from this feature's own
   measurement round, where six of six discrepancies were the instrument.
+  **Round 2 honoured this**: `probe.js` was rebuilt with its known line-by-line
+  blindness fixed and demonstrated in both directions — whole-text matching finds
+  a multi-line target, the line-by-line sabotage does not, and the control is
+  identical in both, which is exactly why the original blindness survived — plus
+  a dead-control run proving a zero cannot be reported without a live control.
+
+- **The `(pid, start_time)` liveness check needs a paired control on the
+  `OpenProcess` failure, not on the handle.** *Added 2026-08-17.* NULL is two
+  outcomes sharing one observable (§5), so: **PID 4 must render as
+  *unavailable*, and a nonexistent PID must render as *gone*, and the two must
+  render differently.** A build that maps every NULL to *gone* satisfies the
+  second half perfectly while reporting a live agent as stopped. The fixture's
+  dependence on running **non-elevated**, and on PID 4 being the protected
+  `System` process, belongs in a comment beside it — those are facts about the
+  environment, and when one changes the test stops testing without going red.
+
+- **FORBIDDEN: do not write a control asserting that an open `tool_use_id`
+  renders as working.** *Added 2026-08-17.* It is the control §5's retracted
+  sentence would have justified, it will pass, and **passing is the defect** — an
+  open id also belongs to a denied tool in a session that has stopped (§5). A
+  build that renders an open id as *working* is wrong on 2.1.233, and this
+  control would certify it as right.
+
+  **The general rule is in ADR-0002 §7, not here** — *a retraction removes a
+  control's subject, and nothing inherits the removal; record what must not be
+  built beside what must.* It is filed there for the reason this project has now
+  paid for twice: the next person writing a control will be reading the rules,
+  and will not open the monitoring ADR.
+
+- **The file transport needs a concurrent-append control, and it is not
+  optional.** *Added 2026-08-17, with §7a's reversal.* Two sessions plus §2's
+  measured duplicate delivery write to one sink at once, so the fixture is
+  several writers appending simultaneously and the assertion is that **every
+  record is present and individually parseable** — not merely that the file is
+  non-empty. Interleaved records produce a history that reads like a strange one
+  rather than like a corrupt one, which is why the assertion is per record.
+
+- **The contract version needs a control on the delivery properties, not only on
+  the payload.** `timeout`, `async` and `asyncRewake` each change whether and
+  when a record arrives (§2, §7a). A control that pins only the payload shape
+  passes against a hook whose `async` variant delivers nothing at session end,
+  which is silent non-delivery arriving through the mechanism installed to
+  prevent it.
 
 ## Consequences
 
@@ -324,11 +672,25 @@ distinctions inside "alive and quiet" are not available from anything measured
 here. A monitor that says less than a user wants is the price of not inventing
 the rest.
 
+**Harder again, after round 2, and this is a widening rather than a detail.**
+*Added 2026-08-17.* "Alive and quiet" holds **three** cases with no
+discriminator between them — executing, waiting for approval, and finished after
+a denial — where round 1 recorded one plus a hedge. And the ambiguity runs in
+both directions: silence overstates stoppage, an unclosed event overstates
+activity. **Everything built here so far guards the silent direction only.** The
+product consequence is that a monitor built on this record can report *that* an
+agent reported something and *when*, and cannot report what it is doing now.
+
 **Trade-off accepted:** hooks require installation, so coverage is opt-in and
 partial by construction. The alternative — inferring state from liveness or file
 timestamps — covers everything and is wrong in a way the user cannot see, which
 is the trade this project has consistently refused.
 
-**Not decided here, deliberately:** the two questions in §8. One is blocked on
-measuring `PermissionRequest` and `Notification`; the other is display design,
-which §6 constrains and does not settle.
+**Not decided here, deliberately:** the open questions in §8, revised after round
+2. Two are blocked on measurement that cannot be taken from this environment or
+has not been taken — the interactive-TUI path, and `PostToolBatch`'s semantics
+under parallel tool calls — and one is display design, which §6 constrains and
+does not settle. **Transport is no longer among them**, and its absence from the
+earlier list is recorded in §7a rather than quietly repaired, because a list of
+open questions that reads as complete and is not is the same failure this
+document is about.

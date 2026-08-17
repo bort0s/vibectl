@@ -1021,6 +1021,45 @@ the exit status. A control whose **result** carries the proof does not care
 which channels are open; one that needs its output read is hostage to whichever
 channel happens to be available that week.
 
+**A threshold specified with the task is an instrument, and the ordering rule
+does not care who supplied it.** *Added 2026-08-17, from ADR-0011's
+concurrent-append question.*
+
+Every instance above is a tool that was run. This one is a **number handed over
+along with the work** — and it is worth its own entry because the ordering rule
+is usually read as being about tooling, which makes a figure supplied by whoever
+set the task feel like part of the specification rather than part of the
+apparatus.
+
+The task named `PIPE_BUF` as the atomicity threshold a hook record must fit
+under, and asked for payload sizes to be measured against it. `PIPE_BUF` governs
+**pipes and FIFOs**. For `O_APPEND` on a **regular file** POSIX makes the
+seek-and-write atomic with respect to each other and **does not promise that a
+large write is indivisible** — a different guarantee, and not the one cited.
+
+**The measurement found something better than what it was aimed at, which is the
+whole reason to record it.** Sized against the number, the smallest record this
+build emits (514 bytes) already exceeded it, so the assumption failed on its own
+terms. But the real result is one size cannot express: **there is no threshold to
+sit under.** The assumption was therefore not *too optimistic* — it was
+**unfounded**, and a repair that shrank the records would have satisfied a
+constraint that does not exist while leaving the hazard exactly where it was.
+
+Three things generalise:
+
+- **A specified constant is an apparatus, and using it is a measurement through
+  it.** *"Check X against threshold T"* has the same shape as *"read X with tool
+  T"*, and inherits the same obligation to ask what T actually measures.
+- **Provenance does not exempt it, and instinct says otherwise.** A number from
+  the person setting the task arrives with authority a tool does not have, so the
+  question *what does this actually govern?* is the one least likely to get
+  asked. This entry exists to make it get asked.
+- **What caught it was measuring rather than applying.** Taking the sizes and
+  looking at what the guarantee covered surfaced the mismatch; applying the
+  number and reporting pass/fail would have produced a confident answer to the
+  wrong question — with a green available, since a "records fit" result would
+  have read as the hazard being closed.
+
 **An instrument's properties are measured with the instrument, and they belong
 to a build of it rather than to its category.** Not assumed from how the
 instrument is described, not inferred from how it is usually used, and not

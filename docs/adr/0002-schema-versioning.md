@@ -649,6 +649,53 @@ discards in seconds — where a search for `renders?` costs a silent zero. Where
 the result set is small enough to read, breadth beats precision, and this is the
 opposite of the advice that would follow from optimising the search itself.
 
+#### The bound's other edge: a control that runs once proves one reading
+
+*Added 2026-08-17, from a monitor that watched a CI run for thirty minutes and
+reported nothing.*
+
+The rule above requires a positive control **in the same invocation** as the
+empty result. A repeated measurement satisfies that and is still blind, because
+**"the same invocation" is a series rather than an instant.** The control runs at
+startup, proves the channel then, and the channel breaks afterwards — after which
+every reading is empty, and the emptiness is indistinguishable from *nothing to
+report*.
+
+**The instance, and it is worth the detail because the arithmetic is what makes
+it a rule.** A monitor polled the unauthenticated GitHub Actions API every 30
+seconds for the conclusions of a CI run. The first request succeeded and returned
+the run's status — a genuine passing control, in the same invocation, exactly as
+the rule prescribes. The unauthenticated budget is **60 requests per hour**, and
+30 seconds across 30 minutes is **exactly 60**. Every subsequent request returned
+`403`. The filter emitted only on *completed jobs*, so the refusals were invisible,
+and the monitor produced **thirty minutes of silence that read as a run still in
+progress.**
+
+**This is ADR-0011 §7's own narrowing pointed at instruments instead of
+subjects.** That document already records that *a delivered event proves the
+wiring worked when it was delivered, and nothing about now* — and treats it as a
+fact about hooks. It is a fact about **any repeated channel**, including the ones
+built to watch things: **a monitor is a wiring proof with the same hole**, and
+nobody had pointed the sentence there. The failure mode is identical in both
+directions too: absence of traffic is simultaneously the question and the hole.
+
+So, stated as an action: **for a repeated measurement, the control repeats with
+it, or it proves only the first reading.** The cheapest practical form is that
+the instrument reports its own failures as a **distinct outcome** — never
+silence, and never folded into *nothing found*. A line naming the problem on a
+non-`200`, on a zero-length result set, and on a parse failure makes *the channel
+is quiet* and *the channel is gone* different observables at **every** reading
+rather than at the first. That is the `VIBE_REQUIRE_GH` shape — the result
+carries proof the mechanism ran — applied per reading instead of per run.
+
+**And the budget was measurable in advance, which is the instrument rule going
+unapplied one paragraph away.** 60 per hour is documented; the poll interval was
+chosen and never costed against it. Hitting the limit *exactly* — sixty for sixty
+— is what makes this worth recording rather than shrugging at: it was not bad
+luck, it was an unmeasured property of an instrument being trusted, which is
+precisely what that rule says to ask about before trusting anything the
+instrument produces.
+
 A third failure the same hour looked like the *safe* mode and is worth stating
 carefully, because the obvious phrasing of it is wrong. A Python pattern built
 with `[/\\]` raised `PatternError` instead of returning empty.

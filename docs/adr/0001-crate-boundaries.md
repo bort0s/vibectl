@@ -191,6 +191,14 @@ Its limit is the enumeration problem wearing a new face, and it is stated rather
 
 **No count is given, deliberately, and this replaces one.** *"Five matches and eight wildcard arms"* was a hand-maintained integer of exactly the kind ADR-0008 §9 retired: the person who forgets to update it is the person who would have had to notice it was wrong. The table above is a dated measurement rather than a running total, and it goes stale visibly — a reader can re-derive it — rather than by quietly disagreeing with a number.
 
+**What the table buys and what it does not, in the same three results already measured for `RemoteBlocked::ALL` and for ADR-0002 §7's named-instance list.** This is the identical hole a third time, recorded so nobody reads the table as a closure:
+
+1. **A new wildcard arm added without a row here is caught by nothing.** Markdown has no compiler — and this is *weaker* than `ALL`, which at least fails to build twice before anyone can ignore it. A wildcard arm compiles silently; being uncaught is the entire property that makes it a wildcard.
+2. **A table missing a row reads exactly like a complete one.** There is no independent enumeration, so any check driven by this table is circular for the same reason it is for `ALL`: an arm absent from the table is never visited, whatever is asserted about the ones present.
+3. **Removing a row is uncaught too.** `ALL` has an array length the type checker enforces; a markdown table has no arity.
+
+So the gain over the integer is real and small, and it is only this: **a wrong table is re-derivable and a wrong integer is not.** A reader who doubts the rows can grep the wildcards and compare; a reader who doubts *"eight"* has nothing to compare it against but the same count they would have to redo anyway. That is a difference in how the staleness is *found*, not in whether it occurs. Completeness here depends on whoever adds the next wildcard remembering, which is the standing cost of every prose index in this repository and is not worth machinery to pretend otherwise.
+
 **What survives, and it is the same claim on better evidence.** The limit holds: eight arms, and only `RemoteBlocked` and `UnknownCause` have the key-plus-test pattern behind them. What changed is the *kind* of evidence, and it changed twice —
 
 - **Weaker in the direction that matters.** *"These wildcards disagree, and one of them lies"* is evidence that the gap **produces defects**. *"One did, and it was fixed"* is much easier to read as solved, and an argument that reads as solved stops motivating the trigger.

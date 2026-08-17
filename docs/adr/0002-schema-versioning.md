@@ -569,6 +569,52 @@ ASCII**, so the cause-bound repair from the first case would not have caught it.
   reported the zero. **It does not need to know why the tool might be blind**,
   which is exactly why it survives the next cause.
 
+#### The bound on the positive control, measured rather than reasoned
+
+*Added 2026-08-13, from ADR-0001 §4's repair sweep. The rule above is the
+general repair this session leaned on seven times; this is the first measurement
+of where it stops.*
+
+**A positive control proves the instrument ran. It does not prove the pattern
+could match.** Those are two different claims and the control only ever
+establishes the first.
+
+The sweep searched a known corpus with two controls, both non-zero — the files
+were being read, the regex engine was working, the encoding was right. One
+target pattern still returned a **false zero**: it spelled the verb `renders?`,
+which does not match *"was **rendered** as `warning`"*, the phrasing actually
+present in ADR-0009 §4. Nothing about the controls could have caught that,
+because the controls exercised the *path to the corpus* and the blindness was in
+the *pattern*.
+
+So the bullet above is narrowed rather than withdrawn. The control is still
+cause-indifferent about **why the instrument might be blind** — crash, empty
+read, wrong locale, missing file — and that is genuinely why it survives the
+next cause. It is not indifferent about the pattern, and a pattern is not part
+of what it tests.
+
+**What caught it was a different instrument, and that is the structural point.**
+A document known to discuss the repair failed to appear in the results, and the
+mismatch between two measurements is what surfaced it — the identical mechanism
+that caught `probe.js`'s line-by-line blindness, where its own control passed
+throughout because the control was a single-line string. **The class a positive
+control misses needs a mechanism the positive control is not**, and comparison
+against an independent measurement is the only one demonstrated here twice.
+
+**Recorded as fragile, because it is.** *"I knew ADR-0009 discussed this and
+noticed it was absent"* is domain knowledge, not a check. It works on a corpus
+whose contents the searcher already holds and provides **no backstop whatever**
+on one they do not — which is most sweeps, and precisely the ones where an empty
+result is most tempting to believe. No mechanism is proposed for that case; the
+honest statement is that the bound is known and unclosed.
+
+The cheap partial mitigation, which is not a closure: **make the target pattern
+looser than the claim and filter by reading.** A search for `render` finds
+"rendered", "renders" and "rendering" and costs a few false positives a human
+discards in seconds — where a search for `renders?` costs a silent zero. Where
+the result set is small enough to read, breadth beats precision, and this is the
+opposite of the advice that would follow from optimising the search itself.
+
 A third failure the same hour looked like the *safe* mode and is worth stating
 carefully, because the obvious phrasing of it is wrong. A Python pattern built
 with `[/\\]` raised `PatternError` instead of returning empty.
@@ -1048,6 +1094,58 @@ Two things follow, and the second is the cheap one:
   Result, recorded so the sweep is not re-run from scratch: **one site carried
   the stale claim**, ADR-0001 §4, now repaired. ADR-0009 §4 and ADR-0011 both
   reference the same defect correctly, in the past tense and as a fix.
+
+**A residue can leave a *true* conclusion standing on nothing, and that is a
+distinct failure direction rather than another instance of the ones above.**
+
+*Added 2026-08-13, from the same ADR-0001 §4 repair, and filed apart from it
+because the rules above would not have found it even if they had fired.*
+
+Every residue this section had seen produced a **wrong sentence**: a claim
+disproved, left standing, and copied by the next author. The repair is to correct
+it and the danger is that somebody believes it.
+
+This one inverts. ADR-0001 §4's conclusion — *the key-plus-test pattern closes
+the gap only for the enums it is applied to* — was correct when written and is
+correct now. Nothing about it needed withdrawing. What went stale was the
+**evidence**: a live defect cited as proof that the gap produces defects, and the
+defect was repaired. The conclusion kept standing with nothing under it.
+
+**Detection is what separates the two, and it separates them completely:**
+
+- **A wrong claim is caught the moment anyone checks it against the code.** Its
+  wrongness is the handle. A true conclusion offers no handle at all — there is
+  nothing to check, because nothing is wrong. The argument reads exactly as it
+  did when it was supported.
+- **The loss is silent and cumulative.** Each repair that removes an instance
+  weakens some argument by an amount nobody measures, and a conclusion can end
+  up resting on nothing while every individual sentence in it stays defensible.
+- **It fails in the direction that removes pressure.** An argument that motivated
+  a safeguard, a trigger, or a piece of discipline now reads as *solved*. Nothing
+  asserts anything false; the case simply stops being made.
+
+This is the *nobody investigates a green* family with a new member. Until now
+that meant a **check** reporting success it had not earned. Here it is a
+**document** reporting a settled argument it has stopped earning — same
+detection property, different subject, and no mechanism in this section reaches
+it.
+
+**The check, and it is a question rather than a search:** when a repair removes
+an instance of a problem, ask what that instance was *evidence for*. If the
+argument still holds, re-establish it on current evidence rather than leaving the
+dead citation in place — the same *re-established rather than inherited*
+discipline ADR-0008 §6 applies to a control. If it no longer holds, the
+conclusion has changed, and that is a decision to take rather than a sweep to
+run.
+
+**And the general observation the tracing produced, which is the transferable
+part:** a stale sentence sitting a few paragraphs from a decision **reads as
+load-bearing for that decision**. In this case it was not — it supported a
+different claim four paragraphs further on, and the decision it appeared to prop
+up rested on two arguments it never touched. There is no way to tell those apart
+by reading. **Tracing what a sentence actually supports is the only thing that
+distinguishes "this argument depends on a fact that just died" from "this
+argument never depended on it"**, and both answers are worth having.
 - **Ask specifically whether any document cites the defect as evidence.** That is
   a much smaller search than "everything about this code", and it targets the
   half that fails silently. A defect named in a commit message is a good seed.

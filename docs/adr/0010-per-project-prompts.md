@@ -9,6 +9,20 @@ Scope is **P6's first feature only** — prompt storage, naming, versioning and
 display. Live agent monitoring is the second feature and gets its own document;
 the two share a measurement round and nothing else.
 
+**Complete (2026-08-13). All three phases shipped, and this is the first feature
+this project has closed end to end under the phased-gate discipline.** Every
+commit across the three phases has an observed per-job CI run on three
+platforms; every guard shipped with a paired negative control that was sabotaged
+and seen to go red; **no caveat is open and no condition has to be maintained.**
+
+Worth stating rather than assumed, because the discipline's own history is that
+the gaps arrive as things nobody wrote down. What that sentence does **not**
+claim: not that the feature is defect-free, and not that the enumerations behind
+it are complete. Three residual failure modes survive below, the `daily.MD`
+question is a revisit trigger rather than an answer, and §5's taxonomy is still
+pinned to one build of `git`. *Closed* means the phases are done and nothing is
+owed — not that nothing is unknown.
+
 **Implementation, phase 1 of 3 (2026-08-12).** The ignore-state instrument:
 `GitOp::CheckIgnore`, its 4a enumeration, and the outcome-to-state mapping, in
 `crates/vibe-core/src/ignore_state.rs` with its controls in

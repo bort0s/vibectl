@@ -991,6 +991,75 @@ would render it if given one. **A retraction left unswept is the same failure
 with the polarity reversed** — a claim that exists everywhere *except* this
 document, which is where it was withdrawn.
 
+**Repairing code is not finished until the claims made about the old behaviour
+are swept — and this is a neighbour of the rule above, not an instance of it.**
+
+*Added 2026-08-13, from ADR-0001 §4.* The two look alike and their triggers are
+different, which is the whole reason for filing them side by side:
+
+| | Fires when | You are | Sweep for |
+| --- | --- | --- | --- |
+| Retraction | a claim is **withdrawn or narrowed** | settling an argument | the claim, in prose and paraphrase |
+| **Repair** | **code changes** | fixing a bug | documents describing the **old behaviour** |
+
+**The second does not follow from the first, because nobody retracted anything.**
+The sentence was true when written; the world moved under it. And the person who
+moves the world has no reason to open an ADR — they are fixing a defect, not
+revisiting a decision, so a rule addressed to *"when you retract something"*
+never speaks to them. That is precisely the gap that let this one live.
+
+**The worked example, and the detail that makes it a rule.** ADR-0001 §4 argued
+that the key-plus-test pattern closes the gap only for the enums it is applied
+to, and offered as proof that this is *"not hypothetical"*: two frontend
+wildcards that disagreed about degradation, one of which rendered an unrecognised
+`Severity` as `warning`. That defect was repaired on 2026-08-11. **ADR-0009 §4,
+written on 2026-08-12, records the repair by name** — and ADR-0001 §4 went on
+asserting the defect in the present tense for two more days. So a document that
+*knew* about the fix existed the whole time, and nothing connected them.
+
+**The dangerous half is not the stale description. It is the dead evidence.** A
+sentence that describes repaired code is ordinary staleness, loud enough once
+someone checks. This one was doing argumentative work: it was the evidence that
+a gap **produces defects**. Repairing the defect converts *"this is happening
+now"* into *"this happened once and was fixed"*, and the second is much easier to
+read as solved. **So the residue does not add a wrong conclusion; it quietly
+removes the support under a right one**, which is the same reason nobody
+investigates a green.
+
+Two things follow, and the second is the cheap one:
+
+- **When a repair lands, search for the *behaviour*, not the identifier** — the
+  same mechanical form the retraction rule takes, and for the same reason: the
+  wrong sentence travels in prose. The sweep is a search, so it takes a positive
+  control like any other.
+
+  **And the control did not catch the blind pattern, which is the expected
+  result rather than a disappointment.** Running this sweep on 2026-08-13, the
+  corpus controls were both non-zero — the search was reading the files — and
+  one target pattern was still blind: it spelled the verb `renders?`, which does
+  not match *"was **rendered** as `warning`"*, the exact phrasing in ADR-0009 §4.
+  The zero it returned was a false one. What caught it was noticing that a
+  document known to discuss the repair had failed to appear — comparison against
+  a prior measurement from a different instrument, which is what caught the
+  multi-line blindness inside `probe.js` too. **A positive control proves the
+  instrument ran; it does not prove the pattern could match**, and that is the
+  hazard-class rule arriving inside the sweep this rule prescribes.
+
+  Result, recorded so the sweep is not re-run from scratch: **one site carried
+  the stale claim**, ADR-0001 §4, now repaired. ADR-0009 §4 and ADR-0011 both
+  reference the same defect correctly, in the past tense and as a fix.
+- **Ask specifically whether any document cites the defect as evidence.** That is
+  a much smaller search than "everything about this code", and it targets the
+  half that fails silently. A defect named in a commit message is a good seed.
+
+**Recorded honestly: an accident found this, not a check.** ADR-0001 §4 was being
+read for an unrelated reason — who owns a frontend's sentences, during ADR-0010
+phase 3 — and the claim happened to be about a file open in the same session.
+Nothing in either rule would have surfaced it, and nothing in the amended pair
+would surface the same thing one level down. Same limit ADR-0005 §4a records
+about its own amendment, and it is stated here rather than left for a reader to
+assume the pair is now closed.
+
 The regression test that matters, and that must exist before the first write
 feature ships: a corpus of manifests in `crates/vibe-core/tests/corpus/` — each
 with comments, blank lines, mixed array styles, and keys from a hypothetical

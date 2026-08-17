@@ -170,7 +170,35 @@ So the direction of repair for a duplicated user-facing string is always **towar
 
 **The mechanism that makes a missing sentence break the build, and its limit.** `#[non_exhaustive]` does not constrain the *owning* crate, so core can match its own enums exhaustively: a function mapping variant → stable key, written as an exhaustive `match`, fails to compile the moment a variant is added. A test in each frontend then asserts that every key core exports has a sentence, and goes red. The chain is: new variant → **core** fails to compile → author adds the key → **frontend** test reds → author writes the sentence. That is ADR-0005 §10 rule 4a's discipline — make the omission fail somewhere someone is already looking — in a place where a closed enum is unavailable because the enum must stay open for semver.
 
-Its limit is the enumeration problem wearing a new face, and it is stated rather than assumed closed: **the pattern closes the gap only for the enums it is applied to.** The next enum that crosses to a frontend reintroduces the silent fallback and nothing notices. That is not hypothetical — `vibectl` today has five matches on core enums and eight wildcard arms, and they already disagree about the right degradation: `agents.rs` renders an unrecognised agent state as `"unrecognised"`, while `output.rs` coerces an unrecognised `Severity` to `"warning"`, which is a *specific claim* about something it did not recognise.
+Its limit is the enumeration problem wearing a new face, and it is stated rather than assumed closed: **the pattern closes the gap only for the enums it is applied to.** The next enum that crosses to a frontend reintroduces the silent fallback and nothing notices.
+
+**The evidence for that sentence was a live defect, the defect was repaired, and the paragraph went on citing it for two days.** *Re-established 2026-08-13, at `6273a64`, and the previous wording is not merely corrected but re-argued.* It read: *"That is not hypothetical — `vibectl` today has five matches on core enums and eight wildcard arms, and they already disagree about the right degradation: `agents.rs` renders an unrecognised agent state as `"unrecognised"`, while `output.rs` coerces an unrecognised `Severity` to `"warning"`."* The `Severity` half was fixed on 2026-08-11 — before ADR-0009 §4 was written, which records the fix — and this paragraph kept asserting it in the present tense.
+
+**Measured rather than recalled, on that revision.** Every wildcard arm over a core enum in `vibectl`'s sources, classified by hand:
+
+| Site | Enum | Degrades as |
+| --- | --- | --- |
+| `agents.rs` staleness prose | `Staleness` | *"reported in a form this build does not understand"* |
+| `agents.rs` staleness JSON | `Staleness` | `"unrecognised"` |
+| `output.rs` apply outcome | `ApplyOutcome` | *"an outcome this build cannot describe"* |
+| `output.rs` severity label | `Severity` | *"unrecognised severity `x`"* — the repaired one |
+| `output.rs` refusal hint | `RenderState` | *"a reason this build does not understand"*, and declines to promise `--force` |
+| `output.rs` hint dispatch | `CoreError` | no hint, so the error's own description stands alone |
+| `prompts.rs` exposure label | `IgnoreState` | *"unrecognised state"* |
+| `prompts.rs` completeness | `PromptRoot` | *"does not recognise that location"* |
+
+**All of them degrade honestly. None borrows a recognised value.** So the specific claim the old sentence made is false today, and saying so is the whole of the repair to *that* clause.
+
+**No count is given, deliberately, and this replaces one.** *"Five matches and eight wildcard arms"* was a hand-maintained integer of exactly the kind ADR-0008 §9 retired: the person who forgets to update it is the person who would have had to notice it was wrong. The table above is a dated measurement rather than a running total, and it goes stale visibly — a reader can re-derive it — rather than by quietly disagreeing with a number.
+
+**What survives, and it is the same claim on better evidence.** The limit holds: eight arms, and only `RemoteBlocked` and `UnknownCause` have the key-plus-test pattern behind them. What changed is the *kind* of evidence, and it changed twice —
+
+- **Weaker in the direction that matters.** *"These wildcards disagree, and one of them lies"* is evidence that the gap **produces defects**. *"One did, and it was fixed"* is much easier to read as solved, and an argument that reads as solved stops motivating the trigger.
+- **Stronger, from the session that repaired it.** ADR-0010 phase 3 crossed **two new enums** to a frontend — `IgnoreState` and `PromptRoot` — and added three wildcard arms. They degrade honestly, and **nothing mechanical required them to**: they are honest because the author had read this paragraph. That is better evidence for the limit than the `Severity` defect ever was, because it is present-tense and it is about the *mechanism* rather than about one person's mistake. The gap did precisely what this paragraph predicts, in the ordinary course of adding a feature.
+
+**And the pattern is deliberately not extended to `IgnoreState`, so nobody re-derives it.** An `ALL_KEYS` there would buy nothing: all three variants are constructible by a frontend, so the hand-list in `prompts/tests.rs` is exactly as strong, and neither can reach the wildcard — no constructible input does. `UnknownCause` needs `ALL_KEYS` for a different reason, that two of its variants carry data and cannot sit in a `const` array.
+
+**Decision 4's repair direction does not rest on any of this**, which is worth stating because the two sit four paragraphs apart and the stale line looked load-bearing. *Toward the frontend, never toward core* rests on the taxonomy-versus-presentation argument above — that a CLI's register and a GUI's are not derivable from each other — and on `RemoteBlocked::as_str`, a duplicated string **inside one medium** with the test asserting the wrong copy. Neither is touched by the `Severity` repair, and the second remains true as history whatever the code does now. The stale sentence was evidence for the *mechanism's limit*, not for the direction of repair.
 
 **Measured, not assumed: there is no crate-wide compile-time closure available on stable.** The exact mechanism exists — rustc's `non_exhaustive_omitted_patterns` lint, which fires when a wildcard covers variants that exist in the linked crate but were not listed, leaving the wildcard legal only for genuinely future ones. One crate-level `#![deny(...)]` in each frontend would close this for every enum at once, forever. On stable 1.97.1 it is an **unknown lint**, and because that is a warning it would *fail* the clippy job under `-D warnings`. (It is understood to be nightly-gated behind `non_exhaustive_omitted_patterns_lint`; that half is recalled, not measured — no nightly toolchain was available here to confirm it.)
 

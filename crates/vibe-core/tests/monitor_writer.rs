@@ -410,10 +410,33 @@ fn a_hostile_session_id_is_refused_rather_than_reaching_a_filename() {
 /// and Windows canonicalises it lexically, so the nonexistent `sess__x`
 /// directory is no obstacle at all.
 ///
-/// Whether the middle-segment form also escapes on Linux and macOS is
-/// **unmeasured here**: those resolve `..` against real directories, so a
-/// nonexistent `sess__x` may well produce `ENOENT` instead. The platform
-/// asymmetry is recorded as unknown rather than assumed either way.
+/// # And the platform asymmetry inverts, measured on 2026-08-18
+///
+/// **Linux does not escape.** Measured under WSL2, kernel 6.18.33.2, with two
+/// independent instruments agreeing — a shell redirect and `python3`'s
+/// `open(2)`: `x/../../escape` returns `ENOENT`, because Linux resolves `..`
+/// against **real directories** and `sess__x` does not exist. Windows
+/// canonicalises `..` lexically, so it never asks. Also on Linux: `a:b`
+/// creates an ordinary *contained* file — no alternate data stream — and
+/// `ok.`/`ok ` are preserved as distinct names rather than folded.
+///
+/// macOS is **not directly measured**. Its CI job went red on the same commit
+/// and the same step, which is consistent with the same cause, and job logs
+/// need a credential this project does not have (ADR-0008 §9). Consistent-with
+/// is not measured, and it is recorded as the weaker claim it is.
+///
+/// **This is the inversion ADR-0011 §5 predicted.** It reasoned that if Unix
+/// could not produce a real *unavailable* through its own route, the platform
+/// limit would invert ADR-0010 §10's, where Unix had the reachable fixture and
+/// Windows had the synthesised one. Here Windows holds the reachable fixture
+/// and Unix does not.
+///
+/// So the reachability assertion is Windows-only, and on Unix the containment
+/// control below guards a hazard that is **unreachable through this filename
+/// scheme on that platform** — a declared platform limit, not coverage. That is
+/// ADR-0010 §10's shape exactly: *filing a synthesised value as the best
+/// available on all three would be calling something unreachable while it is in
+/// reach* on the runner where it is real.
 #[test]
 fn the_traversal_hazard_is_real_and_reachable_on_this_machine() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -447,15 +470,37 @@ fn the_traversal_hazard_is_real_and_reachable_on_this_machine() {
         .collect();
     println!("  appeared OUTSIDE the sink: {escaped:#?}");
 
-    // The premise of control (d). If this ever stops holding, the charset check
-    // is guarding an unreachable hazard on this platform and the *containment*
-    // control below becomes untestable here — which is a finding, not a pass.
+    // The premise of control (d), on the platform where the hazard is real.
+    //
+    // Windows-only because the escape is Windows-only, measured rather than
+    // assumed — see the doc comment. Gating it on `cfg` is what keeps the
+    // Unix runners honest: they record the hazard as unreachable there instead
+    // of reporting a green that would read as containment being demonstrated.
+    #[cfg(windows)]
     assert!(
         !escaped.is_empty(),
-        "no unvalidated identity escaped the sink, so on this platform the \
-         traversal hazard is not reachable through this filename scheme and \
-         the containment control cannot be demonstrated here. That is a result \
-         to record, not a green to accept."
+        "no unvalidated identity escaped the sink on Windows, where the escape \
+         was measured on 2026-08-18. Either the filename scheme changed or the \
+         platform did; the containment control below is now guarding a hazard \
+         nothing here demonstrates. That is a result to record, not a green to \
+         accept."
+    );
+
+    // The Unix half, and it is an assertion rather than a silence.
+    //
+    // Measured absent on Linux; **unmeasured on macOS**, where no such
+    // measurement was available from this machine. Asserting it here makes the
+    // macOS runner take that measurement on every run: a red is not a defect in
+    // the writer, it is the discovery that macOS resolves `..` the way Windows
+    // does, and the doc comment above becomes wrong rather than incomplete.
+    #[cfg(not(windows))]
+    assert!(
+        escaped.is_empty(),
+        "an unvalidated identity escaped the sink on a non-Windows platform. \
+         This was measured absent on Linux (WSL2 6.18.33.2) and never measured \
+         on macOS, so this red is a finding about the platform: `..` is being \
+         resolved lexically here, and control (d)'s reachability comment needs \
+         rewriting.\n{escaped:#?}"
     );
 }
 

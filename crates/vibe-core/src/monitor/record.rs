@@ -206,6 +206,12 @@ pub struct Record<'a> {
     /// Hoisted from the payload. See the type docs.
     pub session: &'a str,
 
+    /// Hoisted from the payload: `agent_id`. `None` on every parent-level
+    /// event, which ADR-0011 §7a measured is the ordinary case — absent, never
+    /// filled with a placeholder that a reader would branch on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<&'a str>,
+
     /// Hoisted from the payload: `hook_event_name`. `None` when the payload
     /// did not carry one — absent, never guessed.
     #[serde(skip_serializing_if = "Option::is_none")]

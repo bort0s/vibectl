@@ -345,6 +345,48 @@ Naming a program that cannot exist (`ext::vibe-nonexistent-helper-probe`) makes
 nothing needing to run or exist. Where an assertion genuinely cannot be made
 deterministic, it must **fail loudly when it could not run**, never pass quietly.
 
+**The rule has a second colour, and it is the one that gets away.** *Added
+2026-08-18, from ADR-0011's writer.* Everything above describes non-determinism
+arriving as a **silent green** — the control stops proving anything and nobody
+notices. The identical defect can arrive as a **rare red**, and that form is
+harder to catch rather than easier.
+
+The instance: a control asserted that a nanosecond timestamp loses precision
+through an `f64`, reading the **live clock**. Epoch nanoseconds are ~2^61 and a
+double carries 53 mantissa bits, so a value survives the round trip exactly when
+its low 8 bits are zero; Windows ticks in multiples of 100 ns, so one reading in
+every 6400 ns is exactly representable and the assertion failed **through no
+defect at all**. Measured at 1 failure in 40 runs, and it turned CI red on a
+**documentation-only commit**, which is the only reason it was investigated
+rather than shrugged at.
+
+**Why the red is worse than the green, which is the counter-intuitive part:**
+
+- **A rare red is filed as "a flake" and re-run.** The disposal is socially
+  automatic and leaves no record. A silent green at least has *this rule*
+  pointed at it, and a reviewer who knows the rule can go looking.
+- **Nothing distinguishes it from a real intermittent defect** in the subject.
+  The default reading — *the code is flaky* — accuses an innocent subject, which
+  is the instrument-versus-subject ordering error one level up.
+- **It is self-concealing under CI hygiene.** A red that goes green on re-run
+  looks resolved, and the second run is the one that gets recorded.
+
+So the rule is stated in both directions: **a control whose firing depends on
+chance is broken whichever colour the chance produces.** Split such an assertion
+into a deterministic claim about the live value's *range* and a demonstration of
+the property on a *chosen* constant — sampled inputs prove nothing about
+themselves.
+
+**And the author quoted this rule in the commit that violated it**, three
+paragraphs of ADR text about deterministic controls written the same hour as an
+assertion that sampled a clock. That is the retraction-residue shape with the
+polarity flipped: the correct claim was in the document and the defect was in the
+work, because the rule as written only described one colour and the author
+matched their work against the description rather than against the principle. It
+is filed as evidence that **a rule stated in one direction gets applied in one
+direction**, and that is an argument for writing the second colour down rather
+than trusting it to be inferred.
+
 **And a control must be paired: same input, enabling condition removed, hazard
 must be *absent*.** A control that only asserts a hazard is present is sensitive
 in one direction. It fires when the hazard exists, and it goes **quiet when the

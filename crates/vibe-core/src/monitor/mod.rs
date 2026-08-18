@@ -59,8 +59,8 @@ pub mod sink;
 pub mod writer;
 
 pub use identity::{
-    ComponentRejection, IDENTITY_MAX_LEN, IdentityCollision, SESSION_MAX_LEN, SessionComponent,
-    WriterIdentity, collisions, file_key,
+    AGENT_MAX_LEN, AgentComponent, ComponentRejection, IDENTITY_MAX_LEN, IdentityCollision,
+    SEPARATOR, SESSION_MAX_LEN, SessionComponent, WriterIdentity, collisions, file_key,
 };
 pub use record::{CONTRACT_VERSION, FixedStamps, Record, Stamp, StampSource, SystemStamps};
 pub use sink::{

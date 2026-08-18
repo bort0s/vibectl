@@ -641,6 +641,39 @@ Two things follow, and the second is the uncomfortable one:
   *"measured on the current version"* is a claim this project can no longer make
   about anything, and should stop implying.
 
+**So the discipline is not *"which version is current"* — it is *"which binary
+did I invoke"*.** That is a sharper rule than *record the version beside the
+answer*, and the second instance is what forced it.
+
+*Current* is a property of the machine at an instant, and the instant does not
+survive the measurement: two builds sat side by side on this disk **while the
+runs were happening**, and a round that had reached for whichever the PATH or
+the launcher resolved would have produced a corpus split across two builds with
+nothing recording the split. Nothing would have looked wrong. The subagent round
+avoided that only because it invoked an **absolute path to one binary** and
+checked what that binary reported about itself:
+
+```
+.../anthropic.claude-code-2.1.233-win32-x64/resources/native-binary/claude.exe --version
+2.1.233 (Claude Code)
+```
+
+Three properties make the restatement worth the words:
+
+- **It is answerable at measurement time**, where *"is this current?"* is not —
+  that question needs a comparison against a world that changes underneath it.
+- **It survives the corpus.** A recorded path plus the binary's own
+  `--version` is checkable later by anyone; *"we used the current build"* decays
+  into an unanswerable claim the moment a release lands.
+- **It composes with the version-beside-the-answer rule rather than replacing
+  it.** Record both: which binary was invoked, and what it said it was. The pair
+  is what makes a delta computable; either alone leaves a reader guessing which
+  of the two builds on the disk produced the number.
+
+This is §7's instrument rule reaching its own subject: *an instrument's
+properties belong to a build of it rather than to its category*, and on a machine
+holding several builds, **naming the category is not naming the instrument.**
+
 **A mechanism that inverts the failure mode, costed and not taken.** Measured on
 git 2.54.0.windows.1, against the same planted-`HOME` fixture:
 

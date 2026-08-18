@@ -1,8 +1,20 @@
 //! Appending one hook record to one file.
 //!
 //! ADR-0011 §7a decided the transport: **a file, appended to by a `command`
-//! hook in the `args` exec form**, one file per `(session, declared writer
-//! identity)`, *so concurrent append does not exist*.
+//! hook in the `args` exec form**, one file per `(session, agent, declared
+//! writer identity)`.
+//!
+//! **The guarantee is one writer per `(session, agent, identity)` — which is
+//! WEAKER than "concurrent append cannot happen", and the gap between those two
+//! sentences is the unmeasured case.** A subagent shares its parent's
+//! `session_id` (measured, 2.1.233), so the two-part key put parent and children
+//! in one file and twelve pairs of same-identity hook processes were observed
+//! alive at once. `agent_id` separates every observed instance. What would
+//! defeat it is two hook invocations for a **single** agent overlapping — they
+//! would share all three fields — and that is **unmeasured**: three attempts to
+//! construct a batch of parallel tool calls produced one `tool_use` block per
+//! message every time, and no lever for it exists in the schema or the CLI. It
+//! is a declared limit, not a closed question.
 //!
 //! That last clause is the whole design and it is worth restating as a
 //! constraint on this module rather than as background. Two shared-file shapes
@@ -70,7 +82,9 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use super::identity::{ComponentRejection, SessionComponent, WriterIdentity};
+use super::identity::{
+    AgentComponent, ComponentRejection, SEPARATOR, SessionComponent, WriterIdentity,
+};
 use super::record::{CONTRACT_VERSION, Record, StampSource};
 
 /// An I/O failure, kept at the granularity the operating system reports it.
@@ -202,6 +216,14 @@ pub enum PayloadRefusal {
     SessionIdNotString,
     /// `session_id` is a string that is not usable as a path component.
     SessionRejected { rejection: ComponentRejection },
+    /// `agent_id` is present and is not a string.
+    AgentIdNotString,
+    /// `agent_id` is a string that is not usable as a path component.
+    ///
+    /// Observed values are 17 lowercase alphanumerics, which the charset
+    /// accepts — but that is a sample of seven and not a guarantee about the
+    /// field, so an unusable one is refused rather than assumed impossible.
+    AgentRejected { rejection: ComponentRejection },
 }
 
 impl PayloadRefusal {
@@ -214,6 +236,8 @@ impl PayloadRefusal {
             PayloadRefusal::NoSessionId => "no_session_id",
             PayloadRefusal::SessionIdNotString => "session_id_not_string",
             PayloadRefusal::SessionRejected { .. } => "session_rejected",
+            PayloadRefusal::AgentIdNotString => "agent_id_not_string",
+            PayloadRefusal::AgentRejected { .. } => "agent_rejected",
         }
     }
 }
@@ -307,17 +331,38 @@ impl Writer {
         &self.identity
     }
 
-    /// Where a record for one session lands.
+    /// Where a record lands.
     ///
-    /// `<session>__<identity>.jsonl`. Both components are validated path
-    /// components, so this cannot escape the sink and cannot name a device.
+    /// `<session>__<agent>__<identity>.jsonl`, or `<session>__<identity>.jsonl`
+    /// when the payload carries no `agent_id` — which is every parent-level
+    /// event. Every component is a validated path component, so this cannot
+    /// escape the sink and cannot name a device.
+    ///
+    /// **Absence is encoded by the component COUNT, not by a reserved word.**
+    /// A literal such as `root` could collide with a real `agent_id` and
+    /// nothing measured bounds that id space; `__` is forbidden inside every
+    /// component instead, so two components means session-level and three means
+    /// agent-level, unambiguously.
     #[must_use]
-    pub fn record_path(&self, session: &SessionComponent) -> PathBuf {
-        self.sink.join(format!(
-            "{}__{}.jsonl",
-            session.as_str(),
-            self.identity.as_str()
-        ))
+    pub fn record_path(
+        &self,
+        session: &SessionComponent,
+        agent: Option<&AgentComponent>,
+    ) -> PathBuf {
+        let name = match agent {
+            Some(a) => format!(
+                "{}{SEPARATOR}{}{SEPARATOR}{}.jsonl",
+                session.as_str(),
+                a.as_str(),
+                self.identity.as_str()
+            ),
+            None => format!(
+                "{}{SEPARATOR}{}.jsonl",
+                session.as_str(),
+                self.identity.as_str()
+            ),
+        };
+        self.sink.join(name)
     }
 
     /// Append one hook payload.
@@ -329,14 +374,19 @@ impl Writer {
             Ok(s) => s,
             Err(reason) => return WriteOutcome::Refused { reason },
         };
+        let agent = match agent_of(payload) {
+            Ok(a) => a,
+            Err(reason) => return WriteOutcome::Refused { reason },
+        };
         let event = event_of(payload);
-        let path = self.record_path(&session);
+        let path = self.record_path(&session, agent.as_ref());
 
         let stamp = self.stamps.now();
         let record = Record {
             contract: CONTRACT_VERSION,
             identity: self.identity.as_str(),
             session: session.as_str(),
+            agent: agent.as_ref().map(AgentComponent::as_str),
             event: event.as_deref(),
             stamp: stamp.map(|s| s.to_digits()),
             payload,
@@ -427,6 +477,30 @@ fn session_of(payload: &str) -> Result<SessionComponent, PayloadRefusal> {
         .as_str()
         .ok_or(PayloadRefusal::SessionIdNotString)?;
     SessionComponent::parse(raw).map_err(|rejection| PayloadRefusal::SessionRejected { rejection })
+}
+
+/// Pull `agent_id` out of a payload and validate it as a path component.
+///
+/// **Absence is ordinary, not an error.** ADR-0011 §7a measured that
+/// parent-level events carry no `agent_id` at all, so `Ok(None)` is the common
+/// case. A value that is *present* and unusable is refused, on the same ground
+/// as `session_id`: it would otherwise reach a filename.
+fn agent_of(payload: &str) -> Result<Option<AgentComponent>, PayloadRefusal> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
+        return Err(PayloadRefusal::NotJson);
+    };
+    let Some(object) = value.as_object() else {
+        return Err(PayloadRefusal::NotAnObject);
+    };
+    match object.get("agent_id") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(v) => {
+            let raw = v.as_str().ok_or(PayloadRefusal::AgentIdNotString)?;
+            AgentComponent::parse(raw)
+                .map(Some)
+                .map_err(|rejection| PayloadRefusal::AgentRejected { rejection })
+        }
+    }
 }
 
 /// Pull `hook_event_name` out of a payload, if it carries one.

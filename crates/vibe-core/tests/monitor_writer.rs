@@ -62,6 +62,17 @@ fn payload(session: &str, event: &str) -> String {
     format!(r#"{{"session_id":"{session}","hook_event_name":"{event}","cwd":"/tmp/p"}}"#)
 }
 
+/// A payload from a **subagent**: same session as its parent, plus `agent_id`.
+///
+/// Measured on Claude Code 2.1.233 — a subagent shares its parent's
+/// `session_id`, and every subagent-owned tool event carries `agent_id` while
+/// parent-level events carry none.
+fn agent_payload(session: &str, agent: &str, event: &str) -> String {
+    format!(
+        r#"{{"session_id":"{session}","agent_id":"{agent}","agent_type":"general-purpose","hook_event_name":"{event}","cwd":"/tmp/p"}}"#
+    )
+}
+
 fn written_path(outcome: &WriteOutcome) -> PathBuf {
     match outcome {
         WriteOutcome::Written { path, .. } => path.clone(),
@@ -131,6 +142,140 @@ fn every_combination_of_the_three_axes_produces_a_distinct_file() {
         paths[0], paths[3],
         "two hooks declared in the SAME settings file for the SAME session \
          shared a file — the axis a one-hook-per-source fixture cannot see"
+    );
+}
+
+/// **The fourth axis, added 2026-08-18 after the third key broke.**
+///
+/// The series this fixture belongs to is: one session, one hook per source, one
+/// agent. Every one of them was silent on multiplicity and every discovery came
+/// afterwards — ADR-0002 §7's *a fixture with N=1 cannot tell "one" from
+/// "exactly one"*. So the axis that broke the two-part key gets its own control
+/// with more than one of the thing on the right-hand side of the `per`.
+///
+/// Measured on Claude Code 2.1.233: **a subagent shares its parent's
+/// `session_id`**, and three subagents in parallel still produced exactly one.
+/// Twelve pairs of hook processes with the same declared identity were observed
+/// alive at the same time. So `(session, identity)` is not one writer.
+#[test]
+fn one_session_and_one_identity_still_produce_a_file_per_agent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sink = dir.path();
+
+    // One session, one identity — everything the old key had — and three
+    // agents plus the parent.
+    let w = writer(sink, "alpha");
+    let parent = written_path(&w.append(&payload("sess-1", "PreToolUse")));
+    let a = written_path(&w.append(&agent_payload("sess-1", "ab8b50189992e6091", "PreToolUse")));
+    let b = written_path(&w.append(&agent_payload("sess-1", "a3c4cc9aad124c8e7", "PreToolUse")));
+    let c = written_path(&w.append(&agent_payload("sess-1", "a95af8cdec7a03af3", "PreToolUse")));
+
+    let all = [&parent, &a, &b, &c];
+    for p in all {
+        assert!(p.is_file(), "no file at {}", p.display());
+    }
+    let mut uniq: Vec<&PathBuf> = all.to_vec();
+    uniq.sort();
+    uniq.dedup();
+    assert_eq!(
+        uniq.len(),
+        4,
+        "the parent and three subagents shared a file under one session and one \
+         identity — which is the state measured on 2.1.233 and the reason the \
+         key grew a third component.\n{all:#?}"
+    );
+
+    // The parent is distinguished by the COMPONENT COUNT, not by a reserved
+    // word. Asserted directly, because a reserved literal is the obvious
+    // alternative and it could collide with a real agent_id.
+    let name = |p: &PathBuf| p.file_name().unwrap().to_string_lossy().into_owned();
+    assert_eq!(
+        name(&parent).matches("__").count(),
+        1,
+        "a parent-level record is two components: {}",
+        name(&parent)
+    );
+    assert_eq!(
+        name(&a).matches("__").count(),
+        2,
+        "an agent-level record is three components: {}",
+        name(&a)
+    );
+}
+
+/// The separator rule is what makes the component count readable, so it is a
+/// guard rather than a style choice.
+///
+/// If `__` were legal inside an identity, `s__a__b.jsonl` would be ambiguous
+/// between session `s` / agent `a` / identity `b` and session `s` / identity
+/// `a__b` — and the parent of one agent would be indistinguishable from a
+/// subagent of another.
+#[test]
+fn a_component_containing_the_separator_is_refused() {
+    for hostile in ["a__b", "__lead", "trail__", "a__b__c"] {
+        assert!(
+            matches!(
+                WriterIdentity::parse(hostile),
+                Err(ComponentRejection::ContainsSeparator { .. })
+            ),
+            "{hostile:?} was accepted, so the component count is ambiguous"
+        );
+    }
+    // Paired: a single underscore is still fine, or this rule has quietly
+    // banned an ordinary character.
+    assert!(WriterIdentity::parse("a_b").is_ok());
+    assert!(WriterIdentity::parse("_lead").is_ok());
+    assert!(WriterIdentity::parse("trail_").is_ok());
+}
+
+/// `agent_id` reaches a filename, so it takes the same validation as the
+/// identity — and the same paired control.
+///
+/// ADR-0011 §7a: the `session_id` gap doubles rather than staying one. Observed
+/// values are 17 lowercase alphanumerics, which the charset accepts, but that
+/// is a **sample of seven** and not a guarantee about the field.
+#[test]
+fn a_hostile_agent_id_is_refused_rather_than_reaching_a_filename() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let w = writer(dir.path(), "ident");
+
+    for hostile in ["../escape", "x/../../escape", "a/b", "a:b", "a__b", ""] {
+        let outcome = w.append(&agent_payload("sess", hostile, "PreToolUse"));
+        assert!(
+            matches!(
+                outcome,
+                WriteOutcome::Refused {
+                    reason: PayloadRefusal::AgentRejected { .. }
+                }
+            ),
+            "agent_id {hostile:?} was not refused: {outcome:?}"
+        );
+    }
+
+    // Paired: a real observed value is accepted and produces a file.
+    assert!(
+        w.append(&agent_payload("sess", "ab8b50189992e6091", "PreToolUse"))
+            .delivered()
+    );
+
+    // And a non-string agent_id is its own refusal, not merged into the above.
+    let outcome = w.append(r#"{"session_id":"sess","agent_id":7}"#);
+    assert!(
+        matches!(
+            outcome,
+            WriteOutcome::Refused {
+                reason: PayloadRefusal::AgentIdNotString
+            }
+        ),
+        "{outcome:?}"
+    );
+
+    // Absent agent_id is ORDINARY, not an error — it is every parent event.
+    assert!(w.append(&payload("sess", "SessionStart")).delivered());
+    assert!(
+        w.append(r#"{"session_id":"sess","agent_id":null}"#)
+            .delivered(),
+        "an explicit null agent_id is absence, not a malformed value"
     );
 }
 
@@ -760,7 +905,7 @@ fn a_record_file_that_cannot_be_opened_is_reported_at_the_open_stage() {
     let sink = dir.path().join("sink");
     let w = writer(&sink, "ident");
     let session = SessionComponent::parse("sess").expect("valid");
-    let blocked = w.record_path(&session);
+    let blocked = w.record_path(&session, None);
     fs::create_dir_all(&blocked).expect("plant a directory where the record file goes");
 
     let outcome = w.append(&payload("sess", "SessionStart"));
@@ -797,12 +942,17 @@ fn each_payload_refusal_is_distinguishable_from_the_others() {
     let dir = tempfile::tempdir().expect("tempdir");
     let w = writer(dir.path(), "ident");
 
-    let cases: [(&str, &str); 5] = [
+    // All SEVEN variants. The list grew from five when the key gained a third
+    // component, and a case list that reads as complete and is not is the
+    // failure this file exists against.
+    let cases: [(&str, &str); 7] = [
         ("not json at all", "not_json"),
         ("[1,2,3]", "not_an_object"),
         (r#"{"cwd":"/tmp"}"#, "no_session_id"),
         (r#"{"session_id":7}"#, "session_id_not_string"),
         (r#"{"session_id":"a/b"}"#, "session_rejected"),
+        (r#"{"session_id":"s","agent_id":7}"#, "agent_id_not_string"),
+        (r#"{"session_id":"s","agent_id":"a/b"}"#, "agent_rejected"),
     ];
 
     let mut seen = Vec::new();
@@ -817,7 +967,7 @@ fn each_payload_refusal_is_distinguishable_from_the_others() {
     }
     seen.sort_unstable();
     seen.dedup();
-    assert_eq!(seen.len(), 5, "two refusals share a key: {seen:?}");
+    assert_eq!(seen.len(), 7, "two refusals share a key: {seen:?}");
 
     // Nothing was written for any of them.
     assert!(
@@ -1062,10 +1212,11 @@ fn every_component_rejection_is_reachable() {
         WriterIdentity::parse("").unwrap_err().key(),
         WriterIdentity::parse(&"a".repeat(999)).unwrap_err().key(),
         WriterIdentity::parse("a/b").unwrap_err().key(),
+        WriterIdentity::parse("a__b").unwrap_err().key(),
     ];
     keys.sort_unstable();
     keys.dedup();
-    assert_eq!(keys.len(), 3, "two rejections share a key: {keys:?}");
+    assert_eq!(keys.len(), 4, "two rejections share a key: {keys:?}");
 }
 
 /// `ReadRecord::Unparseable` is a distinct outcome from a partial tail: it has

@@ -550,9 +550,82 @@ These are **parts of the design, not cost lines**, and they are written as
 requirements because the reversal moved them from *"a price `http` avoids"* to
 *"work this transport must do"*.
 
-- **One file per writer — `(session_id, declared writer identity)` — so
-  concurrent append does not exist.** *Decided 2026-08-17.* Multiple sessions,
-  and the duplicate delivery §2 measures, would otherwise write one sink at once.
+- **One file per writer — `(session_id, agent_id, declared writer identity)`.**
+  *Decided 2026-08-17 as `(session_id, identity)`; **agent_id added 2026-08-18**
+  after measurement showed the two-part key broken.* Multiple sessions, and the
+  duplicate delivery §2 measures, would otherwise write one sink at once.
+
+  **The guarantee is one writer per `(session, agent, identity)`. That is
+  weaker than "concurrent append cannot happen", and the gap between those two
+  sentences is exactly the unmeasured case.** Written first and in this order
+  because the label reaching one step past the mechanism is the failure §5's
+  genealogy records four times, and this is the fifth opportunity.
+
+  **What broke the two-part key, measured rather than reasoned.** A subagent
+  **shares its parent's `session_id`** — every subagent-owned `PreToolUse`,
+  `PostToolUse` and `PostToolBatch` carries the parent's, and three subagents in
+  parallel still produced exactly one `session_id`. So `<session>__<identity>`
+  puts the parent and every child in one file. That is not an inference from the
+  shared id: **12 pairs of hook processes with the same declared identity were
+  observed alive at the same time**, overlaps of 1.1 ms to 61.2 ms, measured by
+  recording each hook's process lifetime rather than a write timestamp.
+
+  **`agent_id` is what separates them**, and it is a payload fact: present on
+  `SubagentStart`, `SubagentStop`, and on every subagent-owned tool event;
+  **absent on parent-level events**. All 12 observed overlapping pairs are
+  cross-agent, so the three-part key eliminates every instance that has been
+  seen.
+
+  **The one thing that would kill this repair is intra-agent concurrency, and it
+  is UNMEASURED.** If two hook invocations for a single agent can overlap — two
+  tool calls in flight in one turn — they share `session_id`, `agent_id` *and*
+  identity, and no key drawn from the payload can separate them, because the
+  discriminator would have to be per-invocation and the payload has no
+  per-invocation field.
+
+  **What was tried, recorded as attempts rather than as a negative result:**
+
+  1. A prompt for six independent file reads in one turn — the agent emitted
+     **six assistant messages with one `tool_use` block each**.
+  2. The same, plus `--append-system-prompt` mandating parallel blocks in one
+     message — identical result.
+  3. The settings schema and the CLI searched for a parallel-tool-call lever —
+     **none exists**.
+
+  Maximum `tool_use` blocks in one message across every run: **one**. So no batch
+  ever existed and the zero is a property of the fixture. The instrument was
+  demonstrably able to detect the hazard — 151 overlapping pairs overall, the
+  smallest at **1.1 ms** — which is what makes the zero reportable as *not
+  constructed* rather than as *absent*.
+
+  **Shipped as a declared limit rather than waited on**, because the precondition
+  is model behaviour and not a feature with a flag, so it may never become
+  constructible. If it fires, the escalation shapes are already named below and
+  neither should be rediscovered as novel: **a file per record**, which is how
+  maildir avoids locking entirely, or **the framed shared file**, rejected here
+  because it detects rather than prevents and the torn record's contents are
+  still lost.
+
+  **The costs the third component carries, none of them new and all of them
+  now owed:**
+
+  - `agent_id` becomes a path component, so it takes the **same charset, the
+    same normalisation, and the same validation at install and at write** as the
+    identity.
+  - The `session_id` gap recorded above **doubles** — two payload-sourced values
+    reaching a filename rather than one.
+  - Observed `agent_id` values are 17 lowercase alphanumerics
+    (`ab8b50189992e6091`), which the charset accepts. **That is a sample of
+    seven, not a guarantee about the field**, and a value outside the charset is
+    refused rather than assumed impossible.
+
+  **`agent_id` is absent on parent events, and absence is encoded structurally
+  rather than by a reserved word.** A literal such as `root` could collide with
+  a real `agent_id`, and nothing measured bounds that id space. Instead `__` is
+  **forbidden inside every component**, which makes the separator unambiguous
+  and lets the component *count* carry the distinction: two components is a
+  session-level record, three is an agent-level one. Nothing has to be reserved
+  and no collision is representable.
 
   **The key said `settings source` for half a day, and that was wrong.**
   *Corrected 2026-08-17.* It was read off a fixture in which each settings file

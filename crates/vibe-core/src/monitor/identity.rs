@@ -1,7 +1,8 @@
 //! The declared writer identity, validated as a path component.
 //!
-//! ADR-0011 §7a makes the identity **half a filename** —
-//! `<session>__<identity>.jsonl` — so this is user-supplied configuration
+//! ADR-0011 §7a makes the identity **one field of a filename** —
+//! `<session>__<agent>__<identity>.jsonl`, or `<session>__<identity>.jsonl`
+//! when the payload carries no `agent_id` — so this is user-supplied configuration
 //! reaching a path. That is path traversal in a value the user controls, and
 //! it is the same class ADR-0005 §10 rule 4 handles for URLs, with the same
 //! answer: a **closed allowlist**, because nobody writes down the traversal
@@ -55,15 +56,34 @@ use serde::Serialize;
 
 /// Longest accepted declared identity, in bytes.
 ///
-/// **This number is path arithmetic, not taste.** The filename is
-/// `<session>__<identity>.jsonl`, and Windows resolves a non-extended path
-/// against `MAX_PATH` = 260. With [`SESSION_MAX_LEN`] at 64 the filename tops
-/// out at 64 + 2 + 48 + 6 = **120 characters**, which leaves ~140 for the sink
-/// directory — comfortably more than the ~80 a `LocalAppData` sink needs.
+/// **This number is path arithmetic, not taste.** The longest filename is
+/// `<session>__<agent>__<identity>.jsonl`, and Windows resolves a non-extended
+/// path against `MAX_PATH` = 260. With [`SESSION_MAX_LEN`] at 64 and
+/// [`AGENT_MAX_LEN`] at 40 it tops out at 64 + 2 + 40 + 2 + 48 + 6 = **162
+/// characters**, leaving ~98 for the sink directory — more than the ~45 a
+/// `LocalAppData` sink needs.
+///
+/// *The third component was added 2026-08-18 and spent 42 characters of the
+/// headroom the two-part key had.*
 ///
 /// Raising either constant spends that headroom, and the failure it buys is
 /// `path too long` at write time on one platform only.
 pub const IDENTITY_MAX_LEN: usize = 48;
+
+/// The filename's field separator.
+///
+/// Forbidden inside every component, which is what lets the component **count**
+/// distinguish a session-level record from an agent-level one without reserving
+/// a literal for *"no agent"*.
+pub const SEPARATOR: &str = "__";
+
+/// Longest accepted agent component, in bytes.
+///
+/// Observed `agent_id` values on Claude Code 2.1.233 are **17 lowercase
+/// alphanumerics** (`ab8b50189992e6091`). That is a **sample of seven, not a
+/// guarantee about the field**, so the bound is headroom rather than a fit, and
+/// a longer or out-of-charset value is refused rather than assumed impossible.
+pub const AGENT_MAX_LEN: usize = 40;
 
 /// Longest accepted session component, in bytes. See [`IDENTITY_MAX_LEN`] for
 /// the arithmetic. Claude Code session ids are UUIDs (36 characters) on
@@ -89,6 +109,15 @@ pub enum ComponentRejection {
     /// non-UTF-8 or non-printing byte has no character to show, and rendering
     /// one would be inventing a value.
     IllegalByte { index: usize, byte: u8 },
+    /// Contains `__`, which is the filename's field separator.
+    ///
+    /// Single `_` is fine; two in a row are not. This is what lets the
+    /// **component count** distinguish a session-level record
+    /// (`<session>__<identity>`) from an agent-level one
+    /// (`<session>__<agent>__<identity>`) without reserving a word for
+    /// *"no agent"* — a reserved literal such as `root` could collide with a
+    /// real `agent_id`, and nothing measured bounds that id space.
+    ContainsSeparator { index: usize },
 }
 
 impl ComponentRejection {
@@ -99,6 +128,7 @@ impl ComponentRejection {
             ComponentRejection::Empty => "empty",
             ComponentRejection::TooLong { .. } => "too_long",
             ComponentRejection::IllegalByte { .. } => "illegal_byte",
+            ComponentRejection::ContainsSeparator { .. } => "contains_separator",
         }
     }
 }
@@ -188,7 +218,39 @@ impl SessionComponent {
     }
 }
 
-/// The one charset check, shared so the two components cannot drift apart.
+/// An agent component that has been validated as a path component.
+///
+/// **Absent on parent-level events**, which is why every function taking one
+/// takes an `Option`. ADR-0011 §7a encodes that absence by the component
+/// *count* rather than by a reserved word: a literal such as `root` could
+/// collide with a real `agent_id`, and nothing measured bounds that id space.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[serde(transparent)]
+pub struct AgentComponent {
+    declared: String,
+}
+
+impl AgentComponent {
+    /// Validate an `agent_id` as a path component.
+    ///
+    /// # Errors
+    ///
+    /// [`ComponentRejection`] naming what was wrong and where.
+    pub fn parse(declared: &str) -> Result<Self, ComponentRejection> {
+        validate_component(declared, AGENT_MAX_LEN)?;
+        Ok(Self {
+            declared: declared.to_owned(),
+        })
+    }
+
+    /// The agent id exactly as it arrived in the payload.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.declared
+    }
+}
+
+/// The one charset check, shared so the three components cannot drift apart.
 fn validate_component(declared: &str, max: usize) -> Result<(), ComponentRejection> {
     if declared.is_empty() {
         return Err(ComponentRejection::Empty);
@@ -203,6 +265,12 @@ fn validate_component(declared: &str, max: usize) -> Result<(), ComponentRejecti
         if !(byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_') {
             return Err(ComponentRejection::IllegalByte { index, byte });
         }
+    }
+    // `__` is the filename's field separator, so no component may contain it.
+    // That is what lets the component COUNT carry "is there an agent" without
+    // reserving a literal for "no agent" — see `ContainsSeparator`.
+    if let Some(index) = declared.find(SEPARATOR) {
+        return Err(ComponentRejection::ContainsSeparator { index });
     }
     Ok(())
 }

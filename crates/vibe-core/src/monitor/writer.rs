@@ -127,17 +127,50 @@ impl IoFailure {
 /// Separate from [`IoFailure`] because *"permission denied creating the sink"*
 /// and *"permission denied appending to a file inside it"* are different
 /// problems with different remedies, and the `ErrorKind` is identical.
+///
+/// # DECLARED GAP: two of these four have never been exercised
+///
+/// The variants look uniform from outside and their coverage is not. Written
+/// here rather than left for someone to infer from a green suite, because a
+/// list that reads as complete and is not is the failure this project keeps
+/// paying for.
+///
+/// | variant | control | how it is reached |
+/// | --- | --- | --- |
+/// | [`CreateSink`](WriteStage::CreateSink) | yes, paired | a file planted where the sink directory must go |
+/// | [`OpenFile`](WriteStage::OpenFile) | yes, paired | a directory planted at the record path |
+/// | [`Append`](WriteStage::Append) | **none** | needs a full disk or a process killed mid-write |
+/// | [`Flush`](WriteStage::Flush) | **none** | same |
+///
+/// **Neither gap is inducible from this machine deterministically.** A full
+/// volume is not constructible in a `tempfile::tempdir`, and killing the writing
+/// process mid-`write_all` is a race — ADR-0002 §7 rejects a control whose
+/// firing depends on winning one, because it can stop proving anything without
+/// ever failing, and it arrives as a green check. So there is no control rather
+/// than a flaky one, and no synthesised value dressed as a measurement.
+///
+/// **What that costs, precisely.** `torn_bytes` is computed only on these two
+/// arms, so **the torn-tail size this writer reports has never been observed**.
+/// The reader's tail check is controlled independently against a hand-built
+/// truncated file, which is the half that matters for detection; what is
+/// unverified is our own report of how much we tore.
+///
+/// **What would close it:** a filesystem the test controls the size of — a
+/// small loopback or VHD image mounted for the fixture — which is real
+/// machinery and is not built for two arms. The trigger to revisit is a third
+/// uncontrolled arm, or a defect traced to one of these two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum WriteStage {
-    /// Creating the sink directory.
+    /// Creating the sink directory. **Controlled**, paired.
     CreateSink,
-    /// Opening the record file for append.
+    /// Opening the record file for append. **Controlled**, paired.
     OpenFile,
-    /// Writing the record bytes.
+    /// Writing the record bytes. **No control** — see the type docs.
     Append,
-    /// Flushing them to the operating system.
+    /// Flushing them to the operating system. **No control** — see the type
+    /// docs.
     Flush,
 }
 

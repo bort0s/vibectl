@@ -795,6 +795,36 @@ requirements because the reversal moved them from *"a price `http` avoids"* to
   Validated **at install and at write**, not at install alone: §7 permits
   hand-installed hooks, which install never sees.
 
+- **`session_id` is the other half of the same filename, and this section was
+  silent about it.** *Added 2026-08-18, from the writer.*
+
+  The bullet above validates the **identity** as a path component because it is
+  user-supplied configuration reaching a path. The filename is
+  `<session_id>__<identity>.jsonl`, so `session_id` reaches a path by the
+  identical route — and it arrives from **someone else's tool**, which is a
+  weaker provenance than the user's own config rather than a stronger one. §3
+  measured that every payload carries one on **2.1.233**; that is a property of a
+  build, and a design that treats it as guaranteed has inherited a version.
+
+  So it takes the same closed charset and the same bound. It is **not** the same
+  value with a different name: the bounds differ, because the two components
+  share one filename and Windows resolves a non-extended path against
+  `MAX_PATH` = 260. Identity ≤ 48 and session ≤ 64 puts the longest filename at
+  **120 characters**, leaving room for a sink directory. That arithmetic is the
+  reason for the numbers, and raising either spends the headroom.
+
+  **A payload whose `session_id` is missing, non-string, or unusable as a path
+  component is refused, and the event is lost.** Stated as a loss rather than as
+  handling, because it is one. The alternative is inventing a filename — a
+  literal `unknown`, a hash, a fallback bucket — and an invented name can collide
+  with a real session, which rebuilds the twin writer this whole shape exists to
+  make unrepresentable. Loud loss beats silent invention; §7 already covers the
+  consequence, since absence of events is not a state.
+
+  *Recorded here rather than only in the module and its control, on the same
+  argument the exit-code bullet above is recorded here: the decision site is
+  where the next reader stands.*
+
 #### Retention: vibe never deletes, and reports what is prunable
 
 *Decided 2026-08-17.* One file per writer grows without bound, and this is the
@@ -1060,6 +1090,22 @@ missing transport, which is now §7a. What follows is the state after round 2.*
   offered as prunable; a file without one — in progress, or a killed agent per §4
   — is **not**, and the two must be reported differently. Sabotage by offering
   every file and observing an in-progress session listed as prunable.
+
+- **DECLARED GAP: two of the writer's four failure stages have no control.**
+  *Added 2026-08-18.* `CreateSink` and `OpenFile` are controlled and paired — a
+  file planted where the sink must go, a directory planted at the record path.
+  **`Append` and `Flush` are not**, and cannot be induced from this machine
+  deterministically: they need a full volume, which is not constructible in a
+  temporary directory, or a process killed mid-write, which is a race — and
+  ADR-0002 §7 rejects a control whose firing depends on winning one, because it
+  can stop proving anything without ever failing and it arrives as a green.
+
+  The precise cost is that `torn_bytes` is computed only on those two arms, so
+  **the torn-tail size the writer reports has never been observed.** Detection is
+  covered independently by control (b) against a hand-built truncated file; what
+  is unverified is our own report of how much we tore. Recorded as a gap rather
+  than left to read as coverage, since four variants with two controls look
+  uniform from outside.
 
 - **Ordering needs a control that the reader refuses rather than guesses.** Two
   records with no ordering relation between them in the payload — different turns,

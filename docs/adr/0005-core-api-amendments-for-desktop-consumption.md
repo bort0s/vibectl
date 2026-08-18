@@ -607,6 +607,40 @@ point is that the honest status is *"undetected until someone looks"*, and the
 version-beside-the-answer discipline is what makes looking sufficient when
 somebody finally does.
 
+**It fired again the next day, and that changes what this bullet is.** *Added
+2026-08-18, from ADR-0011's subagent round.* Locating the 2.1.233 binary for a
+new measurement turned up **2.1.234** installed beside it. Nobody in this project
+did anything, again.
+
+**One instance is an anticipated hazard with an example. Two is a cadence**, and
+the cadence is the part worth writing down, because it converts *"this could go
+stale"* into *"this goes stale at a rate"*:
+
+| date | state on this machine | interval |
+| --- | --- | --- |
+| 2026-08-12 | 2.1.228, the build ADR-0011's whole corpus was measured on | — |
+| 2026-08-17 | 2.1.228 **gone**; 2.1.229 and 2.1.233 present | 5 days |
+| 2026-08-18 | 2.1.234 present | **1 day** |
+
+**At least three version changes in six days, none of them observed until
+somebody went looking for something else.** Both discoveries were incidental:
+the first while re-measuring, the second while resolving a path. Neither was a
+check, and there is still no trigger.
+
+Two things follow, and the second is the uncomfortable one:
+
+- **The cost of the version-beside-the-answer discipline is now measurable
+  rather than notional.** At this cadence a measured property of this tool has a
+  useful life of days, so *"recorded with its version"* is not bookkeeping — it
+  is the only thing standing between a corpus and a set of confident claims about
+  a build nobody has.
+- **A measurement round is stale before it is written up.** ADR-0011's subagent
+  findings were taken on 2.1.233 while 2.1.234 sat on the same disk. That is not
+  an argument for chasing the newest build — chasing produces another corpus that
+  goes stale by the same mechanism, which §7 already refuses — but it does mean
+  *"measured on the current version"* is a claim this project can no longer make
+  about anything, and should stop implying.
+
 **A mechanism that inverts the failure mode, costed and not taken.** Measured on
 git 2.54.0.windows.1, against the same planted-`HOME` fixture:
 

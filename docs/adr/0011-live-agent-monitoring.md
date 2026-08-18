@@ -685,6 +685,28 @@ requirements because the reversal moved them from *"a price `http` avoids"* to
   a static property that can run before anything is written at all, and it is the
   only place a hand-installed collision is visible.
 
+  **But the second check is not guaranteed to run first, and that window is
+  declared rather than closed.** The contract read happens when **vibe runs** —
+  `vibe monitor install`, and whatever command displays monitoring state. Hooks
+  fire when the **agent** runs, which is not the same schedule and is usually the
+  earlier one. So a hand-installed twin can deliver **for as long as nobody runs
+  vibe**, which may be days, and the first read discovers a collision that has
+  already been corrupting a file since it was installed.
+
+  **The honest form is therefore a bound on the records, not a guarantee about
+  the config**: when the contract read finds a duplicate, everything that
+  identity wrote is suspect **back to the start of the affected sessions**, not
+  from the moment of discovery. The reader must say that rather than reporting a
+  fault from now on, because a collision found today says nothing about when it
+  began.
+
+  **What would close it is an install-time-only design** — refusing hand-installed
+  hooks altogether — and that is declined for the reason §7 admits them in the
+  first place: the hook config belongs to the user, and a tool that only works
+  with config it wrote itself has taken ownership of a file it does not own. The
+  window is the price of that, and it is stated here rather than left for someone
+  to discover that *"the contract read reports it"* meant *"eventually"*.
+
   **A hand-installed hook that omits it writes a file the reader cannot
   attribute**, and this is the ordinary case rather than the exotic one: §7
   permits hooks installed by hand, so the field will be missing somewhere. The

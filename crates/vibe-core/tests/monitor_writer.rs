@@ -916,16 +916,40 @@ fn the_stamp_survives_a_round_trip_through_a_double_backed_reader() {
         "the fixture's premise failed: {parsed} is inside the exactly-\
          representable range, so nothing here is being tested"
     );
+
+    // The loss is demonstrated on a FIXED value, not on the live clock.
+    //
+    // **This assertion used to read `(parsed as f64) as u128 != parsed` and was
+    // flaky.** Epoch nanoseconds are ~2^61 and an `f64` carries 53 mantissa
+    // bits, so a value survives the round trip exactly when its low 8 bits are
+    // zero. Windows' clock ticks in multiples of 100 ns, so one reading in
+    // every 6400 ns is exactly representable and the assertion failed through
+    // no defect — measured at 1 failure in 40 local runs, and it turned CI red
+    // on a documentation-only commit.
+    //
+    // That is precisely what ADR-0002 §7 forbids: *a negative control must fire
+    // deterministically; one whose firing depends on winning a race can stop
+    // proving anything without ever failing.* The rule is usually quoted about
+    // a silent green; here the same non-determinism arrived as a random red,
+    // which is the same defect wearing the other colour.
+    //
+    // So the claim is split. Above: the live stamp is in the range where a
+    // double cannot represent every value — deterministic. Below: a double
+    // demonstrably loses a value of that magnitude — deterministic, because the
+    // value is chosen rather than sampled.
+    const LOSSY: u128 = 1_755_000_000_000_000_001;
     #[expect(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         reason = "the precision loss IS the measurement"
     )]
-    let through_double = (parsed as f64) as u128;
+    let through_double = (LOSSY as f64) as u128;
     assert_ne!(
-        through_double, parsed,
-        "a double really does lose this value, which is why it is a string"
+        through_double, LOSSY,
+        "a double does not lose a value of the magnitude this stamp has, so \
+         there is no reason for the stamp to be a string and this test is \
+         asserting something that is not true"
     );
 }
 

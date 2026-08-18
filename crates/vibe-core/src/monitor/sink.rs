@@ -64,10 +64,19 @@ pub enum TailState {
 #[non_exhaustive]
 pub enum ReadRecord {
     /// A complete line that parsed.
+    ///
+    /// `session` and `event` are the writer's **hoist** — what it read out of
+    /// the payload at write time. `payload` is the payload itself, verbatim.
+    /// ADR-0011 §7a: the payload is the source of truth and the hoist is a
+    /// reading, so anything that must be right reads the payload.
     Parsed {
         session: Option<String>,
         event: Option<String>,
         stamp_ns: Option<String>,
+        /// The hook payload as it arrived, still a JSON string. Parsing it is
+        /// the second parse §7a costed; only a caller that needs payload fields
+        /// pays it.
+        payload: Option<String>,
     },
     /// A complete line that did not parse. Distinct from a partial tail: this
     /// one **has its newline**, so it was written whole and is wrong for some
@@ -216,5 +225,6 @@ fn parse_line(line: &str) -> ReadRecord {
         session: get("session"),
         event: get("event"),
         stamp_ns: get("stamp_ns"),
+        payload: get("payload"),
     }
 }

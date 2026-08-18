@@ -54,6 +54,7 @@
 //!   controls (b) and (f) reach.
 
 pub mod identity;
+pub mod reader;
 pub mod record;
 pub mod sink;
 pub mod writer;
@@ -61,6 +62,10 @@ pub mod writer;
 pub use identity::{
     AGENT_MAX_LEN, AgentComponent, ComponentRejection, IDENTITY_MAX_LEN, IdentityCollision,
     SEPARATOR, SESSION_MAX_LEN, SessionComponent, WriterIdentity, collisions, file_key,
+};
+pub use reader::{
+    Attribution, ClockStep, Disagreement, Entry, FileView, OrderBasis, RecordOrder, SinkListing,
+    collides, order, read_sink,
 };
 pub use record::{CONTRACT_VERSION, FixedStamps, Record, Stamp, StampSource, SystemStamps};
 pub use sink::{

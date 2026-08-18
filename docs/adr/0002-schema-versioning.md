@@ -1284,6 +1284,52 @@ This is why the sabotage table above is worth reading in one direction only: a
 row that says *red* is self-proving, and a row that says *green* is a claim
 about the harness as much as about the subject.
 
+**It has now caught something, which is the first time it has done more than
+hold.** *Added 2026-08-18, from ADR-0011's writer.* The rule had been in force
+for a week as a precaution — every sabotage asserted its own text was present,
+and every sabotage landed, so the assertion never fired and never demonstrated
+anything.
+
+Changing `torn_bytes` from `u64` to `Option<u64>` moved the text two sabotages
+were anchored on. Both reported **`PATCH DID NOT LAND`** and were excluded from
+the run, where without the assertion they would have silently patched nothing,
+run the named test, found it green, and been recorded as *"the control is
+insensitive here"* — a false exoneration of two guards that were in fact fine.
+
+Three things worth taking:
+
+- **The trigger was ordinary refactoring, not carelessness.** Sabotage anchors
+  are source text, so they go stale whenever the source they point at changes,
+  which is constantly. A patch-by-text harness has a standing staleness problem
+  and the assertion is what converts it from silent to loud.
+- **The failure would have been in the flattering direction.** Two guards
+  reported as *unsabotageable* is a green with a number attached, and the run
+  summary would have said *"all sabotages observed red"* about a set that had
+  quietly shrunk by two.
+- **A rule that has only ever held is untested.** This one is now a rule with an
+  instance, which is the same distinction §7 draws for `VIBE_REQUIRE_GH` and for
+  the staleness channel: an anticipated hazard with no instance is an argument,
+  and one with a dated instance is evidence.
+
+**And a value nobody can test is a value nobody has read.** *Same session, and
+recorded as its own observation because the discovery route is the transferable
+part.*
+
+`torn_bytes` was filed as a coverage gap — the two arms that compute it cannot be
+induced without a full disk or a killed process. Going after the *body* rather
+than the dispatch, so at least the computation could be exercised, is what put a
+human eye on the computation for the first time. It was **wrong**: a failed
+`stat` folded into `0`, reporting *"nothing was torn"* where nothing was known.
+
+The gap was never only that the field was untested. It was that **nothing had
+ever forced anyone to look at it**, and an untestable value is exactly a value
+that never gets read closely, because there is no failing case to reason
+backwards from. So: when a gap is filed as *"this cannot be tested here"*, the
+next question is not *"is that acceptable?"* but *"what is the largest part of it
+that can be, and what does looking at that part show?"* — the answer here was a
+defect in the reassuring direction that no amount of accepting the gap would have
+surfaced.
+
 **It generalises past sabotages to any search whose expected result is empty.**
 "No occurrences remain", "no call site does this", "nothing else branches on
 that" — each is a green whose two readings are *the thing is absent* and *the

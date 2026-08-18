@@ -19,7 +19,9 @@
 use std::fs;
 use std::path::Path;
 
-use vibe_core::monitor::{Attribution, OrderBasis, RecordOrder, TailState, order, read_sink};
+use vibe_core::monitor::{
+    Attribution, OrderBasis, RecordOrder, Sequencing, TailState, order, read_sink,
+};
 
 /// Build a sink file by hand. The reader is the subject, so the writer is not
 /// in the loop — a fixture that went through the writer could only ever produce
@@ -577,4 +579,125 @@ fn identities_colliding_under_the_filename_key_are_reported() {
     );
     let (clean, _) = read_sink(dir2.path()).expect("readable");
     assert!(clean.identity_collisions.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// The listing-level verdict — boundary question 3, decided as two layers
+// ---------------------------------------------------------------------------
+
+/// **A listing containing unordered pairs says so.**
+///
+/// The per-pair verdict is the contract and it is complete, but a listing that
+/// contains unordered pairs and does not say so **reads as a sequence** —
+/// records come out in some order, and an order that is an artifact of
+/// iteration is indistinguishable from one that was established.
+///
+/// ADR-0010 §5's argument: the state is shown by default because the failure is
+/// *"I didn't notice"*, and a property available on request does not guard
+/// against not noticing.
+#[test]
+fn a_listing_with_unordered_pairs_reports_that_it_is_not_a_sequence() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    plant(
+        dir.path(),
+        "sess__alpha.jsonl",
+        &[
+            &rec("sess", None, "PreToolUse", "1000", r#","tool_use_id":"a""#),
+            &rec("sess", None, "PreToolUse", "2000", r#","tool_use_id":"b""#),
+        ],
+    );
+    let (listing, _) = read_sink(dir.path()).expect("readable");
+    assert_eq!(
+        listing.sequencing,
+        Sequencing::PartlyUnordered { unordered_pairs: 1 }
+    );
+    assert!(
+        !listing.sequencing.may_be_presented_as_a_sequence(),
+        "presenting this as a sequence would be presenting a plausible history"
+    );
+}
+
+/// **Paired: a fully ordered listing says that too**, or the assertion above is
+/// satisfied by a build that calls everything unordered — which would be honest
+/// and useless, and would make the flag carry no information.
+#[test]
+fn a_fully_ordered_listing_may_be_presented_as_a_sequence() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    plant(
+        dir.path(),
+        "sess__alpha.jsonl",
+        &[
+            &rec("sess", None, "SessionStart", "1000", ""),
+            &rec("sess", None, "SessionEnd", "2000", ""),
+        ],
+    );
+    let (listing, _) = read_sink(dir.path()).expect("readable");
+    assert_eq!(listing.sequencing, Sequencing::FullyOrdered);
+    assert!(listing.sequencing.may_be_presented_as_a_sequence());
+}
+
+/// Zero or one record is `Trivial`, and `Trivial` does **not** license a
+/// sequence.
+///
+/// An empty listing that answered "yes, present me as a sequence" would let the
+/// most common case in a fresh sink hand out the permission the flag exists to
+/// withhold.
+#[test]
+fn an_empty_or_single_record_listing_is_trivial_and_licenses_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (empty, _) = read_sink(dir.path()).expect("readable");
+    assert_eq!(empty.sequencing, Sequencing::Trivial);
+    assert!(!empty.sequencing.may_be_presented_as_a_sequence());
+
+    plant(
+        dir.path(),
+        "sess__alpha.jsonl",
+        &[&rec("sess", None, "SessionStart", "1000", "")],
+    );
+    let (one, _) = read_sink(dir.path()).expect("readable");
+    assert_eq!(one.sequencing, Sequencing::Trivial);
+    assert!(!one.sequencing.may_be_presented_as_a_sequence());
+}
+
+/// The listing-level flag is **derived from the primitive**, not maintained
+/// beside it: every pair the flag counts is a pair `order` calls unordered.
+///
+/// Asserted rather than assumed, because a second field kept equal to the
+/// primitive is the shape ADR-0010 §3 rejected and its staleness would be
+/// silent in the dangerous direction.
+#[test]
+fn the_listing_flag_agrees_with_the_primitive_pair_by_pair() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    plant(
+        dir.path(),
+        "sess__alpha.jsonl",
+        &[
+            &rec("sess", None, "SessionStart", "1000", ""),
+            &rec("sess", None, "PreToolUse", "2000", r#","tool_use_id":"a""#),
+            &rec("sess", None, "PreToolUse", "3000", r#","tool_use_id":"b""#),
+            &rec("sess", None, "SessionEnd", "4000", ""),
+        ],
+    );
+    let (listing, _) = read_sink(dir.path()).expect("readable");
+    let e = &listing.files[0].entries;
+
+    let mut counted = 0usize;
+    for (i, a) in e.iter().enumerate() {
+        for b in &e[i + 1..] {
+            if !order(a, b).is_ordered() {
+                counted += 1;
+            }
+        }
+    }
+    assert_eq!(
+        listing.sequencing,
+        Sequencing::PartlyUnordered {
+            unordered_pairs: counted
+        },
+        "the flag must be exactly what the primitive says, recomputed"
+    );
+    assert_eq!(
+        counted, 1,
+        "only the two independent tool calls are unordered"
+    );
 }

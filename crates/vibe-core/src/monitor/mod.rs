@@ -64,8 +64,8 @@ pub use identity::{
     SEPARATOR, SESSION_MAX_LEN, SessionComponent, WriterIdentity, collisions, file_key,
 };
 pub use reader::{
-    Attribution, ClockStep, Disagreement, Entry, FileView, OrderBasis, RecordOrder, SinkListing,
-    collides, order, read_sink,
+    Attribution, ClockStep, Disagreement, Entry, FileView, OrderBasis, RecordOrder, Sequencing,
+    SinkListing, collides, order, read_sink, sequencing,
 };
 pub use record::{CONTRACT_VERSION, FixedStamps, Record, Stamp, StampSource, SystemStamps};
 pub use sink::{

@@ -314,6 +314,86 @@ pub fn order(a: &Entry, b: &Entry) -> RecordOrder {
     RecordOrder::Unordered
 }
 
+/// Whether a set of records can be presented as a sequence.
+///
+/// **Derived from [`order`], never maintained beside it.** A second field kept
+/// equal to the primitive is the shape ADR-0010 §3 rejected, and its staleness
+/// would be silent in the dangerous direction — a listing that has gone stale
+/// toward `FullyOrdered` reads as a history.
+///
+/// # Why the listing carries this at all, when the primitive already answers it
+///
+/// The per-pair verdict is the contract and it is complete: ask about any two
+/// records and you are told. But **a listing containing unordered pairs and not
+/// saying so reads as a sequence** — records come out in some order, and an
+/// order that is merely an artifact of iteration is indistinguishable from one
+/// that was established.
+///
+/// That is ADR-0010 §5's argument exactly: the state is shown **by default**
+/// because the failure is *"I didn't notice"*, and a property available on
+/// request does not guard against not noticing. The two are layers rather than
+/// alternatives — the listing says *parts of this are unordered*, the primitive
+/// says *which parts*.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "sequencing", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Sequencing {
+    /// Fewer than two records: nothing to order, and not the same as ordered.
+    Trivial,
+    /// Every pair is ordered by the payload. This set may be presented as a
+    /// sequence.
+    FullyOrdered,
+    /// At least one pair is unordered. Presenting this as a sequence would be
+    /// presenting a plausible history.
+    PartlyUnordered { unordered_pairs: usize },
+}
+
+impl Sequencing {
+    /// Stable key.
+    #[must_use]
+    pub fn key(&self) -> &'static str {
+        match self {
+            Sequencing::Trivial => "trivial",
+            Sequencing::FullyOrdered => "fully_ordered",
+            Sequencing::PartlyUnordered { .. } => "partly_unordered",
+        }
+    }
+
+    /// Whether these records may be rendered as a sequence.
+    ///
+    /// `Trivial` answers **false**: zero or one record is not an ordered set,
+    /// and saying otherwise would let an empty listing license a sequence.
+    #[must_use]
+    pub fn may_be_presented_as_a_sequence(&self) -> bool {
+        matches!(self, Sequencing::FullyOrdered)
+    }
+}
+
+/// Derive [`Sequencing`] over a set of entries.
+///
+/// O(n²) in the number of entries and deliberately so: the question is about
+/// pairs, and there is no cheaper honest answer while the ordering relation is
+/// partial rather than a key to sort on.
+#[must_use]
+pub fn sequencing(entries: &[Entry]) -> Sequencing {
+    if entries.len() < 2 {
+        return Sequencing::Trivial;
+    }
+    let mut unordered_pairs = 0usize;
+    for (i, a) in entries.iter().enumerate() {
+        for b in &entries[i + 1..] {
+            if !order(a, b).is_ordered() {
+                unordered_pairs += 1;
+            }
+        }
+    }
+    if unordered_pairs == 0 {
+        Sequencing::FullyOrdered
+    } else {
+        Sequencing::PartlyUnordered { unordered_pairs }
+    }
+}
+
 /// Everything read from a sink, in one stateless pass.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SinkListing {
@@ -326,6 +406,9 @@ pub struct SinkListing {
     pub disagreements: Vec<Disagreement>,
     /// Backwards stamps inside a single file.
     pub clock_steps: Vec<ClockStep>,
+    /// Whether the records across the whole sink may be presented as a
+    /// sequence. Derived from [`order`]; see [`Sequencing`].
+    pub sequencing: Sequencing,
     /// Declared identities that fold to one filename key, across the files
     /// present. A configuration fault surfacing in the records is late — §7a
     /// puts the real check on the config — but a reader that sees it must say
@@ -457,9 +540,16 @@ pub fn read_sink(dir: &Path) -> Result<(SinkListing, Vec<PathBuf>), std::io::Err
         .map(|(k, _)| k)
         .collect();
 
+    let all: Vec<Entry> = files
+        .iter()
+        .flat_map(|f| f.entries.iter().cloned())
+        .collect();
+    let sequencing = sequencing(&all);
+
     Ok((
         SinkListing {
             files,
+            sequencing,
             unattributed,
             disagreements,
             clock_steps,

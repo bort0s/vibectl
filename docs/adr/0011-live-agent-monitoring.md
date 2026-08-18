@@ -606,6 +606,38 @@ requirements because the reversal moved them from *"a price `http` avoids"* to
   because it detects rather than prevents and the torn record's contents are
   still lost.
 
+  **TWO things rest on this limit, not one, and the second was found by reading
+  rather than by measuring.** *Added 2026-08-18, while building the reader.*
+  Recorded here rather than beside the reader, so anyone re-deciding the limit
+  sees everything that would move with it:
+
+  1. **The file key.** `(session, agent, identity)` is one writer only while a
+     single agent cannot have two hook invocations in flight.
+  2. **The non-decreasing-stamp check**, three bullets down — *"within a single
+     file there is exactly one writer, so stamps must be non-decreasing; a
+     decreasing stamp inside one file is direct evidence the clock stepped."*
+     That sentence quietly reads *one writer* as *one process*. It is not: a file
+     is appended by **many invocations of one hook**, each a separate process
+     reading the same wall clock. The stamps are only ordered because the
+     invocations are sequential — which is the same unmeasured assumption.
+
+  **So a decreasing stamp is direct evidence of a clock step only under the
+  limit.** If intra-agent concurrency exists, two overlapping invocations can
+  stamp out of order with a perfectly healthy clock, and the check reports a
+  fault that is not there — the inverse of this document's usual failure
+  direction, and still a wrong claim. The reader therefore treats it as an
+  **observation that reorders nothing**, which is correct either way and is the
+  only reading that survives the limit being wrong.
+
+  **The general shape is worth more than the instance:** a declared limit gets
+  cited once, at the decision it was declared for, and then quietly acquires
+  dependents as later work leans on the same assumption in different words.
+  *"One writer"* and *"one process"* were the same phrase here until someone
+  needed the second meaning. When a limit is declared, the obligation is to
+  re-check it at every later use rather than to inherit it — which is ADR-0008
+  §6's *re-established rather than inherited* applied to an assumption instead of
+  to a control.
+
   **The costs the third component carries, none of them new and all of them
   now owed:**
 

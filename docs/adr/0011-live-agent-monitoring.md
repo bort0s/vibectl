@@ -994,6 +994,40 @@ missing transport, which is now §7a. What follows is the state after round 2.*
   **writes outside the sink** — which is the assertion that makes this about
   containment rather than about a rejected string.
 
+  **`../escape` is the wrong fixture and it passes, which is worse than the
+  prohibition above.** *Added 2026-08-18, measured while building the writer.*
+  There the rule says do not write a control; here the wrong control is the one
+  written **first**, because `../escape` is the obvious shape of path traversal
+  and needs no telling.
+
+  It does not escape. The identity is **flanked** — `<session>__` in front,
+  `.jsonl` behind — so the component is the literal directory name `sess__..`,
+  which is not a parent reference. The write fails with `NotFound`, and a
+  fixture asserting only that the write failed **reads as proof of containment
+  while certifying a build with no validation at all.** The escaping form puts
+  the `..` in a **middle** segment, where nothing flanks it:
+  `x/../../escape` wrote 193 bytes into the sink's parent on Windows 10 Pro
+  19045 with the charset check removed.
+
+  **The tell is that the flanking is invisible in the result** — a refused
+  traversal and a traversal that was never one produce the identical failed
+  write. So the assertion is on **where the bytes landed**, enumerating the
+  sink's parent before and after, never on whether the call errored.
+
+  **And the reachability premise is itself a measurement, which inverted the
+  platform asymmetry §5 predicted.** The escape is reachable on **Windows**,
+  which canonicalises `..` lexically; it is **not** on Linux (WSL2 6.18.33.2,
+  two independent instruments) or macOS (measured by the assertion, green on
+  `macos-latest`), which resolve `..` against real directories so the
+  nonexistent `sess__x` stops it. Windows holds the reachable fixture and Unix
+  does not — the inverse of ADR-0010 §10. On Unix the control guards a hazard
+  unreachable through this filename scheme, and that is a **declared platform
+  limit, not coverage**.
+
+  **The general rule is in ADR-0002 §7, not here**, beside the retraction
+  prohibition — because the next person writing a control will be reading the
+  rules and will not open this document.
+
   **e. Uniqueness is checked on the normalised filename, not the declared
   string.** Two identities differing only by case, or by a trailing dot or space,
   must be **refused as duplicates** — measured on Windows 10 Pro 19045 to be four

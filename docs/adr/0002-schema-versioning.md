@@ -953,6 +953,61 @@ The general form: **a retraction removes a control's subject, and nothing
 inherits the removal.** Record what must not be built beside what must, or the
 gap is filled by the next person acting in good faith on a stale sentence.
 
+**And the harder case is not the forbidden control but the one you write first,
+because the obvious shape of a hazard can be the shape that cannot occur.**
+*Added 2026-08-18, from ADR-0011's writer.*
+
+The rule above is about a control someone must be *told* not to write. This one
+needs no telling and gets none: it is the first thing a competent person types,
+it passes, and its green certifies the defect.
+
+**The instance.** ADR-0011 §7a puts a user-declared identity into a filename as
+`<session>__<identity>.jsonl`, so it is path traversal in a value the user
+controls, and the control is *"a traversal identity must not write outside the
+sink"*. The obvious fixture is `../escape`. Measured on Windows 10 Pro 19045
+through `Path::join` plus `fs::write`, with the charset check removed:
+
+| identity | result |
+| --- | --- |
+| `../escape`, `..\escape`, `/escape` | `NotFound` — **no escape** |
+| `x/../../escape`, `x\..\..\escape` | **OK, and a file appears in the sink's parent** |
+
+`../escape` fails because the identity is **flanked** — `<session>__` in front,
+`.jsonl` behind — so the component is the literal directory name `sess__..`,
+which is not a parent reference and does not exist. The escaping form puts the
+`..` in a **middle** segment, where nothing flanks it.
+
+**So a control testing only `../escape` watches the write fail and reads as
+proof of containment.** It is green, it is about the right hazard, it names the
+right function, and it certifies a build with no validation at all. Nobody
+investigates a green, and this one comes with a fixture that looks like
+diligence.
+
+**The tell, which is the transferable part:** *the flanking that makes the naive
+form unrepresentable is invisible in the result.* A refused traversal and a
+traversal that was never a traversal produce the identical observable — a failed
+write — and the fixture cannot distinguish them. This is the convergent-branch
+rule with the branches in the **operating system** rather than in our code, and
+it is why *count the producers of the observable you assert on* has to include
+the ones nobody wrote.
+
+Two things follow:
+
+- **Assert on where the bytes landed, never on whether the call failed.** A
+  containment control that enumerates the sink's parent before and after is
+  sensitive to the hazard; one that asserts `is_err()` is sensitive to the
+  fixture. The first goes red under sabotage, which is how this was found.
+- **A hazard fixture needs its own reachability premise, and that premise is a
+  measurement.** *Does this input reach the mechanism at all on this platform?*
+  Asked here, it produced the platform inversion ADR-0011 §5 predicted: the
+  escape is reachable on Windows, and on Linux and macOS it is **not** —
+  measured, because those resolve `..` against real directories. The same
+  fixture is a real control on one platform and a vacuous green on two.
+
+**Filed here rather than in ADR-0011 §9** for the reason this project has now
+paid for three times: the next person writing a control will be reading the
+rules, and will not open the monitoring ADR.
+
 **A precondition you did not construct is not a precondition.** Worked example,
 because it is genuinely surprising: *"no git identity configured" is not a
 deterministic state.* When `user.name`/`user.email` are unset, `git` may

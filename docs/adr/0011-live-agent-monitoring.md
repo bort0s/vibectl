@@ -723,6 +723,26 @@ requirements because the reversal moved them from *"a price `http` avoids"* to
   duplicates may not be collapsed* — and it must render as such rather than as a
   session that emitted twice as many events.
 
+- **A failed write exits `1`, never `2`, and never panics.** *Decided
+  2026-08-18, when the writer landed.*
+
+  A hook that cannot write is silent non-delivery **arriving from our side** —
+  §7's central hazard produced by the mechanism installed to prevent it — so it
+  may not be swallowed. That settles loudness to *us*; it does not settle
+  loudness to the *agent*, and the two are different questions.
+
+  Exit `2` is visible to the agent and can interrupt the turn. **The monitor is
+  additive: vibe works without it.** A hook that stops the user's work over its
+  own write failure has inverted the relationship between observer and observed,
+  and **an observer that can stop the subject is not one.** Exit `2` buys
+  immediacy, and the user pays for it mid-turn.
+
+  **The loss is not silent under `1` either**, which is what makes the trade
+  cheap rather than a concession: `WriteOutcome::Failed` carries the stage, the
+  `ErrorKind`, the raw OS code and the torn-byte count, so the next read reports
+  it. Immediacy is the only thing given up, and it is given up in the one
+  direction where the cost lands on someone who did not ask for a monitor.
+
 - **The sink lives where vibe manages it**, not in a directory a user cleans up,
   since an append into a deleted inode succeeds silently on POSIX.
 

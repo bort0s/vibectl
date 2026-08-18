@@ -40,6 +40,28 @@
 //! reason: there is no `Result` for a `?` to collapse and no error type for a
 //! caller to discard with `.ok()`. Every failure is a value the caller has to
 //! match on.
+//!
+//! # The hook process exits `1` on a failed write, never `2`
+//!
+//! *Decided 2026-08-18 (ADR-0011 §7a). Stated here rather than only in the ADR,
+//! because here is where the hook's `main` will be written from, and ADR-0002
+//! §7 records what a correction left at the decision site and not at the copy
+//! site cost: the disproved claim was reproduced twice more by an author who
+//! read the neighbouring comment.*
+//!
+//! Not swallowing settles loudness to **us**. It does not settle loudness to the
+//! **agent**, which is a separate question with a separate answer.
+//!
+//! Exit `2` is visible to the agent and can interrupt the turn. **The monitor is
+//! additive — vibe works without it** — so a hook that stops the user's work
+//! over its own write failure has inverted the relationship between observer and
+//! observed, and **an observer that can stop the subject is not one.**
+//!
+//! The loss is not silent under `1`: [`WriteOutcome::Failed`] carries the stage,
+//! the `ErrorKind`, the raw OS code and the torn-byte count, so the next read
+//! reports it. Immediacy is the only thing surrendered, and it is surrendered in
+//! the direction where the cost would otherwise land on someone who did not ask
+//! for a monitor.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;

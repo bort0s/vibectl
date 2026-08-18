@@ -849,6 +849,30 @@ matches with JS regex, so no shell locale decides what a character is. It lives
 in the scratchpad rather than the crate, because it is an instrument and not a
 product.
 
+**It is committed, as of 2026-08-18, and the reason is the failure history
+rather than tidiness.** Until then it lived only in a session's scratchpad and
+was rebuilt from this paragraph each time it was needed — and **rebuilding is
+where both blindnesses came from.** An instrument reconstructed from a
+description is a new instrument with the old one's name, carrying none of the
+repairs and all of the confidence. Committing it makes the repairs survive the
+session that paid for them, and makes this paragraph's path a fact rather than
+an intention.
+
+**Both repairs are in it, and the second is the one the first did not cover.**
+Whole-text matching lets a pattern *span* lines; it does not make the pattern
+*able* to, because a literal space in the phrase still cannot match the newline
+a hard wrap put there. So a run of whitespace in the phrase matches any run of
+whitespace (`\s+`), and the widening is bounded — `\s+` requires at least one
+whitespace character and crosses nothing else, asserted by a paired sabotage
+that over-widens it and watches a genuinely absent phrase start matching.
+
+**And the hazard-class rule below is now enforced by the tool rather than
+remembered by its user:** if any target returns **zero** while no control match
+crossed a line break, the zero is refused and the exit is nonzero. A single-line
+control cannot establish that a multi-line target could have matched, which is
+exactly how the first repair's blindness survived — so the instrument declines
+to report the one result that blindness produces.
+
 **It produced a false zero on its first real use, and that is the more valuable
 half.** The first version matched **line by line**, so a phrase spanning a
 newline could never match — the exact blindness it was built to prevent, inside

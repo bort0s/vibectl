@@ -420,10 +420,16 @@ fn a_hostile_session_id_is_refused_rather_than_reaching_a_filename() {
 /// creates an ordinary *contained* file — no alternate data stream — and
 /// `ok.`/`ok ` are preserved as distinct names rather than folded.
 ///
-/// macOS is **not directly measured**. Its CI job went red on the same commit
-/// and the same step, which is consistent with the same cause, and job logs
-/// need a credential this project does not have (ADR-0008 §9). Consistent-with
-/// is not measured, and it is recorded as the weaker claim it is.
+/// **macOS: measured by the assertion below, green at `89c2137`.** It was
+/// recorded here as *"consistent with the same cause, and consistent-with is
+/// not measured"* — true when written, because job logs need a credential this
+/// project does not have (ADR-0008 §9) and the red was an aggregate. The Unix
+/// arm asserts `escaped.is_empty()` rather than staying silent, so the
+/// `Test (macos-latest)` runner takes the measurement on every run; it passed,
+/// which is the reading. macOS does not resolve these `..` lexically either.
+///
+/// The upgrade from *consistent-with* to *measured* is recorded rather than
+/// swapped in silently, because which of the two a claim rests on is the fact.
 ///
 /// **This is the inversion ADR-0011 §5 predicted.** It reasoned that if Unix
 /// could not produce a real *unavailable* through its own route, the platform

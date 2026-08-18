@@ -13,6 +13,7 @@ mod agents;
 mod cli;
 mod cmd;
 mod exit;
+mod monitor;
 mod output;
 mod prompts;
 mod reporter;
@@ -22,11 +23,22 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use cli::{AgentsCommand, Cli, Command, NewArgs, PromptCommand, ScanArgs};
+use cli::{AgentsCommand, Cli, Command, MonitorCommand, NewArgs, PromptCommand, ScanArgs};
 use exit::Exit;
 use vibe_core::{Config, NewRequest, Registry, ScanRequest};
 
 fn main() -> ExitCode {
+    // The hook path is dispatched from RAW ARGV, before `Cli::parse()`.
+    //
+    // `clap` exits 2 on a usage error, and on this path 2 is not ours to spend:
+    // Claude Code reads a hook's exit 2 as a blocking error fed back to the
+    // agent (ADR-0011 §7a). A typo in a settings file must not stop the user's
+    // turn, so this branch never reaches the parser that would do that.
+    let argv: Vec<String> = std::env::args().collect();
+    if monitor::is_hook_invocation(&argv) {
+        return monitor::hook_main(&argv).into();
+    }
+
     let cli = Cli::parse();
     let code = match run(&cli) {
         Ok(code) => code,
@@ -57,6 +69,19 @@ fn run(cli: &Cli) -> Result<Exit, vibe_core::CoreError> {
             AgentsCommand::Remove(args) => agents::remove(args),
             AgentsCommand::Sync(args) => agents::sync(args),
         },
+        // Unreachable in practice: `main` dispatches `monitor hook` from raw
+        // argv before this parser runs, precisely so a usage error cannot exit
+        // 2. Kept as an honest arm rather than a wildcard — if a future
+        // `monitor` subcommand lands, this stops compiling and someone decides
+        // what it does, which is the point of the closed match.
+        Command::Monitor(MonitorCommand::Hook) => {
+            let mut stderr = std::io::stderr();
+            let _ = writeln!(
+                stderr,
+                "vibe monitor hook is dispatched before argument parsing;                  reaching this arm means that dispatch did not fire."
+            );
+            Ok(Exit::Failure)
+        }
         Command::Prompt(sub) => match sub {
             PromptCommand::List(args) => cmd::prompt_list(args),
             PromptCommand::Show(args) => cmd::prompt_show(args),

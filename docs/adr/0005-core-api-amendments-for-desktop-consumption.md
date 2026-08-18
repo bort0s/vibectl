@@ -472,6 +472,42 @@ down. A fourth program — or a `gh` release that adds a config key naming a
 binary — is the next instance, and the rule is what makes it a checklist item
 rather than a discovery.
 
+**4a has an inverse, and it needs asking too: an exit contract imposed by an
+external consumer.** *Added 2026-08-18, from ADR-0011's hook.*
+
+Rule 4a measures **what an external program can do to us** — which of its config
+keys make it execute something, which carry the answer we came for. This is the
+other direction: **what we say to an external program, and what it does with
+what we said.**
+
+The instance. `vibectl`'s exit contract (ADR-0002 §3) assigns **2 = partial**,
+so a script can tell *"the registry was read, one project was unreadable"* from
+*"the registry failed"*. Claude Code reads a hook's exit **2** as a *blocking*
+error fed back to the agent. `vibe monitor hook` is a subcommand of that binary
+**and** a child process of that tool, so both contracts apply to one exit status
+and they disagree about what `2` means. ADR-0011 §7a decided the external one
+wins on that path: the monitor is additive, and *an observer that can stop the
+subject is not one*.
+
+**Two things this costs that a reader would not predict:**
+
+- **`clap` exits 2 on a usage error**, so a typo in a settings file this project
+  did not write would have handed the agent a blocking error. The hook is
+  therefore dispatched from **raw argv before the parser runs**, which is a
+  structural consequence of an external contract reaching back into how the
+  binary starts.
+- **The rule cannot be enforced by remembering it.** The return type on that
+  path is a closed enum with **no variant for 2**, so emitting one does not
+  compile — the same technique as rule 1's closed `GitOp` and ADR-0011 §7a's
+  component-count filename.
+
+**The question to ask, stated so the next subcommand with an external caller
+gets it asked:** *who reads this exit status, and what does each code mean to
+them?* It is enumerable per **(subcommand, consumer)** pair, in the same way 4a's
+surface turned out to be enumerable per `(program, subcommand)` — and like 4a it
+goes stale on the consumer's release schedule, not ours, which is the uncovered
+channel recorded above.
+
 **4a asks one question where two are needed, and applying it correctly can
 destroy the thing it protects.** *Amended 2026-08-12, from the `git check-ignore`
 call site ADR-0010 §8 adds — the first instance where a key in a per-user config

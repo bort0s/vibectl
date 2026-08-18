@@ -40,6 +40,21 @@ pub enum Command {
     /// Show the prompts this project defines, and whether git would expose them
     #[command(subcommand)]
     Prompt(PromptCommand),
+    /// Live agent monitoring (ADR-0011)
+    #[command(subcommand)]
+    Monitor(MonitorCommand),
+}
+
+/// `vibe monitor` — ADR-0011's transport.
+#[derive(Debug, Subcommand)]
+pub enum MonitorCommand {
+    /// Append one Claude Code hook payload to the sink.
+    ///
+    /// **Dispatched from raw argv in `main`, before this enum is parsed**, so
+    /// a usage error cannot exit 2 — which Claude Code reads as a blocking
+    /// error. Declared here so it appears in `--help` and so the name is
+    /// reserved; the arguments live in `monitor::HookArgs`.
+    Hook,
 }
 
 /// `vibe prompt` — ADR-0010's display.

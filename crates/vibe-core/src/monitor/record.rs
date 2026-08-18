@@ -203,6 +203,20 @@ pub struct Record<'a> {
     /// instead of being inferred from a missing file.
     pub identity: &'a str,
 
+    /// The sink directory **as this writer received it**.
+    ///
+    /// ADR-0011 §7a: the sink path is declared at install and passed in argv,
+    /// not resolved from the environment — so install and write can disagree
+    /// about *where* exactly as they can about *who*. Recording it makes the
+    /// disagreement visible in the artifact instead of inferred from a file
+    /// nobody can find, which is the same reason [`Record::identity`] is
+    /// recorded as received.
+    ///
+    /// Lossy if the path is not valid UTF-8. A path that cannot be spelled is
+    /// still better recorded approximately than omitted, and the file it names
+    /// is the one the reader is holding.
+    pub sink: &'a str,
+
     /// Hoisted from the payload. See the type docs.
     pub session: &'a str,
 

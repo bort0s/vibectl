@@ -214,6 +214,17 @@ pub enum WriteStage {
 #[serde(tag = "refusal", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum PayloadRefusal {
+    /// **The channel delivered nothing.** Distinct from [`NotJson`] because the
+    /// remedies differ: an empty stdin means the hook ran and no payload
+    /// arrived — a wiring or invocation fault — while unparseable bytes mean the
+    /// agent sent something we could not read.
+    ///
+    /// Measured: Claude Code 2.1.233 warns *"no stdin data received in 3s"* when
+    /// a `command` hook is invoked with nothing piped, so this arm is reachable
+    /// rather than defensive.
+    ///
+    /// [`NotJson`]: PayloadRefusal::NotJson
+    NoPayload,
     /// The payload is not JSON at all.
     NotJson,
     /// The payload is JSON but not an object.
@@ -241,6 +252,7 @@ impl PayloadRefusal {
     #[must_use]
     pub fn key(&self) -> &'static str {
         match self {
+            PayloadRefusal::NoPayload => "no_payload",
             PayloadRefusal::NotJson => "not_json",
             PayloadRefusal::NotAnObject => "not_an_object",
             PayloadRefusal::NoSessionId => "no_session_id",
@@ -403,6 +415,7 @@ impl Writer {
         let record = Record {
             contract: CONTRACT_VERSION,
             identity: self.identity.as_str(),
+            sink: &self.sink.to_string_lossy(),
             session: session.as_str(),
             agent: agent.as_ref().map(AgentComponent::as_str),
             event: event.as_deref(),
@@ -509,6 +522,9 @@ fn torn_bytes(before: Option<u64>, after: Option<u64>) -> Option<u64> {
 
 /// Pull `session_id` out of a payload and validate it as a path component.
 fn session_of(payload: &str) -> Result<SessionComponent, PayloadRefusal> {
+    if payload.trim().is_empty() {
+        return Err(PayloadRefusal::NoPayload);
+    }
     let value: serde_json::Value =
         serde_json::from_str(payload).map_err(|_| PayloadRefusal::NotJson)?;
     let object = value.as_object().ok_or(PayloadRefusal::NotAnObject)?;

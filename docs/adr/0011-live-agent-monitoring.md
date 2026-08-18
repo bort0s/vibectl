@@ -851,6 +851,31 @@ requirements because the reversal moved them from *"a price `http` avoids"* to
 - **The sink lives where vibe manages it**, not in a directory a user cleans up,
   since an append into a deleted inode succeeds silently on POSIX.
 
+- **Its path is DECLARED at install and passed in argv, never resolved from the
+  environment.** *Decided 2026-08-18, when the hook's `main` was built.*
+
+  The obvious implementation is `ProjectDirs`, which is what
+  `agents::default_store_path` uses. It resolves from the **environment** —
+  `LOCALAPPDATA`/`APPDATA` on Windows, `XDG_*` on Unix — and the hook is a
+  **child process of somebody else's tool**, whose environment §3 measured as
+  contaminated by its parent's. This design's whole attribution story is *read
+  the payload, never the environment*; resolving the sink there would put the
+  one thing that decides **where every record goes** on the single channel the
+  design refuses. So the path is a declared fact, exactly as the identity is.
+
+  **The cost is real and is the same cost the identity already carries: install
+  and write can now disagree about *where* as well as about *who*.** Resolution
+  is identical — **write wins**, because write holds the value that becomes the
+  path, and an install that validated a different value validated something
+  else. And the record **carries the sink as received**, so a disagreement is
+  visible in the artifact rather than inferred from a file nobody can find.
+
+  Two gaps become three payload-or-argv values reaching a filesystem location:
+  `session_id`, `agent_id`, and now the sink root. The first two are validated
+  as path components; the sink is a directory the user chose, so it is not
+  charset-restricted — it is simply recorded, which is all that can honestly be
+  done with a path somebody declared on purpose.
+
 - **The declared identity becomes half a filename, so it is validated as a path
   component — measured, not recalled.** *Added 2026-08-17.* This is user-supplied
   configuration reaching a path, which is path traversal in a value the user

@@ -163,11 +163,21 @@ impl IoFailure {
 /// ever failing, and it arrives as a green check. So there is no control rather
 /// than a flaky one, and no synthesised value dressed as a measurement.
 ///
-/// **What that costs, precisely.** `torn_bytes` is computed only on these two
-/// arms, so **the torn-tail size this writer reports has never been observed**.
-/// The reader's tail check is controlled independently against a hand-built
-/// truncated file, which is the half that matters for detection; what is
-/// unverified is our own report of how much we tore.
+/// **What that costs, precisely — narrowed 2026-08-18.** `torn_bytes` is
+/// computed only on these two arms, so for a while **the field had never held a
+/// measured value in any test**: unexecuted code that would read as a fact the
+/// first time it appeared in a record.
+///
+/// The **body** is now covered. [`torn_bytes`] is factored out of the branch
+/// nobody can reach and exercised over its inputs, including against a real
+/// truncated file — the same repair ADR-0010 §10 applies to the no-exit-code
+/// mapping and ADR-0011 §5 to the start-time read. What that pass also found is
+/// that the computation was **wrong in the reassuring direction**: a failed
+/// `stat` folded into `0`, reporting *"nothing was torn"* when nothing was
+/// known. It now returns `None`.
+///
+/// What stays uncovered is the **dispatch**: which branch calls it. That is a
+/// narrower claim than before and it is still a gap.
 ///
 /// **What would close it:** a filesystem the test controls the size of — a
 /// small loopback or VHD image mounted for the fixture — which is real
@@ -274,7 +284,15 @@ pub enum WriteOutcome {
         /// **Nonzero means a torn tail was just created by us**, which is
         /// precisely the case the reader's tail check exists for. Reporting it
         /// turns *"the file is corrupt"* into *"we corrupted it, here, then"*.
-        torn_bytes: u64,
+        ///
+        /// **`None` means we could not find out**, and it is a third outcome
+        /// rather than decoration. The size is a difference of two `stat`s, and
+        /// a `stat` can fail — on the very path a write just failed on, which is
+        /// exactly when it is most likely to. An earlier version folded that
+        /// into `0`, which reads as *"nothing was torn"*: a plausible value in
+        /// the right shape, in the reassuring direction, which is the class
+        /// ADR-0002 §7 records for .NET's `Process.StartTime`.
+        torn_bytes: Option<u64>,
     },
 }
 
@@ -405,7 +423,9 @@ impl Writer {
                     kind: "serialize_failed",
                     os_code: None,
                 },
-                torn_bytes: 0,
+                // Known, not guessed: this arm is reached before any byte
+                // is written, so nothing can have been torn.
+                torn_bytes: Some(0),
             };
         };
         line.push('\n');
@@ -415,7 +435,9 @@ impl Writer {
                 stage: WriteStage::CreateSink,
                 path,
                 io: IoFailure::from_io(&e),
-                torn_bytes: 0,
+                // Known, not guessed: this arm is reached before any byte
+                // is written, so nothing can have been torn.
+                torn_bytes: Some(0),
             };
         }
 
@@ -426,7 +448,7 @@ impl Writer {
                     stage: WriteStage::OpenFile,
                     path,
                     io: IoFailure::from_io(&e),
-                    torn_bytes: 0,
+                    torn_bytes: Some(0),
                 };
             }
         };
@@ -438,7 +460,7 @@ impl Writer {
                 stage: WriteStage::Append,
                 path: path.clone(),
                 io: IoFailure::from_io(&e),
-                torn_bytes: len_of(&path).saturating_sub(before),
+                torn_bytes: torn_bytes(before, len_of(&path)),
             };
         }
         if let Err(e) = file.flush() {
@@ -446,7 +468,7 @@ impl Writer {
                 stage: WriteStage::Flush,
                 path: path.clone(),
                 io: IoFailure::from_io(&e),
-                torn_bytes: len_of(&path).saturating_sub(before),
+                torn_bytes: torn_bytes(before, len_of(&path)),
             };
         }
 
@@ -462,8 +484,27 @@ impl Writer {
 ///
 /// Only ever used to compute a torn-tail size on a path that has already
 /// failed, where a second failure has nothing left to report through.
-fn len_of(path: &Path) -> u64 {
-    fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+/// File length, or `None` when it cannot be read.
+///
+/// `None` rather than `0`: those are different facts, and only one of them is
+/// a measurement.
+fn len_of(path: &Path) -> Option<u64> {
+    fs::metadata(path).map(|m| m.len()).ok()
+}
+
+/// How much of a record reached the file before the write failed.
+///
+/// **Extracted so it can be exercised**, because the two arms that call it —
+/// `Append` and `Flush` — cannot be induced on this machine without a full disk
+/// or a killed process. That leaves the *dispatch* uncovered and the *body*
+/// covered, which is the same repair ADR-0010 §10 applies to the no-exit-code
+/// mapping and ADR-0011 §5 to the start-time read: factor the computation out
+/// of the branch nobody can reach, and test it over its inputs.
+///
+/// Unknown propagates. If either `stat` failed there is no difference to
+/// report, and inventing one would be the whole reason this returns an option.
+fn torn_bytes(before: Option<u64>, after: Option<u64>) -> Option<u64> {
+    Some(after?.saturating_sub(before?))
 }
 
 /// Pull `session_id` out of a payload and validate it as a path component.
@@ -515,4 +556,81 @@ fn event_of(payload: &str) -> Option<String> {
         .get("hook_event_name")?
         .as_str()
         .map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{len_of, torn_bytes};
+
+    /// **The control `torn_bytes` never had.** *Added 2026-08-18.*
+    ///
+    /// `Append` and `Flush` are the only arms that compute it, and neither can
+    /// be induced here — a full volume is not constructible in a temporary
+    /// directory, and killing the writer mid-`write_all` is a race ADR-0002 §7
+    /// refuses. So until now **the field had never held a measured value in any
+    /// test**: unexecuted code that would read as a fact the first time it
+    /// appeared in a record.
+    ///
+    /// The body is testable in isolation even though the dispatch is not, which
+    /// is the repair rather than a substitute for one. What stays uncovered is
+    /// named: *which* branch calls this, not *what it computes*.
+    #[test]
+    fn the_torn_tail_size_is_the_difference_between_two_stats() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("s__ident.jsonl");
+
+        // A real file, a real stat — control (b)'s truncated-tail fixture
+        // pointed at a different observable.
+        std::fs::write(&path, b"{\"a\":1}\n").expect("write");
+        let before = len_of(&path);
+        assert_eq!(before, Some(8), "the fixture's premise: 8 bytes on disk");
+
+        // A record that reached the file only part-way.
+        std::fs::write(&path, b"{\"a\":1}\n{\"b\":2").expect("append a torn record");
+        let after = len_of(&path);
+        assert_eq!(after, Some(14));
+
+        assert_eq!(
+            torn_bytes(before, after),
+            Some(6),
+            "six bytes of the second record landed, and that is what the reader \
+             will need to explain the tail it finds"
+        );
+    }
+
+    /// A file that did not grow reports zero torn bytes — a *known* zero,
+    /// distinct from the unknown below.
+    #[test]
+    fn a_file_that_did_not_grow_reports_a_known_zero() {
+        assert_eq!(torn_bytes(Some(40), Some(40)), Some(0));
+    }
+
+    /// **Unknown propagates rather than collapsing to zero.**
+    ///
+    /// This is the half that matters. `stat` can fail on the path a write just
+    /// failed on — which is precisely when it is most likely to — and folding
+    /// that into `0` reports *"nothing was torn"*. That is a plausible value in
+    /// the right shape, in the reassuring direction.
+    #[test]
+    fn an_unreadable_stat_is_unknown_and_never_a_zero() {
+        assert_eq!(torn_bytes(None, Some(40)), None);
+        assert_eq!(torn_bytes(Some(40), None), None);
+        assert_eq!(torn_bytes(None, None), None);
+
+        // And the real path: a file that does not exist cannot be measured.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("no-such-file.jsonl");
+        assert_eq!(
+            len_of(&missing),
+            None,
+            "a missing file has no length; reporting 0 would be inventing one"
+        );
+    }
+
+    /// A file that somehow shrank does not report a negative-turned-huge value.
+    /// `saturating_sub` is the guard and it is asserted rather than assumed.
+    #[test]
+    fn a_shrinking_file_saturates_rather_than_wrapping() {
+        assert_eq!(torn_bytes(Some(100), Some(40)), Some(0));
+    }
 }

@@ -1173,10 +1173,21 @@ missing transport, which is now §7a. What follows is the state after round 2.*
   ADR-0002 §7 rejects a control whose firing depends on winning one, because it
   can stop proving anything without ever failing and it arrives as a green.
 
-  The precise cost is that `torn_bytes` is computed only on those two arms, so
-  **the torn-tail size the writer reports has never been observed.** Detection is
-  covered independently by control (b) against a hand-built truncated file; what
-  is unverified is our own report of how much we tore. Recorded as a gap rather
+  **The cost was larger than a missing control and is now narrowed.** *Amended
+  2026-08-18.* `torn_bytes` is computed only on those two arms, so the field had
+  never held a measured value in **any** test — unexecuted code that would read
+  as a fact the first time it appeared in a record.
+
+  The **body** is now covered: the computation is factored out of the
+  unreachable branch and exercised over its inputs, including against a real
+  truncated file. That pass found the computation **wrong in the reassuring
+  direction** — a failed `stat` folded into `0`, reporting *"nothing was torn"*
+  when nothing was known — which is the `Process.StartTime` class one layer
+  down. It returns `None` now, and unknown propagates.
+
+  **The dispatch stays uncovered**, which is a narrower gap than before and is
+  still a gap: what is untested is *which branch calls it*, not *what it
+  computes*. Recorded as a gap rather
   than left to read as coverage, since four variants with two controls look
   uniform from outside.
 

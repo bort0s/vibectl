@@ -724,9 +724,138 @@ requirements because the reversal moved them from *"a price `http` avoids"* to
   session that emitted twice as many events.
 
 - **The sink lives where vibe manages it**, not in a directory a user cleans up,
-  since an append into a deleted inode succeeds silently on POSIX. One file per
-  writer makes retention a **new and required** piece of work, and it is a
-  deletion story, which this project treats carefully.
+  since an append into a deleted inode succeeds silently on POSIX.
+
+- **The declared identity becomes half a filename, so it is validated as a path
+  component — measured, not recalled.** *Added 2026-08-17.* This is user-supplied
+  configuration reaching a path, which is path traversal in a value the user
+  controls, and it is not retention housekeeping.
+
+  Probed on **Windows 10 Pro 19045, node v24.16.0**, with two controls — a
+  known-good identity that must create a file, and a traversal that must escape,
+  so neither a false accept nor a dead escape-detector can pass unnoticed:
+
+  | Class | Measured |
+  | --- | --- |
+  | `../escape`, `..\escape` | **escaped to the parent directory** |
+  | `a/b`, `a\b`, `a*b`, `a?b`, `a|b`, `a<b`, `a>b`, `a"b` | rejected by the OS |
+  | `a:b` | wrote to an **NTFS alternate data stream** — no file, bytes gone |
+  | `CON`, `NUL`, `PRN`, `AUX`, `COM0/1/9`, `LPT*`, bare and with `.jsonl` | **all created ordinary files** |
+  | `ok.`, `ok ` | **created — the trailing dot and space are silently stripped** |
+
+  **The device-name list is not the hazard here, and recalling it would have
+  aimed the validation at the wrong thing.** Every reserved name created an
+  ordinary file on this build; and in this design they are unreachable by
+  construction anyway, because the filename is
+  `<session_id>__<identity>.jsonl`, so the base name is never exactly a device
+  name. Recorded with the build, because it is a property of this one.
+
+  **The hazard the measurement did find is a collision, and it defeats the
+  uniqueness check as specified.** Windows folds case and strips a trailing dot
+  or space, so `foo`, `foo␠`, `foo.` and `Foo` are **four distinct declared
+  identities and one file**. A uniqueness check comparing declared *strings*
+  passes cleanly while the filesystem collapses them — which reproduces the twin
+  writer this whole shape exists to make unrepresentable, through a check that
+  looks correct.
+
+  **So the requirement is two-part and the second half is the one that is easy to
+  miss:**
+
+  1. **The identity is restricted to a conservative charset** — ASCII
+     alphanumerics, `-` and `_`, non-empty, bounded length. That rejects every
+     row above by construction rather than by enumerating hazards, which is the
+     closed-allowlist shape ADR-0005 §10 rule 4 uses for URLs and for the same
+     reason: nobody writes down the traversal form they have not met.
+  2. **Uniqueness is checked on the normalised filename, not on the declared
+     string** — case-folded, with trailing dots and spaces stripped. The
+     filesystem's notion of *same file* is coarser than string equality, and the
+     check must use the filesystem's, because that is the one that decides
+     whether two writers share a file.
+
+  Validated **at install and at write**, not at install alone: §7 permits
+  hand-installed hooks, which install never sees.
+
+#### Retention: vibe never deletes, and reports what is prunable
+
+*Decided 2026-08-17.* One file per writer grows without bound, and this is the
+only part of the design that would delete anything.
+
+**Constraint 2's exemption exists in the text and does not survive the
+mechanism.** The README reads *"No command deletes your files"* — scoped to the
+user's files, which a sink vibe created is arguably not. But ADR-0001 §3 enforces
+it by the **absence of `FileOp::Delete`**: *"a destructive command is not merely
+discouraged, it is unrepresentable."* An absent enum variant has no scope. So any
+vibe-side deletion must either add that variant — re-arming deletion at every op
+site to serve one feature, converting a structural guarantee back into a
+discipline — or write outside `plan`/`apply`, which is a second mutation path
+with no dry run, no preconditions and none of ADR-0005 §10's containment.
+
+**And it makes ADR-0005 §10 rule 5's TOCTOU residual materially worse**: today,
+winning the parent-swap race gets an attacker a file **written**; with `Delete`
+it gets one **removed**, which is not recoverable.
+
+**So the automatic and the explicit forms cost the identical structural thing**,
+and the difference between them — real as a question of consent — does not touch
+it. An explicit prune looked cheap by analogy with ADR-0010 §3's permitted
+`install`, and that precedent is about **writing**, which was already
+representable.
+
+**Decided: vibe computes and displays what is prunable, and the user deletes.**
+No `FileOp::Delete`, no second write path, constraint 2 untouched in text and in
+enforcement. It prints **paths, never a paste-ready command**, per ADR-0010 §9 —
+which is also what the identity charset above makes safe.
+
+**Stated without overclaiming, because the label is the trap:** *this does not
+solve growth.* It is *"never delete"* plus a reporting tool, and **the
+degradation is identical until someone acts**. All constraint 2 permits is making
+the growth visible and actionable; saying more would be the label reaching one
+step past what the mechanism does, which §5's genealogy records four times.
+
+**The cost of not acting is measured rather than asserted.** A stateless read of
+the whole sink, on this machine (Windows 10 Pro 19045, node v24.16.0), against
+records of the measured size:
+
+| files | enumerate | read + parse | on disk | records |
+| --- | --- | --- | --- | --- |
+| 100 | 0.2 ms | 71 ms | 2.7 MB | 3,925 |
+| 1,000 | 0.9 ms | 629 ms | 27.2 MB | 39,257 |
+| 7,300 — about a year at ten sessions a day | 6.2 ms | **4,679 ms** | 198.8 MB | 286,577 |
+
+Linear, and enumeration is free — the cost is reading and parsing. **WARM CACHE,
+recorded in capitals because it is the optimistic bound**: the files were written
+immediately before being read, so a cold read is worse by an unmeasured amount.
+
+**That number decides the ergonomics rather than describing them.** Constraint 4
+sets this project's performance bar at *fifty repositories in well under two
+seconds*; a monitor listing at one year is **more than twice that**, warm. At
+1,000 files — roughly seven weeks — it is 629 ms and unremarkable. **So the
+reporting half is not garnish, it is what keeps the feature usable**, and it must
+surface before the cost is noticeable rather than on request. That is ADR-0010
+§5's argument exactly: the state is shown by default because the failure is *"I
+didn't notice"*.
+
+**The fallback, named so it is taken deliberately if it is ever taken:** if the
+ergonomics prove unacceptable in use, the answer is an explicit prune — and it is
+adopted as *"we are adding `FileOp::Delete` and re-making ADR-0005 §10's
+containment argument for it"*, never as *"we are adding a prune command"*.
+
+**Prunability is derived from the records, never from remembered state.** The
+reader is **stateless**: it walks the sink and reads everything, every time. A
+read-watermark is a second artifact that must be kept equal to the files — the
+shape ADR-0010 §3 rejected — and its staleness is silent in the dangerous
+direction, since a watermark ahead of the truth **hides records**. So
+*"unconsumed"* is not a state vibe holds, and the price of that is exactly the
+read cost above.
+
+It follows that **vibe cannot distinguish pruning a file whose records were read
+from one whose were not**, and it must not pretend to. What it can do is derive
+prunability from the artifact: **a file containing `SessionEnd` is a completed
+session**, and §4 measured that a killed agent writes neither `Stop` nor
+`SessionEnd` — so a file lacking it is in-progress-or-dead and must never be
+offered as prunable. That is §7's proof-carrying shape applied to retention, and
+it rests on a measurement rather than on anyone's memory. The read/unread
+distinction is preserved **by showing the user** — per file: the session, the
+event count, the time span, and whether it completed — not by vibe knowing.
 
 **And the residual is stated rather than dissolved:** a file that stops growing
 is indistinguishable from a quiet agent. Neither transport ever fixed that. It is
@@ -857,6 +986,27 @@ missing transport, which is now §7a. What follows is the state after round 2.*
   duplicate accepted. The fixture must reach the check rather than failing
   earlier — a config that is malformed for some other reason proves nothing about
   it.
+
+  **d. The identity is validated as a path component, paired.** A traversal
+  identity (`../escape`), a separator, and a `:` must each be **refused at
+  install and at write**; a valid identity must be accepted and produce a file.
+  Sabotage by removing the charset check and asserting the traversal case
+  **writes outside the sink** — which is the assertion that makes this about
+  containment rather than about a rejected string.
+
+  **e. Uniqueness is checked on the normalised filename, not the declared
+  string.** Two identities differing only by case, or by a trailing dot or space,
+  must be **refused as duplicates** — measured on Windows 10 Pro 19045 to be four
+  distinct strings resolving to one file. Paired: two genuinely distinct
+  identities must be accepted. Sabotage by comparing raw strings and observing
+  the collision accepted, which is the twin writer arriving through a check that
+  reads as correct.
+
+  **f. Prunability is derived, paired.** A file containing `SessionEnd` is
+  offered as prunable; a file without one — in progress, or a killed agent per §4
+  — is **not**, and the two must be reported differently. Sabotage by offering
+  every file and observing an in-progress session listed as prunable.
+
 - **Ordering needs a control that the reader refuses rather than guesses.** Two
   records with no ordering relation between them in the payload — different turns,
   no shared `tool_use_id`, no `index` — and stamps that are equal or inverted must

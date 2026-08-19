@@ -675,7 +675,11 @@ requirements because the reversal moved them from *"a price `http` avoids"* to
   seen.
 
   **The one thing that would kill this repair is intra-agent concurrency, and it
-  is UNMEASURED.** If two hook invocations for a single agent can overlap — two
+  is UNMEASURED.** *Amended 2026-08-19 — see the round-3 paragraphs below. It has
+  now been measured on one fixture and did not appear, so this word reads **not
+  proven impossible** rather than **never looked at**. Left in place because the
+  paragraphs that follow are the argument for the limit and they were written
+  against it.* If two hook invocations for a single agent can overlap — two
   tool calls in flight in one turn — they share `session_id`, `agent_id` *and*
   identity, and no key drawn from the payload can separate them, because the
   discriminator would have to be per-invocation and the payload has no

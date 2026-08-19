@@ -57,20 +57,36 @@ step() {
   return $code
 }
 
+# ONE `cargo test` RUN, and the verdict and the numbers come from IT.
+#
+# The first version ran it twice — once for the verdict, once to derive the
+# counts — and the two disagreed: `run_gate` reported every step 0 while the
+# second run reported 1 failed, and the script printed GREEN. A gate that
+# contradicts itself and resolves the contradiction in favour of green is the
+# failure this file was written against, arriving from a different direction.
+TEST_OUT=""
+TEST_CODE=0
+
 run_gate() {
   local failed=0
   step "fmt --check"        cargo fmt --all -- --check                              || failed=1
   step "clippy -D warnings" cargo clippy --workspace --all-targets -- -D warnings   || failed=1
-  step "test --workspace"   cargo test --workspace                                  || failed=1
+
+  TEST_OUT="$(mktemp -t gate.XXXXXX)"
+  cargo test --workspace >"$TEST_OUT" 2>&1
+  TEST_CODE=$?
+  printf '  %-28s exit=%d
+' "test --workspace" "$TEST_CODE"
+  [ "$TEST_CODE" -eq 0 ] || failed=1
+
   step "MSRV 1.85 --locked" cargo +1.85.0 check --locked --workspace                || failed=1
   return $failed
 }
 
 derive_numbers() {
-  local out
-  out="$(mktemp -t gate.XXXXXX)"
-  cargo test --workspace >"$out" 2>&1
-  local code=$?
+  local out="$TEST_OUT"
+  local code=$TEST_CODE
+  [ -n "$out" ] || { echo "  (no test output — run_gate did not run)"; return 2; }
   # DERIVATIONS, stated because a number is only as good as where it came from:
   #   binaries  = lines matching '^test result:' — cargo prints one per test
   #               binary it RAN. It is 0 when nothing compiled, which is the
@@ -85,7 +101,6 @@ derive_numbers() {
   printf '  tests passed (sum of "N passed" on those lines):         %s\n' "${passed:-0}"
   printf '  tests failed (sum of "N failed" on those lines):         %s\n' "${failed:-0}"
   printf '  cargo test exit code (the only thing that decides):      %s\n' "$code"
-  rm -f "$out"
   return $code
 }
 
@@ -136,8 +151,8 @@ echo "gate on $(git rev-parse --abbrev-ref HEAD) @ $(git rev-parse --short HEAD)
 run_gate
 gate_code=$?
 echo
-derive_numbers >/dev/null 2>&1 || true
 derive_numbers
+rm -f "$TEST_OUT"
 echo
 if [ "$gate_code" -eq 0 ]; then
   echo "GREEN — every step exited 0"

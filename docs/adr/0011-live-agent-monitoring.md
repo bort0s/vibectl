@@ -903,6 +903,15 @@ holding the moment §8 ships a display and somebody has a sink on disk. Recorded
 here rather than assumed, because a zero-cost breaking change is the kind that
 gets repeated once it stops being zero-cost.
 
+**The degradation is old; the POPULATION is new.** *Added 2026-08-19.* Before
+this change a filename with `_` in a component was **not producible by vibe** —
+it could only come from a hand-written hook, which §7 admits and which is a small
+and self-selected group. It is now producible by **any install predating the
+change**. Not a new gap: the same gap with a larger population, and after §8 that
+population includes real users. Recorded beside the expiry above because the two
+age together — the day the zero-cost reason stops holding is the day the
+population stops being empty.
+
 **And `read_sink` does meet legacy-form files, so that case is not hypothetical.**
 `Attribution::of` parses every component, so a name containing `_` now fails and
 the file reads as **`unattributed`** — which is the degradation §7a already
@@ -2946,6 +2955,45 @@ that leave it say where they went.*
   rather than a fault in the reading. **Nobody should read 5 of 7 as "controls
   are stable."** Both numbers are printed in one invocation; only the second is
   a gate.
+
+- **THE TIMING-DEPENDENT CONTROLS, ENUMERATED AND DISPOSITIONED.** *Added
+  2026-08-19.* One control was found firing at **one red in six runs** — the
+  sampling exception argued for and approved two rounds earlier. **The broken
+  gate could not see any red, so the rest were not green, they were unmeasured**,
+  and a small clean sample bounds nothing: the same suite went eight for eight
+  on another tip while carrying the same flake.
+
+  **The method, so the list is bounded rather than a hunt:** every control whose
+  outcome depends on *when* two things happen — a `Duration`, an `Instant`, an
+  `elapsed`, a `sleep`, or a second thread or process observed from the first.
+  Across both crates' integration targets that is the following, complete:
+
+  | control | disposition |
+  | --- | --- |
+  | `the_truncating_write_really_does_pass_through_an_empty_file` | **repaired by construction** — the window is built from `File::create` + `write_all` with the observation between, not sampled for. Was `..._is_caught_mid_replacement`, one red in six. |
+  | `an_observer_can_see_a_partial_write_on_a_live_file` | **repaired by construction** — a file handshake, not a sleep. Residual: bounded waits (600 × 10 ms) that fail on timeout rather than hanging. Declared. |
+  | `the_installed_timeout_is_what_the_rule_derives` | **repaired** — it was a **threshold on a noisy measurement**, asserting on a max over ten. Measured: twelve batches gave steady-state maxima of 14.7–18.7 ms and one of **48.8 ms**, against the 50 ms at which the assertion flips. Now asserts on **p90 and prints the max**. |
+  | `a_replace_is_never_observed_partial` | **sampling, and one-sided** — it can only fail by *observing* a bad state, never by missing one, so it cannot go red without a defect. Its premise moved off the reader onto the writer. |
+  | `a_cold_hook_invocation_is_measured_and_reported_per_platform` | **sampling with thresholds, declared** — 10 s against a ~15 ms steady state and 30 s against a ~1.2 s cold start. Roughly 500× and 25× headroom; no red observed. |
+  | `two_writes_never_derive_the_same_temporary_name`, `the_temporary_file_is_derived_beside_the_target_and_leaves_no_residue` | **not timing-dependent** — threads exercise them, but every assertion is on a derivation or on final content. |
+  | `ignore_state_git.rs`, `prompts_listing.rs` | **not timing-dependent** — a 30 s subprocess timeout is a bound on a hang, not an assertion about elapsed time. |
+
+  **And the scratchpad instruments are outside the gate**, which is why they are
+  not on this list: `hook-overlap*.js` and `kill-midwrite.js` sample by nature,
+  nothing runs them automatically, and the overlap control **refuses rather than
+  retries** when it does not fire.
+
+  **The residual after all of it:** two controls still sample, both declared,
+  both one-sided or with orders-of-magnitude headroom. **No rate is claimed for
+  either** — see the note on estimation below.
+
+- **A FLAKE RATE FROM SIX RUNS IS NOT A RATE.** *Added 2026-08-19.* The
+  `1 in 6` above was used inside an argument that turns on frequency, and six
+  runs does not support a frequency estimate. **The conclusion does not need
+  it**: any non-zero non-deterministic red carries the cost of training people
+  to ignore the colour, which is what a green proving nothing costs, arriving
+  from the other side. So the label is **one red in six runs; the rate is not
+  estimated** — and the same for every count in the table above.
 
 - **The measurement instruments are ON-DEMAND, and that is a capability rather
   than a proof.** *Added 2026-08-19.* `scratchpad/hook-{collect,fixture,probe,

@@ -35,9 +35,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use vibe_core::monitor::{
-    ComponentRejection, FixedStamps, PayloadRefusal, ReadRecord, SessionComponent, SinkRead,
-    StampSource, SystemStamps, TailState, WriteOutcome, WriteStage, Writer, WriterIdentity,
-    collisions, file_key, read_file,
+    AgentComponent, ComponentRejection, FixedStamps, PayloadRefusal, ReadRecord, SessionComponent,
+    SinkRead, StampSource, SystemStamps, TailState, WriteOutcome, WriteStage, Writer,
+    WriterIdentity, collisions, file_key, read_file,
 };
 
 // ---------------------------------------------------------------------------
@@ -211,21 +211,43 @@ fn one_session_and_one_identity_still_produce_a_file_per_agent() {
 /// `a__b` — and the parent of one agent would be indistinguishable from a
 /// subagent of another.
 #[test]
-fn a_component_containing_the_separator_is_refused() {
+fn no_component_can_form_the_separator_because_underscore_is_not_in_the_charset() {
+    // A literal `__` inside a component — what the old check caught.
     for hostile in ["a__b", "__lead", "trail__", "a__b__c"] {
         assert!(
             matches!(
                 WriterIdentity::parse(hostile),
-                Err(ComponentRejection::ContainsSeparator { .. })
+                Err(ComponentRejection::IllegalByte { .. })
             ),
             "{hostile:?} was accepted, so the component count is ambiguous"
         );
     }
-    // Paired: a single underscore is still fine, or this rule has quietly
-    // banned an ordinary character.
-    assert!(WriterIdentity::parse("a_b").is_ok());
-    assert!(WriterIdentity::parse("_lead").is_ok());
-    assert!(WriterIdentity::parse("trail_").is_ok());
+
+    // **The forms the old check MISSED**, and the reason for the change: a
+    // single `_` at a boundary lets two distinct triples render one filename.
+    // `("sess", "abc_", "user")` and `("sess", "abc", "_user")` both produced
+    // `sess__abc___user.jsonl`, and both were accepted (ADR-0011 §2 round 3h).
+    for boundary in ["a_b", "_lead", "trail_"] {
+        assert!(
+            matches!(
+                WriterIdentity::parse(boundary),
+                Err(ComponentRejection::IllegalByte { .. })
+            ),
+            "{boundary:?} was accepted — a single `_` at a boundary is exactly \
+             how the separator got formed from two legal components"
+        );
+    }
+
+    // Paired, or this has quietly banned everything: the charset still admits
+    // what it is meant to.
+    assert!(WriterIdentity::parse("a-b").is_ok());
+    assert!(WriterIdentity::parse("user").is_ok());
+    assert!(WriterIdentity::parse("Alpha9").is_ok());
+
+    // And the point of it all: the two triples that used to collide cannot
+    // both be built any more, because one of their components is refused.
+    assert!(AgentComponent::parse("abc_").is_err());
+    assert!(WriterIdentity::parse("_user").is_err());
 }
 
 /// `agent_id` reaches a filename, so it takes the same validation as the
@@ -485,7 +507,7 @@ fn a_traversal_a_separator_and_a_colon_are_refused_as_identities() {
     // Paired: a valid identity is accepted AND produces a file. Without this
     // half, a build rejecting every identity passes the loop above perfectly.
     let dir = tempfile::tempdir().expect("tempdir");
-    let outcome = writer(dir.path(), "ok-1_A").append(&payload("s", "SessionStart"));
+    let outcome = writer(dir.path(), "ok-1-A").append(&payload("s", "SessionStart"));
     let path = written_path(&outcome);
     assert!(path.is_file());
     assert_eq!(
@@ -707,7 +729,7 @@ fn no_hostile_identity_escapes_the_sink_through_the_writer() {
 
     // Paired: a valid identity still produces a file INSIDE the sink, or this
     // is satisfied by a build that writes nothing at all.
-    let ok = written_path(&writer(&sink, "ok-1_A").append(&payload("sess", "SessionStart")));
+    let ok = written_path(&writer(&sink, "ok-1-A").append(&payload("sess", "SessionStart")));
     assert_eq!(ok.parent(), Some(sink.as_path()));
     assert!(ok.is_file());
 }
@@ -1477,8 +1499,8 @@ fn the_two_path_components_share_one_charset() {
         assert!(WriterIdentity::parse(hostile).is_err());
         assert!(SessionComponent::parse(hostile).is_err());
     }
-    assert!(WriterIdentity::parse("ok-1_A").is_ok());
-    assert!(SessionComponent::parse("ok-1_A").is_ok());
+    assert!(WriterIdentity::parse("ok-1-A").is_ok());
+    assert!(SessionComponent::parse("ok-1-A").is_ok());
 }
 
 /// The bounds differ, and the difference is path arithmetic rather than taste.
@@ -1513,15 +1535,27 @@ fn the_length_bounds_are_what_the_module_says_they_are() {
 /// Every rejection reason is reachable and distinguishable.
 #[test]
 fn every_component_rejection_is_reachable() {
+    // Three, not four. `ContainsSeparator` was deleted on 2026-08-19: with `_`
+    // outside the charset a component cannot contain `__`, so the variant
+    // became unreachable — and an unreachable variant is a representable
+    // invalid state, which this project deletes rather than filters. Same move
+    // as `WriteStage::Flush`.
     let mut keys = vec![
         WriterIdentity::parse("").unwrap_err().key(),
         WriterIdentity::parse(&"a".repeat(999)).unwrap_err().key(),
         WriterIdentity::parse("a/b").unwrap_err().key(),
-        WriterIdentity::parse("a__b").unwrap_err().key(),
     ];
     keys.sort_unstable();
     keys.dedup();
-    assert_eq!(keys.len(), 4, "two rejections share a key: {keys:?}");
+    assert_eq!(keys.len(), 3, "two rejections share a key: {keys:?}");
+
+    // And the deleted one is genuinely unreachable rather than merely unused:
+    // the byte check fires first on anything that could have reached it.
+    assert_eq!(
+        WriterIdentity::parse("a__b").unwrap_err().key(),
+        "illegal_byte",
+        "`__` must now be refused as an illegal byte, not by a separator check"
+    );
 }
 
 /// `ReadRecord::Unparseable` is a distinct outcome from a partial tail: it has

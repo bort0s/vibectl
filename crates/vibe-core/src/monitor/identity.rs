@@ -109,15 +109,6 @@ pub enum ComponentRejection {
     /// non-UTF-8 or non-printing byte has no character to show, and rendering
     /// one would be inventing a value.
     IllegalByte { index: usize, byte: u8 },
-    /// Contains `__`, which is the filename's field separator.
-    ///
-    /// Single `_` is fine; two in a row are not. This is what lets the
-    /// **component count** distinguish a session-level record
-    /// (`<session>__<identity>`) from an agent-level one
-    /// (`<session>__<agent>__<identity>`) without reserving a word for
-    /// *"no agent"* — a reserved literal such as `root` could collide with a
-    /// real `agent_id`, and nothing measured bounds that id space.
-    ContainsSeparator { index: usize },
 }
 
 impl ComponentRejection {
@@ -128,7 +119,6 @@ impl ComponentRejection {
             ComponentRejection::Empty => "empty",
             ComponentRejection::TooLong { .. } => "too_long",
             ComponentRejection::IllegalByte { .. } => "illegal_byte",
-            ComponentRejection::ContainsSeparator { .. } => "contains_separator",
         }
     }
 }
@@ -251,6 +241,58 @@ impl AgentComponent {
 }
 
 /// The one charset check, shared so the three components cannot drift apart.
+///
+/// # `_` IS NOT IN THE CHARSET, AND THAT IS THE INJECTIVITY REPAIR
+///
+/// *Changed 2026-08-19. ADR-0011 §2 round 3h has the measurement.* The charset
+/// used to admit `_` and the check refused a component containing a **literal
+/// `__`**. That covers *separator inside a component* and leaves *separator
+/// formed at a boundary*, so two distinct triples could render one filename:
+///
+/// ```text
+/// ("sess", agent "abc_",  identity "user")   ->  sess__abc___user.jsonl
+/// ("sess", agent "abc",   identity "_user")  ->  sess__abc___user.jsonl
+/// ```
+///
+/// Both were accepted. **That is the twin writer this whole design exists to
+/// make unrepresentable, arriving through the check written to exclude it** —
+/// and the two-component form carried a misattribution as well: `sess_` + `X`
+/// and `sess` + `_X` both render `sess___X.jsonl`, which the reader parses as
+/// `("sess", "_X")`, so one writer is read back under a session it does not
+/// belong to. **Both die with this change**, because neither string can be
+/// formed any more.
+///
+/// **Why not widen the refusal to `___`, `____`, and so on.** That filters
+/// invalid states instead of making them unrepresentable, and the enumeration
+/// has no end — the move ADR-0005 §10 rule 4 rejects for URLs. Removing `_`
+/// makes the concatenation injective **by construction**, which needs no
+/// knowledge of what id formats look like today or after an upstream change.
+///
+/// **The alternative's safety rested on a sample.** `session_id` is a UUID and
+/// `agent_id` is 17 hex characters — n=5, measured — so neither can end in `_`
+/// *today*. Nothing upstream promises that, and *"the values we have seen cannot
+/// trigger it"* is the standing this project refuses everywhere else. An
+/// upstream change to the agent id format must not be able to reopen a file
+/// collision.
+///
+/// # THE COST, AND WHERE IT LANDS LOUDLY VERSUS SILENTLY
+///
+/// An identity like `my_hook` is refused and has to be `my-hook`. **The tool
+/// does not normalise it** — silently substituting `-` for `_` is inventing a
+/// plausible value, which constraint 5 forbids; vibe refuses and states what is
+/// permitted, and the person makes the edit.
+///
+/// **Where the refusal is heard differs, and only one case is loud:**
+///
+/// - **An identity `vibe monitor install` writes** is validated *at install*,
+///   before anything is written, and refused to the person running the command.
+///   That is the case that must not be silent, and it is not.
+/// - **A hand-written identity** (ADR-0011 §7 permits hand-installed hooks) is
+///   refused at *write* time, inside the hook process, whose stderr nobody
+///   reads. The event is lost. So this repair **moves** that risk rather than
+///   removing it, and it is the same producer-of-silence recorded for the
+///   charset generally: a charset that is too narrow does not corrupt anything,
+///   it deletes events.
 fn validate_component(declared: &str, max: usize) -> Result<(), ComponentRejection> {
     if declared.is_empty() {
         return Err(ComponentRejection::Empty);
@@ -262,16 +304,15 @@ fn validate_component(declared: &str, max: usize) -> Result<(), ComponentRejecti
         });
     }
     for (index, byte) in declared.bytes().enumerate() {
-        if !(byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_') {
+        if !(byte.is_ascii_alphanumeric() || byte == b'-') {
             return Err(ComponentRejection::IllegalByte { index, byte });
         }
     }
-    // `__` is the filename's field separator, so no component may contain it.
-    // That is what lets the component COUNT carry "is there an agent" without
-    // reserving a literal for "no agent" — see `ContainsSeparator`.
-    if let Some(index) = declared.find(SEPARATOR) {
-        return Err(ComponentRejection::ContainsSeparator { index });
-    }
+    // No `find(SEPARATOR)` here, and its absence is the repair rather than an
+    // omission: with `_` outside the charset, `__` cannot be FORMED from
+    // component content at all. The check it replaces refused a literal `__`
+    // *inside* a component and permitted a single `_`, which left the separator
+    // formable at a BOUNDARY — see the module docs.
     Ok(())
 }
 

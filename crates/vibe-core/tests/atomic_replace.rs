@@ -35,9 +35,31 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use vibe_core::write_atomically;
 
 /// Distinct states a reader can observe.
+///
+/// # `NotFound` and "the read was refused" are different facts
+///
+/// *Split 2026-08-19, after this instrument reported the wrong thing.* The first
+/// version mapped **every** read error to `Missing` via `std::fs::read(..).ok()`,
+/// so a reader that was **denied** and a reader that found **no file** produced
+/// one observable — the exact failure this project catalogues, in the instrument
+/// asserting the absence of it.
+///
+/// It fired: `a_replace_is_never_observed_partial` went red on `[Missing]` and
+/// its message claimed *"a settings.json can therefore be observed destroyed"*,
+/// which the data did not support. On Windows a read colliding with
+/// `MoveFileExW`'s replace is refused, not answered with "not found", and a
+/// refusal is **not** an observation that the file was absent.
+///
+/// So the error is carried. `Missing` now means the OS said `NotFound`; anything
+/// else is [`Seen::Unreadable`], which is reported and is not evidence of a
+/// window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Seen {
+    /// The OS said the path does not exist. **This one would be a window.**
     Missing,
+    /// The read was refused for some other reason — on Windows, a collision
+    /// with the replace. The file's contents are unobserved, not absent.
+    Unreadable(std::io::ErrorKind),
     Empty,
     Partial,
     WholeOld,
@@ -47,13 +69,14 @@ enum Seen {
 const OLD: &str = "OLD-CONTENTS-OLD-CONTENTS-OLD-CONTENTS-OLD-CONTENTS-OLD\n";
 const NEW: &str = "NEW-CONTENTS-NEW-CONTENTS-NEW-CONTENTS-NEW-CONTENTS-NEW\n";
 
-fn classify(bytes: Option<Vec<u8>>) -> Seen {
-    match bytes {
-        None => Seen::Missing,
-        Some(b) if b.is_empty() => Seen::Empty,
-        Some(b) if b == OLD.as_bytes() => Seen::WholeOld,
-        Some(b) if b == NEW.as_bytes() => Seen::WholeNew,
-        Some(_) => Seen::Partial,
+fn classify(read: std::io::Result<Vec<u8>>) -> Seen {
+    match read {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Seen::Missing,
+        Err(e) => Seen::Unreadable(e.kind()),
+        Ok(b) if b.is_empty() => Seen::Empty,
+        Ok(b) if b == OLD.as_bytes() => Seen::WholeOld,
+        Ok(b) if b == NEW.as_bytes() => Seen::WholeNew,
+        Ok(_) => Seen::Partial,
     }
 }
 
@@ -61,7 +84,7 @@ fn classify(bytes: Option<Vec<u8>>) -> Seen {
 fn observe(target: &Path, stop: &Arc<AtomicBool>) -> Vec<Seen> {
     let mut seen: Vec<Seen> = Vec::new();
     while !stop.load(Ordering::Relaxed) {
-        let state = classify(std::fs::read(target).ok());
+        let state = classify(std::fs::read(target));
         if !seen.contains(&state) {
             seen.push(state);
         }
@@ -147,12 +170,12 @@ fn the_truncating_write_really_does_pass_through_an_empty_file() {
 
     // Premise: the file is whole before any of this, or "Empty in the middle"
     // is satisfied by a file that was empty to begin with.
-    assert_eq!(classify(std::fs::read(&target).ok()), Seen::WholeOld);
+    assert_eq!(classify(std::fs::read(&target)), Seen::WholeOld);
 
     // `std::fs::write`, taken apart. `File::create` truncates HERE, before a
     // single byte of the new contents exists anywhere.
     let mut file = std::fs::File::create(&target).expect("create truncates");
-    let between = classify(std::fs::read(&target).ok());
+    let between = classify(std::fs::read(&target));
     file.write_all(NEW.as_bytes()).expect("write");
     drop(file);
 
@@ -167,7 +190,7 @@ fn the_truncating_write_really_does_pass_through_an_empty_file() {
         std::env::consts::OS,
         std::env::consts::ARCH,
     );
-    assert_eq!(classify(std::fs::read(&target).ok()), Seen::WholeNew);
+    assert_eq!(classify(std::fs::read(&target)), Seen::WholeNew);
 }
 
 /// **The atomic route is never observed partial.**
@@ -177,23 +200,59 @@ fn the_truncating_write_really_does_pass_through_an_empty_file() {
 /// state. This one samples — it has to, since it is asserting an absence over a
 /// live sequence — but **it can only fail by observing something**, never by
 /// missing it, so it cannot go red without a defect.
+///
+/// # What it asserts is narrower than the first version claimed
+///
+/// *Amended 2026-08-19.* It asserted that no reader ever sees the file **absent
+/// or not whole**, and that was measured false: under load a reader gets a real
+/// `ErrorKind::NotFound` during the rename on Windows. The assertion is now on
+/// **contents** — never `Empty`, never `Partial` — which is the destructive case
+/// and the one `std::fs::write` produced every time. `Missing` is reported as
+/// the measured limit it is.
 #[test]
 fn a_replace_is_never_observed_partial() {
     let seen = states_under(atomic, 400);
-    let bad: Vec<Seen> = seen
+    // WHAT THE PRIMITIVE PROMISES IS ABOUT CONTENTS: the target is never empty
+    // and never half written. That is the destructive case — a zero-byte
+    // `settings.json` is a parse error, a truncated manifest is worse — and it
+    // is what `std::fs::write` produced on every single write.
+    let damaged: Vec<Seen> = seen
         .iter()
         .copied()
-        .filter(|s| matches!(s, Seen::Missing | Seen::Empty | Seen::Partial))
+        .filter(|s| matches!(s, Seen::Empty | Seen::Partial))
         .collect();
     assert!(
-        bad.is_empty(),
-        "a reader saw {bad:?} while `write_atomically` replaced the target on \
-         {}/{}. Rename-over-existing is not replacing without a window on this \
-         platform, and a settings.json can therefore be observed destroyed. \
-         All states seen: {seen:?}",
+        damaged.is_empty(),
+        "a reader saw {damaged:?} while `write_atomically` replaced the target \
+         on {}/{}. The file was PRESENT AND NOT WHOLE, which is the destructive \
+         state this primitive exists to remove. All states: {seen:?}",
         std::env::consts::OS,
         std::env::consts::ARCH,
     );
+
+    // MISSING AND REFUSED ARE REPORTED, NOT ASSERTED ON, AND THE FIRST IS A
+    // MEASURED LIMIT RATHER THAN A CONVENIENCE.
+    //
+    // `Missing` is a real `ErrorKind::NotFound` — the OS said the path does not
+    // exist. Measured under load on Windows 10 Pro 19045: **a reader can observe
+    // the target absent during the rename.** So *"a reader sees the old file or
+    // the new one"* is FALSE on this platform, and ADR-0001 §3a records what it
+    // is instead. It is not the destructive case — an absent `settings.json` is
+    // a defined state where a zero-byte one is a parse error — but it is not
+    // nothing, and asserting it away would be the label reaching past the
+    // mechanism again.
+    //
+    // `Unreadable` is a fact about the observer's ACCESS, not about the file.
+    // Folding it into `Missing` is what made an earlier version of this
+    // instrument report a destroyed `settings.json` it had not measured.
+    let notable: Vec<Seen> = seen
+        .iter()
+        .copied()
+        .filter(|s| matches!(s, Seen::Missing | Seen::Unreadable(_)))
+        .collect();
+    if !notable.is_empty() {
+        println!("observed during the replace, reported not asserted: {notable:?}");
+    }
 
     // And it really did replace. Asserted on what the WRITER did, not on what
     // the reader happened to catch: "the reader saw both contents" is a timing

@@ -310,8 +310,15 @@ static TEMP_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 ///
 /// # The shape
 ///
-/// Write to a temporary file **beside the target**, then rename over it. A
-/// reader sees the old file or the new one.
+/// Write to a temporary file **beside the target**, then rename over it.
+///
+/// **A reader never sees the file empty or half written** — the destructive
+/// case, and the one `std::fs::write` produced on every write. *It is NOT true
+/// that a reader sees "the old file or the new one", which is what this said
+/// until 2026-08-19:* measured under load on Windows, a concurrent reader can
+/// get a real `ErrorKind::NotFound` during the rename, and can also be refused
+/// with `PermissionDenied`. ADR-0001 §3a carries the table of what is
+/// observable, and why the absent case is admitted where the empty one is not.
 ///
 /// **Beside the target, not in the system temp directory**, and that is
 /// load-bearing rather than tidy: a rename across volumes is a copy plus a

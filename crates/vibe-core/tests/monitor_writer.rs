@@ -1267,9 +1267,13 @@ fn serde_json_in_this_build_preserves_key_order() {
 /// on. If some platform's `write` returns short, that is the finding, and it
 /// arrives as a red rather than as a surprise in a record.
 ///
-/// Sizes stop at 4 MiB rather than 64 MiB: a CI runner should not write 64 MiB
-/// to establish a property that is about the loop rather than about the size,
-/// and the scratchpad instrument covers the larger end on demand.
+/// **The ceiling narrowed from the scratchpad measurement and that is written
+/// down rather than left to be reconciled.** The on-demand instrument went to
+/// **64 MiB**; this stops at **4 MiB**. A CI runner should not write 64 MiB to
+/// establish a property that is about the LOOP rather than about the size, and
+/// a real record is **327 bytes** — the first row here — so the narrowing costs
+/// nothing that install depends on. What it gives up is the far tail, which the
+/// scratchpad covers on demand.
 #[test]
 fn one_write_call_takes_a_whole_record_on_this_platform() {
     use std::io::Write as _;
@@ -1324,38 +1328,62 @@ fn the_write_path_has_no_buffered_writer() {
     let src = fs::read_to_string(&writer_rs)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", writer_rs.display()));
 
-    // The premise: this is the file that does the writing. Without it the
-    // assertion below passes against an empty string.
-    assert!(
-        src.contains("write_all(line.as_bytes())"),
-        "the fixture's premise failed: {} no longer contains the append it is \
-         guarding, so finding no `BufWriter` in it establishes nothing",
-        writer_rs.display()
-    );
-
-    // `BufWriter` only ever appears here as prose about why it must not.
-    let in_code = src
+    // THE PREMISE, STATED RATHER THAN GESTURED AT. This assertion establishes
+    // two things and the second is the one that rots: that the file was FOUND,
+    // and that it still CONTAINS THE WRITE PATH this control is guarding. A
+    // rename, a move, or the module being split would leave a readable file
+    // with no append in it, and "no BufWriter here" would then be true and
+    // worthless. Anchored to a line, and to a line that is not a comment,
+    // because the prose in this very file names the append it is about.
+    let append_lines: Vec<&str> = src
         .lines()
         .filter(|l| !l.trim_start().starts_with("//"))
-        .any(|l| l.contains("BufWriter"));
+        .filter(|l| l.contains("write_all(line.as_bytes())"))
+        .collect();
+    assert_eq!(
+        append_lines.len(),
+        1,
+        "the fixture's premise failed: {} has {} non-comment lines performing \
+         the append this control guards, expected exactly one. The write path \
+         moved or was split, and finding no `BufWriter` in this file no longer \
+         establishes anything about it.",
+        writer_rs.display(),
+        append_lines.len()
+    );
+
+    // Anchored to the line as well: every line is checked on its own, and a
+    // comment line is not code. `BufWriter` appears in this module only as
+    // prose about why it must not appear.
+    let offenders: Vec<(usize, &str)> = src
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| !l.trim_start().starts_with("//"))
+        .filter(|(_, l)| l.contains("BufWriter"))
+        .map(|(i, l)| (i + 1, l.trim()))
+        .collect();
     assert!(
-        !in_code,
-        "a buffered writer appeared in the monitor write path. That undoes TWO \
-         measured properties at once (ADR-0011 §2 round 3d): `flush` stops \
-         being a no-op, so the deleted `WriteStage::Flush` is missing rather \
-         than unreachable; and `write_all` becomes a loop, which opens the \
-         user-space window a killed hook can tear a record in. Both, from one \
-         commit, with nothing else going red."
+        offenders.is_empty(),
+        "a buffered writer appeared in the monitor write path at {offenders:?}. \
+         That undoes TWO measured properties at once (ADR-0011 §2 round 3d): \
+         `flush` stops being a no-op, so the deleted `WriteStage::Flush` is \
+         missing rather than unreachable; and `write_all` becomes a loop, which \
+         opens the user-space window a killed hook can tear a record in. Both, \
+         from one commit, with nothing else going red."
     );
 }
 
 /// **A record is on disk when `append` returns**, which is the behavioural half
 /// of the control above.
 ///
-/// The source check catches a `BufWriter` by name; this catches any buffering
-/// by its effect, including one that arrives through a type that is not called
-/// `BufWriter`. Two instruments for one property, because the first is a string
-/// match and string matches are exactly as literal as they look.
+/// **This is the real control and the source check is the corroborator**, which
+/// is worth saying because the source one reads as the stronger of the two and
+/// is the weaker. It asserts the ABSENCE of a substring, so it is satisfied by
+/// the file moving, being renamed, or the module being split — hazards its
+/// premise assertion narrows but cannot remove. This one catches buffering by
+/// its EFFECT, including through a type that is not called `BufWriter` and
+/// including a write path that moved somewhere the source check never looks.
+///
+/// Two instruments for one property, kept in that order of authority.
 #[test]
 fn a_written_record_is_on_disk_before_append_returns() {
     let dir = tempfile::tempdir().expect("tempdir");

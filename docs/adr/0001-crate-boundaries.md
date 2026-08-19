@@ -161,6 +161,20 @@ pub struct ApplyReport { pub applied: Vec<AppliedOp>, pub skipped: Vec<SkippedOp
 
 **Measured, not read.** A reader spinning on the target through 400 replacements sees `Empty` on the old path and only whole contents on the new one, and **the negative half is what licenses the positive one** — a reader too slow to catch anything reports a clean sweep too. Both halves run in the ordinary test job on all three platforms.
 
+**AND *"a reader sees the old file or the new one"* IS FALSE ON WINDOWS.** *Measured 2026-08-19, and it corrects the claim this repair shipped with.* Under load, a reader spinning on the target during the rename gets a real `ErrorKind::NotFound` — the OS says the path does not exist. So the replacement is **not invisible to a concurrent reader**; what it is instead:
+
+| what a concurrent reader can observe | old path (`std::fs::write`) | temp + rename |
+| --- | --- | --- |
+| the whole old contents | yes | yes |
+| the whole new contents | yes | yes |
+| **the file empty or half written** | **yes, every write** | **no** |
+| the file absent (`NotFound`) | no | **yes, briefly** |
+| the read refused (`PermissionDenied`) | no | yes |
+
+**The destructive case is the one that moved**, and that is the repair: a zero-byte `.vibe/project.toml` is a parse error and a truncated manifest is worse, while an absent file is a defined state every caller here already handles — `read_document` returns `None`, the cache treats a missing file as absent-not-error. **It is not nothing**, and it is recorded rather than asserted away: a reader that lands in that window sees "no settings" for one read.
+
+**It was found because an instrument conflated two facts.** The first classifier mapped *every* read error to `Missing`, so a reader that was **denied** and a reader that found **no file** shared one observable — the failure this repository catalogues, inside the control asserting the absence of it. Split, it fired both ways: `PermissionDenied` on some runs and a genuine `NotFound` on others. Only the second is a window, and only the split could tell.
+
 **What the repair does not promise.** Durability. There is no `fsync`, so a crash can lose the *new* contents; whether it can also lose the old ones is a property of the filesystem rather than of this code and is not measurable here, so it is not asserted.
 
 **And the second write path had the same shape with a delete in it.** `Cache::save` had its own temp-and-rename plus a fallback that **removed the destination and retried**, under the comment *"Windows will not rename onto an existing file in every case"*. The comment was read rather than measured and the fallback could not help: measured on Windows 10 Pro 19045, a rename-over is refused exactly when another process holds the destination without `FILE_SHARE_DELETE` — and `DeleteFile` is refused in **the same two cases** and permitted in **the one where the rename already worked**. So the fallback was inert where it was aimed and destructive if it had ever fired, since it left the destination missing between the delete and the retry. It now goes through the one primitive.

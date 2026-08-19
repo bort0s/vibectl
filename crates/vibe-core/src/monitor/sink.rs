@@ -2,8 +2,8 @@
 //!
 //! ADR-0011 §8 leaves the display shape open and §6 constrains it without
 //! settling it, so nothing here renders. What is built is exactly what
-//! §9's controls (b) and (f) assert on: the **tail state** of a file, and
-//! whether a file is **prunable**.
+//! §9's control (b) asserts on: the **tail state** of a file. Control (f)'s
+//! subject — prunability — was **retracted**, see below.
 //!
 //! # The tail check is positional, which is what makes it certain
 //!
@@ -17,32 +17,51 @@
 //! *"does the last line parse"*. A truncated record can be valid JSON by
 //! coincidence; it can never have the newline the writer appends last.
 //!
-//! # Prunability is derived from the artifact, never from remembered state
+//! # RETRACTED: prunability is not derivable from event content
 //!
-//! ADR-0011 §7a: the reader is **stateless**, walking the sink and reading
-//! everything, every time. A read-watermark would be a second artifact kept
-//! equal to the files — the shape ADR-0010 §3 rejected — and its staleness is
-//! silent in the dangerous direction, because a watermark ahead of the truth
-//! *hides records*.
+//! *2026-08-19.* This module used to derive a `Prunability` from *"the file
+//! contains `SessionEnd`"*, on the ground that ADR-0011 §4 measured a killed
+//! agent writing neither `Stop` nor `SessionEnd`.
 //!
-//! So *"unconsumed"* is not a state vibe holds. What it can derive is that **a
-//! file containing `SessionEnd` is a completed session**, and ADR-0011 §4
-//! measured that a killed agent writes neither `Stop` nor `SessionEnd` — so a
-//! file lacking it is in-progress-or-dead and must never be offered as
-//! prunable. That rests on a measurement rather than on anyone's memory.
+//! **`SessionEnd` is not terminal.** Measured: a resumed session emits
+//! `SessionStart` *after* `SessionEnd` under one `session_id`, and a session two
+//! hours old was resumed from a different working directory. The proposed
+//! repair — a third state, *ended at least once and reopenable* — was checked
+//! before being built and does not survive the check either: **`reopenable` is
+//! always true**, so a variant whose predicate never varies distinguishes
+//! nothing.
 //!
-//! **And vibe never deletes.** ADR-0001 §3 enforces constraint 2 by the absence
-//! of `FileOp::Delete` — *a destructive command is not merely discouraged, it
-//! is unrepresentable* — and an absent enum variant has no scope, so it covers
-//! a sink vibe created just as it covers a user's files. This module computes
-//! what is prunable and removes nothing.
+//! So whether a file will receive more records is **not a function of the events
+//! in it**, and constraint 5 says the field stays empty and flagged rather than
+//! carrying a plausible value. The type is gone rather than weakened.
+//!
+//! # WHAT MUST NOT BE WRITTEN HERE: file-age prunability
+//!
+//! The next reader will propose *"a file untouched for N days is prunable"*, and
+//! the reason it is refused needs to be here to meet them.
+//!
+//! It is the same claim with a worse basis. Age measures **when vibe last
+//! received an event**, which is exactly the observable §7 spends its length
+//! establishing means nothing on its own: a quiet agent, a removed hook and a
+//! finished session all produce it. A file untouched for a month belongs to a
+//! session somebody can still resume, and the tool cannot tell that from one
+//! nobody will. Offering it under a label the user reads as *safe to delete* is
+//! constraint 5's invented plausible value, pointed at their records.
+//!
+//! **What could ground it is an explicit user action** — they say this session
+//! is done — because that is a fact vibe was told rather than one it inferred.
+//! Nothing here is built for it, and §8 has not asked.
+//!
+//! **And vibe never deletes.** ADR-0001 §3 enforces constraint 2's
+//! deletion-as-an-operation by the absence of `FileOp::Delete`, and an absent
+//! enum variant has no scope, so it covers a sink vibe created just as it covers
+//! a user's files. That is why the cost of the wrong label was bounded — but the
+//! reason for the retraction is constraint 5, not the deletion risk, and that
+//! reason survives §8 shipping a display where *"nothing renders it"* would not.
 
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-
-/// The event name that marks a completed session (ADR-0011 §4).
-pub const SESSION_END_EVENT: &str = "SessionEnd";
 
 /// Whether the last record in a file is whole.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -104,57 +123,6 @@ pub enum SinkRead {
         path: PathBuf,
         kind: &'static str,
     },
-}
-
-/// Whether a file may be offered to the user as prunable.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "prunability", rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum Prunability {
-    /// The session completed: a `SessionEnd` record is present and the file
-    /// ends on a record boundary.
-    Prunable,
-    /// Not offered. The reason is inside the variant, because *"still running"*
-    /// and *"we do not understand the end of this file"* are different facts.
-    NotPrunable { reason: NotPrunableReason },
-}
-
-/// Why a file is not offered as prunable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum NotPrunableReason {
-    /// No `SessionEnd`. In progress, or a killed agent — ADR-0011 §4 measured
-    /// that those are indistinguishable here, and neither is prunable.
-    NoSessionEnd,
-    /// The tail is torn, so what the file contains past the last whole record
-    /// is unknown.
-    PartialTail,
-}
-
-impl SinkFile {
-    /// Derive prunability from the artifact.
-    #[must_use]
-    pub fn prunability(&self) -> Prunability {
-        if self.tail != TailState::Complete {
-            return Prunability::NotPrunable {
-                reason: NotPrunableReason::PartialTail,
-            };
-        }
-        let ended = self.records.iter().any(|r| {
-            matches!(
-                r,
-                ReadRecord::Parsed { event: Some(e), .. } if e == SESSION_END_EVENT
-            )
-        });
-        if ended {
-            Prunability::Prunable
-        } else {
-            Prunability::NotPrunable {
-                reason: NotPrunableReason::NoSessionEnd,
-            }
-        }
-    }
 }
 
 /// Read one file from the sink.

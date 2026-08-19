@@ -12,7 +12,7 @@
 
 use vibe_core::monitor::{
     HOOK_TIMEOUT_SECS, HookSpec, INSTALLED_EVENTS, InstallOutcome, MATCH_ALL, SettingsDocument,
-    WriterIdentity, install,
+    WriterIdentity, install, read_document,
 };
 
 fn spec(identity: &str) -> HookSpec {
@@ -476,4 +476,136 @@ fn an_absent_settings_file_installs_from_empty() {
     let value: serde_json::Value = serde_json::from_str(&out).expect("valid json");
     assert!(value.pointer("/hooks/SessionStart").is_some());
     assert!(out.ends_with('\n'));
+}
+
+// ---------------------------------------------------------------------------
+// The file on disk, and the write that never happens on a refusal
+// ---------------------------------------------------------------------------
+
+/// **A settings file that is not valid JSON is refused, and the bytes on disk
+/// are untouched.**
+///
+/// The three report-never-repair cases already controlled are all *semantic* —
+/// a shape this module does not recognise. The **syntactic** one was missing,
+/// and it is the likelier one: users edit this file by hand, and ADR-0011 §7
+/// measured Claude Code refusing a `//` comment, a `/* */` comment and a
+/// trailing comma. Each of those is a file that exists, parses nowhere, and
+/// must not be opened in truncate mode to find that out.
+///
+/// This asserts against the **bytes on disk**, through the whole read-parse
+/// route, rather than against a `Result` — because *"parse returned an error"*
+/// and *"nothing was written"* are different claims and only the second is the
+/// one that matters to somebody's config.
+///
+/// **Paired**: the same route over a valid file writes, so *"the file is
+/// unchanged"* is not satisfied by a build that never writes anything.
+#[test]
+fn an_unparseable_settings_file_is_refused_with_its_bytes_untouched() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    for (name, text) in [
+        (
+            "line-comment",
+            "{\n  // a user's note\n  \"model\": \"opus\"\n}\n",
+        ),
+        (
+            "block-comment",
+            "{\n  /* a note */\n  \"model\": \"opus\"\n}\n",
+        ),
+        ("trailing-comma", "{\n  \"model\": \"opus\",\n}\n"),
+        ("truncated", "{\n  \"model\": \"op"),
+    ] {
+        let path = dir.path().join(format!("{name}.json"));
+        std::fs::write(&path, text).expect("plant");
+        let before = std::fs::read(&path).expect("read");
+
+        let on_disk = read_document(&path).expect("readable").expect("present");
+        let refusal = SettingsDocument::parse(&on_disk).expect_err("must refuse");
+        assert_eq!(refusal.key(), "not_json", "for {name}");
+
+        assert_eq!(
+            std::fs::read(&path).expect("read"),
+            before,
+            "{name}: the file changed while being refused"
+        );
+    }
+
+    // Paired: a valid file does go through, or nothing above is a measurement
+    // of restraint.
+    let ok = dir.path().join("ok.json");
+    std::fs::write(&ok, "{\n  \"model\": \"opus\"\n}\n").expect("plant");
+    let text = read_document(&ok).expect("readable").expect("present");
+    let mut doc = SettingsDocument::parse(&text).expect("valid");
+    install(&mut doc, &spec("user")).expect("installs");
+    vibe_core::write_atomically(&ok, &doc.render()).expect("write");
+    assert!(
+        std::fs::read_to_string(&ok)
+            .expect("read")
+            .contains("--identity"),
+        "the valid file must actually have been written"
+    );
+}
+
+/// **An absent settings file is not an unreadable one.**
+#[test]
+fn an_absent_file_and_an_unreadable_one_are_different_facts() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    assert_eq!(
+        read_document(&dir.path().join("nope.json")).expect("absent is Ok"),
+        None,
+        "a missing settings.json is a first install, not an error"
+    );
+
+    // A directory where a file should be: present, and not readable as one.
+    let as_dir = dir.path().join("settings.json");
+    std::fs::create_dir(&as_dir).expect("mkdir");
+    assert!(
+        read_document(&as_dir).is_err(),
+        "something that exists and cannot be read must not report as absent — \
+         that would install over it"
+    );
+}
+
+/// **The generated group is byte-identical to the group that was validated.**
+///
+/// ADR-0011 §2 round 3d ran a hook group end to end — accepted by the loader,
+/// firing on all five lifecycle events, 1:1 against a bare control. That group
+/// was **hand-written**. The editor generates one, and *"the hand-written one
+/// works"* says nothing about the generated one: they are different artifacts.
+///
+/// So the validated shape is pinned here as a literal, and the generator is
+/// asserted equal to it. The end-to-end run against the **editor's own output**
+/// is the stronger check and it was done — but it needs a real Claude Code
+/// binary and a live session, so it cannot run in CI, and this can.
+#[test]
+fn the_generated_group_matches_the_group_that_was_validated() {
+    let validated: serde_json::Value = serde_json::from_str(
+        r#"{
+          "matcher": "*",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "C:/Users/x/.local/bin/vibe.exe",
+              "args": ["monitor", "hook",
+                       "--identity", "user",
+                       "--sink", "C:/Users/x/AppData/Local/vibe/data/monitor",
+                       "--contract", "1"],
+              "once": false,
+              "async": false,
+              "asyncRewake": false,
+              "timeout": 5
+            }
+          ]
+        }"#,
+    )
+    .expect("the validated group is json");
+
+    assert_eq!(
+        spec("user").group(),
+        validated,
+        "the editor now emits a different group from the one that was run \
+         against a real agent. Either re-run it end to end or bring this \
+         literal back to what was validated — a generator that drifted from \
+         its validation is a control asserting the wrong artifact."
+    );
 }

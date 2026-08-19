@@ -34,7 +34,9 @@
 //!   rejected — and its staleness is silent in the dangerous direction, because
 //!   a watermark ahead of the truth *hides records*.
 //! - **No deletion.** ADR-0001 §3 enforces constraint 2 by the absence of
-//!   `FileOp::Delete`. Prunability is computed and displayed; the user deletes.
+//!   `FileOp::Delete`. Nothing here decides what may be removed either:
+//!   prunability was retracted (see [`super::sink`]) because no event bounds
+//!   whether a session will receive more records.
 //! - **No display.** ADR-0011 §6 constrains it and §8 leaves it open.
 //!
 //! # The stamp's standing here, restated because it is weaker than it looks

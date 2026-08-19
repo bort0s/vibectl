@@ -89,6 +89,24 @@ costs the rest of the sink — is Rust and runs on all three in CI. The half tha
 needs a live agent session cannot, and §9 says so rather than leaving the
 register reading as if these were properties of the tool.
 
+**Round 3e (2026-08-19) relabels three claims, moves two findings into CI, and
+finds a defect in shipped code.** The 1 ms kill walk was **false precision** —
+the delay is counted from spawn, and this round's own cold-start figures put the
+spawn-to-work spread at ~26 ms against a 1 ms step, so the sweep re-rolled its
+origin every run rather than walking a boundary. Relabelled, not redone. The two
+structural findings — `write_all` never looping, and the observer resolving a
+live partial state — are measurements of **this** code, so §9's single-platform
+limit never applied to them and they are now controls on all three platforms.
+`Stop` fires **per turn**, measured rather than read, which is what the
+`timeout` cost argument rests on.
+
+**And the same two-turn fixture found `SessionEnd` is not terminal**: a resumed
+session emits `SessionStart` **after** `SessionEnd` under one `session_id`. That
+is §4's *"the last event is never terminal"* arriving at retention, where
+`Prunability` derives *prunable* from exactly that. Nothing renders it yet, so
+it is recorded as a defect with a decision attached rather than repaired in
+passing.
+
 **Round 3d (2026-08-19) refines round 3c rather than extending it, and the
 refinement changed three answers.** Reading the write path first turned out to
 decide more than the sweep did: there is **no `BufWriter`**, and `write_all`
@@ -540,6 +558,77 @@ exec form. Unlike `if: "*"`, this failure is loud.
 `timeout: 5` in the `args` exec form: **accepted by the loader with no
 complaint, and fired on all five events, 1:1 against a bare control in the same
 file.** `asyncRewake: false` is accepted alongside `async: false`.
+
+**Round 3e (2026-08-19): three relabels, one defect found in shipped code, and
+the structural findings moved into CI.** *Added 2026-08-19.*
+
+**The 1 ms walk was false precision, and the measurement proving it is in the
+same round.** The kill delay is counted from **spawn**, not from the start of
+the write, and this round's cold-start figures put the spread between spawn and
+work at **11.7–37.5 ms** — roughly 26 ms of jitter against a 1 ms step. So the
+sweep was not walking a boundary at fine resolution; it was **re-rolling the
+origin every run under noise 26 times the step size**. That is why the boundary
+appeared to tremble — whole at 232, nothing through 237, whole at 238. The
+origin was moving, not the boundary. Same class as the synthetic overlap control
+decided by interpreter startup.
+
+**Relabelled rather than redone**, because randomized coverage is still
+coverage and the structural argument carries the weight now: **35 kills at
+64 MB, origin randomized by cold-start jitter of about 26 ms, effective
+sampling random rather than a 1 ms walk, zero partial observed.**
+
+**The structural findings are now controls, on three platforms.** Both are
+measurements of **this** code rather than of a live agent session, so §9's
+single-platform limit never applied to them and they mechanize:
+
+- `one_write_call_takes_a_whole_record_on_this_platform` — one `write` must take
+  the whole buffer at every size to 4 MiB, or `write_all` loops and the
+  user-space window opens.
+- `an_observer_can_see_a_partial_write_on_a_live_file` — the observer control,
+  cross-process, with a **file handshake rather than a sleep** so its firing does
+  not depend on winning a race. It re-invokes the test binary rather than adding
+  a helper to the shipped executable, because a flag that exists only for a test
+  is a thing users can find.
+
+If some platform's `write` returns short, that is the finding and it arrives as
+a red rather than as a surprise in a record.
+
+**`Stop` fires per turn — measured, because the `timeout` cost argument rests on
+it.** Two prompts in one session, the second by `--resume`: **`Stop` fired
+twice**, and so did `UserPromptSubmit`. The claim was previously read off a
+schema, which is the standing this round retired twice already.
+
+**And the same fixture found a defect in shipped code.** `SessionStart` and
+`SessionEnd` **also** fired twice, under **one** `session_id`, in this order:
+
+```
++0 ms      SessionStart
++973 ms    UserPromptSubmit
++2617 ms   Stop
++2738 ms   SessionEnd
++7915 ms   SessionStart      <- same session_id
++8083 ms   UserPromptSubmit
++10098 ms  Stop
++10208 ms  SessionEnd
+```
+
+**So `SessionEnd` is not terminal for a `session_id`, and events follow it.**
+That is §4's *"the last event is never terminal"* arriving one level down, at
+retention — and `Prunability` derives `Prunable` from *"this file contains
+`SessionEnd`"*. **A resumed session's file would be offered as prunable while
+the session is still live.** Nothing renders it today (§8 leaves the display
+open), so the cost is bounded, and **what the label claims is a decision rather
+than a repair to take here.** The shape of the repair is the one this document
+uses everywhere: a third state, *ended at least once, and a resume can reopen
+it*, never borrowing the appearance of *finished*.
+
+**Cold start is bimodal, which the `timeout` rule has to know.** The first
+invocation after a build measured **1.27 s** against a steady state of about
+**22 ms** — the operating system loading a 5.6 MB binary written seconds
+earlier. A rule that multiplies *the maximum* therefore multiplies whichever
+mode the run sampled. The controls take **one untimed warm-up** and time the
+steady state, printing the discarded number rather than hiding it; whether the
+rule should name the cold mode instead is recorded in §7b as open.
 
 **And a fact that was inferred from the schema and is now measured: N hooks
 declared in ONE settings file for one event run CONCURRENTLY.** Three hooks with
@@ -1901,6 +1990,40 @@ budget: almost all of the measured time is process startup, and the multiple is
 there to survive a cold, loaded, virus-scanned machine that no benchmark here
 resembles.
 
+**Three things about that number, all of which the first draft left implicit.**
+*Added 2026-08-19.*
+
+- **Which binary.** The measurement is the **test profile**, which is debug; the
+  installed hook invokes the **release** binary. Debug bounds release from above,
+  so the derived value is conservative in the safe direction — but it is *a*
+  binary rather than *the* one, and which binary was invoked is the question this
+  document has had to ask at every round.
+- **It is PROVISIONAL, not derived.** The rule names the largest maximum across
+  three platforms. One has reported. `timeout: 5` currently rests on
+  `win32-x64` alone and stays provisional until CI reports the other two.
+- **The multiplier branch has never bound.** 37.5 ms × 100 is 3.75 s, under the
+  floor, so the floor has decided every time. A two-branch rule with one branch
+  never exercised carries an untested claim — that the multiplier does anything —
+  and it starts binding the moment a platform reports over 50 ms.
+
+**And the derivation is a control rather than a transcription.**
+`the_installed_timeout_is_what_the_rule_derives` recomputes the requirement from
+the measurement on whichever platform is running and asserts the installed
+constant clears it. Each platform checks its own half; the three together check
+the rule. Without it the derivation ran once and the number aged silently, which
+is the failure mode this document keeps finding in prose.
+
+**One thing the measurement itself turned up: cold start is bimodal.** The first
+invocation after a build measured **1.27 s** against a steady state of about
+22 ms — the operating system loading a 5.6 MB binary written seconds earlier. A
+rule multiplying *the maximum* therefore multiplies whichever mode the run
+sampled, and a single cold sample would derive 127 s. The controls take **one
+untimed warm-up** and time the steady state, printing the discarded number
+rather than hiding it. **Whether the rule should name the cold mode instead is
+open**: a hook is invoked many times per session and only the first pays it, but
+the first is also the one that fires at `SessionStart`, which is §7's wiring
+proof.
+
 **The cost runs in both directions and both are stated.** The hook is
 **blocking** — measured, since `async` omitted or false makes the session wait
 (§2, round 3b) — so `timeout` is the ceiling on how long **one wedged hook can
@@ -2164,30 +2287,57 @@ that leave it say where they went.*
   than left to read as coverage, since four variants with two controls look
   uniform from outside.
 
-- **AMENDED: `Flush` is unreachable, not merely uninducible, and the gap above
-  says the wrong thing about it.** *Added 2026-08-19.* The bullet records
-  `Append` and `Flush` together as *"cannot be induced from this machine
-  deterministically"*. Measured (§2, round 3d): there is **no `BufWriter`** in
-  the write path, and `File::flush` costs **~0 ns** per call against
-  `sync_all`'s ~90 µs — a call known to syscall, used as the pair so *"fast"* is
-  measured rather than assumed. With no user-space buffer there is nothing to
-  flush, so `WriteStage::Flush` is a branch that **cannot be taken**, not one
-  that is hard to reach.
+- **AMENDED: the gap is one arm, because `Flush` was deleted rather than
+  covered.** *2026-08-19.* `File::flush` costs ~0 ns against `sync_all`'s ~90 µs
+  — paired against a call known to syscall — and there is no buffered writer in
+  the path, so the branch could not be taken. An unreachable variant is a
+  representable invalid state, and the rule here is to make those
+  unrepresentable rather than filter them. The variant, its arm and the `flush`
+  call are gone; the residue was swept at the copy sites as well as the decision
+  site, including `WriteOutcome::Written`'s *"on disk and flushed"*.
 
-  That is a different kind of gap and it has a different repair. **Deleting the
-  variant** makes the unreachable state unrepresentable, which is this
-  document's move everywhere else — the missing `FileOp::Delete`, `HookExit`
-  having no `2`, `agent_id`'s absence encoded structurally. **Keeping it** as a
-  declared dead branch is defensible if a future write path grows a buffer. It
-  is a decision, and it is recorded here rather than taken, because a variant
-  that can appear in a record and never will is a value some reader will one day
-  try to explain.
+  **The enum survives and the gap narrows rather than closing**: three variants
+  remain, two controlled, and `Append` is the one that needs a full volume.
 
-  `Append`'s half of the gap is unchanged in status and better understood:
-  §2's round 3d measured `write_all` issuing **one** `write` call at every size
-  up to 64 MiB, so there is no user-space window between partial writes; what
-  remains is a full volume, which is still not constructible in a temporary
-  directory.
+  **Both properties rest on the writer being a bare `File`, and one commit would
+  take both.** A `BufWriter` makes `flush` live *and* turns `write_all` into a
+  loop. Guarded by two controls rather than by a paragraph:
+  `the_write_path_has_no_buffered_writer` reads the module's own source — the
+  technique `control_inventory.rs` already uses, for the same reason — and
+  `a_written_record_is_on_disk_before_append_returns` catches buffering by its
+  effect, including through a type not called `BufWriter`. Two instruments,
+  because the first is a string match and string matches are as literal as they
+  look.
+
+- **DEFECT, recorded rather than repaired: `SessionEnd` no longer licenses
+  `Prunable`.** *Added 2026-08-19.* §2's round 3e measured a resumed session
+  emitting `SessionStart` **after** `SessionEnd` under one `session_id`, so a
+  file containing `SessionEnd` may belong to a session that is still live.
+  Control (f) below derives prunability from exactly that, which means it
+  currently pins a claim the payload no longer supports.
+
+  **Nothing renders it** — §8 leaves the display open — so the cost is bounded
+  and the repair is not urgent. It is left as a decision because **what a label
+  claims is a product question**, and the honest shape is this document's usual
+  one: a third state, *ended at least once and reopenable*, never borrowing the
+  appearance of *finished*. Recorded here so the next person to touch (f) meets
+  it, rather than in a note that gets deleted.
+
+- **The inventory gate's numerator has come loose from the number of controls,
+  and both are printed now.** *Added 2026-08-19.* ADR-0008 §9's trigger counts
+  integration-test targets gated on a `VIBE_REQUIRE_*` variable, and that marker
+  turns a **missing external tool** into a failure instead of a skip. Two rounds
+  running, real controls landed and the gated count did not move — **because
+  none of them needs `git` or `gh`, so none has a skip path to close.** Gating
+  them would be wearing the marker rather than using it.
+
+  So *"is a reviewer still holding the whole argument?"* is no longer answered by
+  the number the gate watches. **Changing the trigger's definition is not this
+  file's to do**, but the divergence being invisible is: the total is now
+  derived and printed beside the gated count in the same invocation, so a round
+  that adds five controls and moves the gate by zero says so in CI rather than in
+  a report. At the time of writing: **252 `#[test]` items across 24 targets, 5 of
+  them `VIBE_REQUIRE_`-gated, trigger at 7.**
 
 - **The cold-start measurement is a control, and it is the one number in this
   document that comes from all three platforms.**

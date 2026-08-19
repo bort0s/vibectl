@@ -42,10 +42,13 @@
 //! Within one file the records come from **many invocations of one hook**, each
 //! a separate process reading the same wall clock. §7a's *"stamps must be
 //! non-decreasing inside one file"* therefore rests on those appends being
-//! sequential — which is the intra-agent concurrency question that is
-//! **unmeasured**. So a decreasing stamp inside one file is reported as an
-//! observation ([`ClockStep`]) and not used to reorder anything, and the
-//! module claims no cross-file stamp comparability at all.
+//! sequential — which is the intra-agent concurrency question that is a
+//! **declared limit**: measured on 2.1.234 against a fixture that does build
+//! six parallel tool calls for one agent, where no two invocations sharing a key
+//! overlapped, and not proven impossible. So a decreasing stamp inside one file
+//! is reported as an observation ([`ClockStep`]) and not used to reorder
+//! anything — which is the reading that survives the limit turning out to be
+//! wrong — and the module claims no cross-file stamp comparability at all.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

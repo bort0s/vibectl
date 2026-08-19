@@ -42,13 +42,15 @@
 //!   `#[cfg(test)]` by an ancestor module. A fixture that plants a file is not
 //!   the tool mutating a user's filesystem, and demanding it go through `apply`
 //!   would mean building a plan to write a temp dir.
-//! - `crates/*/examples/` — **the same reason, not a separate hole.** *Corrected
-//!   2026-08-19: the first version called this "a real hole" and left it there,
-//!   which is the awaiting-a-fix shape rather than a declared limit.* Examples
-//!   are not installed and are not in the binary a user runs, and the one that
-//!   mutates — `scan_bench.rs` — builds a synthetic corpus for a benchmark, which
-//!   is a fixture. **Its size is asserted below**, so the region cannot become
-//!   somewhere real code hides.
+//! - `crates/*/examples/` — excluded for a **weaker reason than the tests are,
+//!   and that asymmetry is the point.** *Amended 2026-08-19.* A `#[cfg(test)]`
+//!   item is excluded **structurally**: it is not compiled into the library a
+//!   user links, so it cannot be the tool mutating anything. An example is
+//!   excluded on a **judgement about its content** — `scan_bench.rs` builds a
+//!   synthetic corpus for a benchmark, which is a fixture *today*. Nothing
+//!   structural stops an example from doing real work tomorrow. So the
+//!   **file count** is asserted below, and a new `examples/anything.rs` turns
+//!   this red and forces the judgement to be re-made rather than inherited.
 //! - `crates/*/benches/` — **there are none, and that is asserted**, so the day
 //!   somebody adds one this turns red and asks to be extended rather than
 //!   silently not covering it.
@@ -90,6 +92,21 @@ const HARMLESS_MUTATIONS: [&str; 1] = ["fs::create_dir_all"];
 /// transport is one writer appending to its own file. Routing it through a
 /// `WritePlan` would mean building a plan per hook invocation in a process whose
 /// entire job is to append one line and exit.
+///
+/// # THE HOLE THIS OPENS, AND WHAT CLOSES IT
+///
+/// *Added 2026-08-19.* Allowlisting by **module** disables every pattern in it —
+/// including `.truncate(true)`, in the one production site where truncation
+/// would destroy records rather than a user's file. The control that would have
+/// noticed is switched off exactly where it matters most.
+///
+/// Two repairs were available: make the allowlist per-pattern, or give the
+/// module its own control. **The second, because it asserts a property of the
+/// write path rather than a property of the matcher**, and it survives the
+/// allowlist being restructured. See
+/// [`the_hooks_append_never_truncates`] and
+/// [`a_second_append_does_not_replace_the_first`] — source and effect, in that
+/// order of authority.
 const BY_DESIGN: [&str; 1] = ["writer.rs"];
 
 fn workspace_crates() -> PathBuf {
@@ -378,9 +395,10 @@ fn no_module_outside_the_primitive_writes_or_removes_file_contents() {
     assert_eq!(
         examples.len(),
         2,
-        "the excluded `examples/` region changed size: {examples:?}. It is \
-         excluded because an example is a fixture and is not installed, and that \
-         reason has to be re-checked when it grows"
+        "the number of files under `examples/` changed: {examples:?}. They are \
+         excluded on a JUDGEMENT ABOUT CONTENT — today's is a benchmark fixture \
+         — not structurally the way `#[cfg(test)]` is. A new one has to have \
+         that judgement made about it rather than inheriting it"
     );
 
     let mut offenders: Vec<String> = Vec::new();
@@ -409,5 +427,109 @@ fn no_module_outside_the_primitive_writes_or_removes_file_contents() {
          route it through `write_atomically`; if it cannot be, that is \
          ADR-0001 §3a's revisit trigger and it is firing.",
         offenders.join("\n  ")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The hole the by-design allowlist opens, closed at the module it points at
+// ---------------------------------------------------------------------------
+
+/// **The hook's append must never truncate**, and this is the source half.
+///
+/// `writer.rs` is in [`BY_DESIGN`], which disables every pattern in it — so
+/// `.truncate(true)` there would not turn the scan above red. That is the one
+/// production site where truncation destroys **records**, and the only one where
+/// the control that would notice is switched off. The exclusion is what creates
+/// the hole, so the repair lives beside the exclusion.
+///
+/// `the_write_path_has_no_buffered_writer` reads that file for `BufWriter`,
+/// which is a different property: nothing there asserted the **open mode**.
+///
+/// **Premise-asserting**, because this is a source read and its silence is
+/// worthless if the file moved: the `OpenOptions` call it reasons about must be
+/// found, exactly once, on a line that is not a comment.
+#[test]
+fn the_hooks_append_never_truncates() {
+    let writer_rs = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("monitor")
+        .join("writer.rs");
+    let src = std::fs::read_to_string(&writer_rs)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", writer_rs.display()));
+    let lines = shipped_lines(&src);
+
+    let opens: Vec<&(usize, &str)> = lines
+        .iter()
+        .filter(|(_, l)| l.contains("OpenOptions::new()"))
+        .collect();
+    assert_eq!(
+        opens.len(),
+        1,
+        "expected exactly one `OpenOptions::new()` in {}, found {}. The open \
+         this control reasons about moved, so finding no truncation in the file \
+         establishes nothing about the append.",
+        writer_rs.display(),
+        opens.len()
+    );
+
+    let open_line = opens[0].1;
+    assert!(
+        open_line.contains(".append(true)"),
+        "the sink is not opened in append mode: {open_line:?}. Every record \
+         already in the file is at risk, and ADR-0011 §7a's whole transport is \
+         one writer APPENDING to its own file."
+    );
+
+    for (line, text) in &lines {
+        assert!(
+            !text.contains(".truncate(true)"),
+            "{}:{line} truncates. This module is allowlisted in the scan above, \
+             so nothing else would have caught it — and truncation here destroys \
+             a session's records rather than a user's file.",
+            writer_rs.display()
+        );
+    }
+}
+
+/// **The effect half, which is the one that survives a rewrite.**
+///
+/// The source check catches `.truncate(true)` by name. This catches truncation
+/// however it arrives — a different open, a different API, a `set_len` — by
+/// asserting the only thing that actually matters: **a second append does not
+/// cost the first record.**
+#[test]
+fn a_second_append_does_not_replace_the_first() {
+    use std::sync::Arc;
+    use vibe_core::monitor::{SystemStamps, WriteOutcome, Writer, WriterIdentity};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sink = dir.path().join("sink");
+    let writer = Writer::new(
+        &sink,
+        WriterIdentity::parse("ident").expect("valid"),
+        Arc::new(SystemStamps),
+    );
+
+    let payload =
+        |event: &str| format!(r#"{{"session_id":"s","hook_event_name":"{event}","cwd":"/tmp/p"}}"#);
+    let first = writer.append(&payload("SessionStart"));
+    let second = writer.append(&payload("SessionEnd"));
+
+    let path = match (&first, &second) {
+        (WriteOutcome::Written { path, .. }, WriteOutcome::Written { .. }) => path.clone(),
+        other => panic!("both appends must land: {other:?}"),
+    };
+
+    let text = std::fs::read_to_string(&path).expect("read");
+    assert!(
+        text.contains("SessionStart"),
+        "the first record is gone after a second append — the sink is being \
+         truncated, and every session's history goes with it. File held:\n{text}"
+    );
+    assert!(text.contains("SessionEnd"));
+    assert_eq!(
+        text.lines().count(),
+        2,
+        "expected two records, got:\n{text}"
     );
 }

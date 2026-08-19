@@ -72,7 +72,7 @@ pub use monitor::{
     WriteOutcome, Writer, WriterIdentity,
 };
 pub use ops::SyncNotes;
-pub use plan::{ApplyOutcome, ApplyReport, FileOp, PlanIntent, WritePlan};
+pub use plan::{ApplyOutcome, ApplyReport, FileOp, PlanIntent, WritePlan, write_atomically};
 pub use prompts::{
     Exposure, PluginNamespace, Prompt, PromptListing, PromptRoot, RootOutcome, RootReport,
     Shadowed, list_prompts,

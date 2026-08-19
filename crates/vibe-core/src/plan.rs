@@ -265,6 +265,88 @@ fn canonical_existing_ancestor(path: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Replace a file's contents without ever leaving it partial.
+///
+/// # Why this exists, and why `std::fs::write` was not enough
+///
+/// *Added 2026-08-19.* `std::fs::write` is `File::create` followed by
+/// `write_all`, and `File::create` **truncates before any byte is written**.
+/// There is therefore a window where the target is **zero bytes**, and unlike
+/// the kernel window ADR-0011 §2 sampled thirty-five times without finding, this
+/// one exists **by construction** — it is not a race that might not happen, it
+/// is a state the sequence passes through every single time.
+///
+/// Three rounds of ADR-0011 went into whether a killed hook could tear a record
+/// in vibe's own sink, where the writer appends, the reader tolerates damage,
+/// and every whole record before the damage survives. **None of that transfers
+/// here.** This path rewrites files whose readers have no tolerance at all —
+/// `.claude/settings.json` is read by a strict JSON loader, and it is a file
+/// vibe does not own. Hard constraint 2 is not *"there is no
+/// `FileOp::Delete`"*; the absent variant is how the constraint is enforced,
+/// and the constraint is **never destructive**. A zero-byte `settings.json` is
+/// destructive by any reading of that sentence.
+///
+/// # The shape
+///
+/// Write the new contents to a temporary file **beside the target**, then
+/// rename it over. A reader either sees the old file or the new one.
+///
+/// **Beside the target, not in the system temp directory**, and that is
+/// load-bearing rather than tidy: a rename across volumes is a copy plus a
+/// delete, which puts the window back and adds a delete to a tool that has
+/// none. The temp path is derived from the target, so it inherits the
+/// containment already checked for it (ADR-0005 §10 rule 5) — it cannot name a
+/// directory the target could not.
+///
+/// **Measured rather than read off documentation**, because *"rename is
+/// atomic"* is exactly the class of cross-platform claim that died on contact
+/// with measurement in ADR-0002 §7: see `a_replace_is_never_observed_partial`,
+/// which spin-reads a target through many replacements and reports every
+/// distinct state it sees — **paired against `std::fs::write`, which the same
+/// instrument catches mid-truncation.** Without that pairing a clean result
+/// would only say the reader was too slow.
+///
+/// # What it does not promise
+///
+/// Not durability. There is no `fsync` here, so a power failure can still lose
+/// the new contents — what it cannot do is leave the target empty or half
+/// written. Durability is a different property with a different cost, and
+/// claiming it would be the label reaching past the mechanism again.
+///
+/// # Errors
+///
+/// The io error, with the path it happened on. A failure to write the temp file
+/// leaves the target untouched; a failure to rename leaves the target untouched
+/// and the temp file behind, which is reported rather than swallowed.
+pub fn write_atomically(path: &Path, contents: &str) -> Result<(), CoreError> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .map_or_else(|| "vibe".to_owned(), |n| n.to_string_lossy().into_owned());
+
+    // The temp name carries the pid so two vibe processes writing the same
+    // target cannot collide on it. They still race on the rename, and the
+    // loser's contents win or lose whole — which is the property this function
+    // is for, not one it can extend to coordinating two writers.
+    let temp = dir.join(format!(".{name}.vibe-{}.tmp", std::process::id()));
+
+    let io = |p: &Path, source: std::io::Error| CoreError::Io {
+        path: p.to_path_buf(),
+        source,
+    };
+
+    std::fs::write(&temp, contents).map_err(|e| io(&temp, e))?;
+
+    if let Err(e) = std::fs::rename(&temp, path) {
+        // Leave the temp file. Removing it here would need a delete on the
+        // error path of a tool that deliberately has none, and a stray
+        // `.settings.json.vibe-1234.tmp` next to the file is a visible fact
+        // about a failed write rather than a silent one.
+        return Err(io(path, e));
+    }
+    Ok(())
+}
+
 /// Execute a plan.
 ///
 /// Every op is validated and every precondition checked **before any op runs**,
@@ -321,10 +403,7 @@ pub fn apply(plan: &WritePlan, rep: &dyn Reporter) -> Result<ApplyReport, CoreEr
                         source,
                     })?;
                 }
-                std::fs::write(path, contents).map_err(|source| CoreError::Io {
-                    path: path.clone(),
-                    source,
-                })?;
+                write_atomically(path, contents)?;
                 applied.push(display.clone());
             }
             FileOp::RemoveOwnedAgent { path, .. } => {

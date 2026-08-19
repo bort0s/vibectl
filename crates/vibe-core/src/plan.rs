@@ -358,12 +358,10 @@ static TEMP_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 /// costed.
 ///
 /// **Permissions are carried, and only the ones the standard library models.**
-/// When the target exists its permissions are copied to the temp before the
-/// rename, so a `settings.json` at `0600` does not come back `0644` from the
-/// umask. On Windows that is the read-only flag; **ACLs are not carried** — the
-/// renamed file keeps the temp's, which inherits from the directory. Stated
-/// because *"permissions preserved"* would be the label reaching past the
-/// mechanism.
+/// When the target exists, the temp is **created already carrying** its
+/// permissions — not corrected afterwards, which would leave the contents of a
+/// `0600` file on disk at the umask for a moment. See [`write_temp`] for the
+/// per-platform difference and for the **ACL direction, which is widening**.
 ///
 /// # Errors
 ///
@@ -386,19 +384,77 @@ pub fn write_atomically(path: &Path, contents: &str) -> Result<(), CoreError> {
         source,
     };
 
-    std::fs::write(&temp, contents).map_err(|e| io(&temp, e))?;
-
-    // Carry the target's permissions onto the replacement. Only if it exists:
-    // a first write has no permissions to inherit and takes the umask, which is
-    // the same thing `File::create` would have done.
-    if let Ok(meta) = std::fs::metadata(path) {
-        let _ = std::fs::set_permissions(&temp, meta.permissions());
-    }
+    write_temp(&temp, path, contents).map_err(|e| io(&temp, e))?;
 
     if let Err(e) = std::fs::rename(&temp, path) {
+        // Remove the temp WE just created, at a path derived moments ago and
+        // carrying this process's id and serial. A refused rename is not rare
+        // the way a kill is — a Windows holder without `FILE_SHARE_DELETE`
+        // refuses it every time, so ten retried installs would leave ten temp
+        // files inside `.claude/`, a directory another tool reads. That is
+        // accumulation, and the "a visible stray file beats a silent one"
+        // argument was made for the KILL case, where no error path runs at all
+        // and the residue is unavoidable. It still applies there, and it does
+        // not apply here.
+        //
+        // This is a delete in a tool whose second constraint is about not
+        // deleting, so it is the `FileOp::RemoveOwnedAgent` argument at one
+        // remove: the path is not user-supplied, the file did not exist before
+        // this call, and nothing else can have written it. The failure to
+        // remove is ignored because the rename error is the one worth
+        // reporting.
+        let _ = std::fs::remove_file(&temp);
         return Err(io(path, e));
     }
     Ok(())
+}
+
+/// Create the temp file **already carrying the target's permissions**, rather
+/// than correcting them afterwards.
+///
+/// *Split out 2026-08-19.* The first version wrote the contents and then called
+/// `set_permissions`, which leaves a window where the bytes of a `0600`
+/// `settings.json` are on disk at whatever the umask allows. **That is the same
+/// window class this whole primitive exists to close**, one layer in, and it
+/// was reintroduced by the fix for a different problem.
+///
+/// On **Unix** the mode is applied at `open` time, so no window exists. On
+/// **Windows** the only bit `std::fs::Permissions` models is read-only, which
+/// carries no exposure — a file readable a moment early is not a leak when the
+/// flag never controlled who could read it — so it is set after the write, and
+/// that difference is stated rather than hidden behind one code path.
+///
+/// **ACLs are not carried, and the direction is widening.** On Windows the
+/// renamed file keeps the temp's ACL, which inherits from the directory. If the
+/// original had a *narrower* ACL than the directory grants, the replacement is
+/// **more** accessible than what it replaced. That is the less safe direction,
+/// and it is recorded as such rather than as *"ACLs are not carried"*.
+fn write_temp(temp: &Path, target: &Path, contents: &str) -> std::io::Result<()> {
+    let existing = std::fs::metadata(target).ok().map(|m| m.permissions());
+
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        if let Some(perms) = &existing {
+            opts.mode(perms.mode());
+        }
+        let mut file = opts.open(temp)?;
+        file.write_all(contents.as_bytes())?;
+        return Ok(());
+    }
+
+    #[cfg(not(unix))]
+    {
+        std::fs::write(temp, contents)?;
+        if let Some(perms) = existing {
+            std::fs::set_permissions(temp, perms)?;
+        }
+        Ok(())
+    }
 }
 
 /// Execute a plan.

@@ -418,3 +418,58 @@ fn a_refused_replacement_leaves_the_original_bytes() {
         "the failed write must not have damaged what was in its way"
     );
 }
+
+/// **A refused replacement leaves no temp file behind**, because a refusal is
+/// not rare the way a kill is.
+///
+/// A Windows holder without `FILE_SHARE_DELETE` refuses the rename **every
+/// time**, and the temp name is unique by construction — so ten retried
+/// installs would leave ten files inside `.claude/`, a directory another tool
+/// reads. The *"a visible stray file beats a silent one"* argument was made for
+/// the **kill** case, where no error path runs at all and the residue is
+/// unavoidable. It still holds there. It was inherited into the refusal case
+/// without being argued, and it does not hold there.
+///
+/// **Paired**: the successful path must also leave nothing, or this is
+/// satisfied by a build that never creates a temp.
+#[test]
+fn a_refused_replacement_leaves_no_temporary_behind() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("blocked").join("target.json");
+    std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+    std::fs::write(&target, OLD).expect("seed");
+
+    // Make the rename fail while the temp write succeeds: a DIRECTORY at the
+    // target path. The temp lands beside it, the rename cannot replace it.
+    let blocked = dir.path().join("blocked").join("dir-target.json");
+    std::fs::create_dir(&blocked).expect("mkdir");
+
+    for _ in 0..5 {
+        assert!(
+            write_atomically(&blocked, NEW).is_err(),
+            "the fixture's premise failed: renaming onto a directory was              supposed to be refused"
+        );
+    }
+
+    let leftovers: Vec<String> = std::fs::read_dir(blocked.parent().expect("parent"))
+        .expect("read dir")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".tmp"))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "five refused replacements left {} temp file(s) behind: {leftovers:?}.          Each refusal makes another, and they land in a directory another tool          reads.",
+        leftovers.len()
+    );
+
+    // Paired: the successful path leaves nothing either.
+    write_atomically(&target, NEW).expect("write");
+    let after: Vec<String> = std::fs::read_dir(target.parent().expect("parent"))
+        .expect("read dir")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".tmp"))
+        .collect();
+    assert!(after.is_empty(), "{after:?}");
+}

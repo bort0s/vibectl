@@ -38,6 +38,18 @@ happened: a vendor bumped a version and an ADR claim became false with no change
 to this repository. Recorded there rather than here, because the next person
 relying on a measured property of someone else's tool will be reading the rule.
 
+**Round 3 (2026-08-19) is on 2.1.234, and it is again a delta.** The channel
+predicted in ADR-0005 §10 rule 4a fired a second time and 2.1.233 is gone. Two
+builds were installed side by side — 2.1.234 and 2.1.235 — and **the session was
+running the older one**, so this round records the binary's *path* alongside its
+version; a version alone would not have said which of the two produced the
+numbers. Three findings, all deltas: **ten event types fired where round 2
+recorded nine** (§2), **the `command` hook carries ten properties where §7a named
+three** (§2, §7a, §9), and **the intra-agent-concurrency limit's precondition
+turned out to be constructible** — six parallel tool calls from one agent — while
+the hazard it guards did not appear (§7a). Nothing was retracted this round; two
+enumerations were widened and one *"may never be constructible"* was withdrawn.
+
 ## Context
 
 The feature is seeing which Claude Code instances are running, what they are
@@ -132,6 +144,75 @@ that.** Five variants: `command` (with an `args` exec form that spawns directly,
 **no shell in the channel** — used by every fixture in round 2), `prompt`,
 `agent`, `http` (POSTs the hook JSON to a URL), and `mcp_tool`. Each carries
 `timeout`, and `command` additionally carries `async` / `asyncRewake`.
+
+**Round 3 (2.1.234): ten event types, and the version was measured rather than
+assumed.** *Added 2026-08-19.*
+
+**Which binary, established three ways before anything was counted.** Round 2's
+number is recorded against 2.1.233 and that build is no longer on this machine,
+so the first question was not *what fires* but *what is running*. Two versions
+are installed — `2.1.234` and `2.1.235`, the latter placed on disk the morning of
+the measurement — and **the session was running the older one**, so *"current"*
+and *"invoked"* are different answers here and only one of them is a fact about
+the run. Established by three independent instruments that agree:
+walking the parent chain of the measuring shell through `Win32_Process` reaches
+`.vscode/extensions/anthropic.claude-code-2.1.234-win32-x64/resources/native-binary/claude.exe`;
+the inherited `CLAUDE_CODE_EXECPATH` names the same file; and that file's own
+`--version` reports `2.1.234 (Claude Code)`, with `claude doctor` adding commit
+`7215ba60b06d`. **Recorded as a version plus a path**, because a version alone
+would not have distinguished the two builds sitting side by side.
+
+**Ten types fired**, against a fixture whose two settings files each declare a
+`command` hook in the `args` exec form for **all 31** accepted names:
+`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolBatch`,
+`MessageDisplay`, `SubagentStart`, `SubagentStop`, `Stop`, `SessionEnd`.
+
+**The union re-established a third time, and constructed rather than inherited.**
+Every one of the ten fired **exactly twice**, once per settings file,
+distinguishable only by the label the hook itself supplied — 38 invocations for
+19 events in the first run, and the same 2:1 ratio in every later run.
+`claude doctor` also reports a config fault **once per file**, which is the union
+visible at config-read time as well as at fire time.
+
+**Ten is not nine plus one, and the difference is what the fixture did.**
+Round 2's nine and this ten are both enumerations of what one fixture produced.
+This fixture spawned a subagent, so `SubagentStart` and `SubagentStop` fired;
+nothing here says they did not fire on 2.1.233, and nothing says the twenty-one
+names that stayed silent cannot fire. **Every silent name is unconstructed, not
+absent** — `Notification` needs a notification, `PreCompact` needs a compaction,
+`PermissionRequest` and `PermissionDenied` need the interactive path §8 records
+as not measurable here. The positive control for all of it is that ten other
+names from the same two files were written in the same run.
+
+**The name-registration control re-established on this build, paired both ways.**
+A fixture declaring only real names produces no config fault at all; the same
+fixture plus `VibeNonexistentEventProbe` is reported as *"Unknown hook event
+… was ignored"* — by name, in **both** settings files — followed by the valid
+set. So the twenty-one zeros above are about **firing**, not about a typo here.
+
+**And the accepted-name enumeration now has two independent sources that
+agree.** Besides `claude doctor`, the installed extension ships
+`claude-code-settings.schema.json`, whose `hooks` node enumerates the same **31**
+names. They are identical to each other, and **identical between 2.1.234 and
+2.1.235** — so the schema did not move across the version boundary this
+measurement straddles. It remains a statement about which names the build
+*accepts*.
+
+**The `command` variant carries ten properties, not the three §7a names.**
+Measured from the same schema and identical on both builds:
+`type`, `command`, `args`, `if`, `shell`, `timeout`, `statusMessage`, `once`,
+`async`, `asyncRewake` — with `matcher` one level up, on the group. §7a's
+contract bullet names `timeout`, `async` and `asyncRewake`; **`once` and the
+`if`/`matcher` pair belong to the same class and are not named there.** `once`
+removes the hook after a single execution, and `if`/`matcher` suppress the
+invocation entirely. Both decide *whether* a record arrives, which is §7a's own
+test for what the contract must pin, and both make an absence of records mean
+something other than an absence of events.
+
+**No event type carries a timestamp on this build either.** Checked across every
+field of all ten types: nothing naming a point in time. §7a's ordering argument
+rests on that measurement, and it is re-established here on ten types rather than
+inherited from eight.
 
 ### 3. Attribution comes from the payload, never from the environment
 
@@ -456,6 +537,23 @@ It follows that **monitoring is opt-in per project** — hooks fire only where
 installed — and that an uninstrumented project renders as unknown rather than
 idle, per §6.
 
+**The file vibe would write is strict JSON, measured rather than assumed.**
+*Added 2026-08-19 on 2.1.234, because the shape of the write decides what an
+editor has to preserve.* Three variants were planted separately and each is
+rejected as *"Invalid or malformed JSON"*: a `//` line comment, a `/* */` block
+comment, and a trailing comma. Paired against a strict file in the same fixture
+shape, which produces no such report. **So the artifact `toml_edit` exists to
+protect for manifests — a user's comments — cannot be present in this file at
+all**, and what an editor here must preserve is narrower: key order, whitespace,
+and any key vibe does not own.
+
+**What such a file looks like in practice, on this machine.** Three real files
+were found and every one is 2-space indented, LF, no BOM, strict JSON with no
+comments and no trailing commas, between 8 and 14 lines, and **none of them
+declares a `hooks` key**. That is a sample of three on one machine and is
+recorded as such — it bounds nothing about a file someone hand-formatted — but it
+is the population install meets first.
+
 ### 7a. Transport: a file — and `http` chosen, costed, and reversed
 
 *Added 2026-08-17. This was missing from §8's list of open decisions, which read
@@ -606,6 +704,61 @@ requirements because the reversal moved them from *"a price `http` avoids"* to
   because it detects rather than prevents and the torn record's contents are
   still lost.
 
+  **THE PRECONDITION IS CONSTRUCTIBLE, AND CONSTRUCTING IT DID NOT PRODUCE THE
+  HAZARD.** *Measured 2026-08-19 on 2.1.234.* Both halves are recorded because
+  the first retires *"it may never become constructible"* and the second is the
+  only reason the limit still stands.
+
+  **The zero above was a property of the fixture, and the lever is the subagent's
+  own prompt.** The three attempts recorded above put the parallel instruction in
+  the *parent's* prompt and in `--append-system-prompt`, and the maximum stayed
+  at one `tool_use` block. Instructing the **subagent**, inside the prompt the
+  parent passes to it, produced **six `Read` calls in one message from one
+  agent** — visible as a single `PostToolBatch` whose `tool_calls` array holds
+  six entries, all carrying the same `agent_id`. A two-call batch appeared
+  earlier the same day without being asked for. So the sentence to keep is not
+  *"no batch exists"* but *"the fixture never built one"*, which is ADR-0010 §5's
+  rate again.
+
+  **Having built it, the overlap did not appear.** Across 48 hook invocations in
+  that run, **zero pairs sharing `(session_id, agent_id, declared identity)`
+  overlapped in time.** The six invocations for the six parallel calls were
+  dispatched **serially and not narrowly so**: they span 4.9 s, and the smallest
+  gap between the end of one and the start of the next anywhere in the run,
+  across every key, is **101.6 ms**.
+
+  **And the zero is reportable, which is the part that took the second
+  instrument.** A first attempt recorded intervals only around the work the
+  collector actually does — 0.02 to 0.10 ms — and reported no overlap **of any
+  kind**, including pairs known to be concurrent. That zero was withheld under
+  ADR-0002 §7's channel rule rather than published. The repair was a disclosed
+  60 ms dwell, which cannot manufacture an overlap under serial dispatch, plus a
+  second instrument that asks the same question with no clock at all — a marker
+  file created at entry, removed at exit, and the directory listed while the
+  process is alive. In the reported run the two agree exactly: **24 overlapping
+  pairs, and every one of them cross-identity**, 43–58 ms, the two settings
+  files' hooks for the same event running at the same time. A paired synthetic
+  control — two collectors started together on purpose, same key — is detected at
+  30.2 ms by both. So the instruments demonstrably see overlap, they see it in
+  this run, and they see none of it within a key.
+
+  **The bound runs one way and it is the safe way.** The recorded interval starts
+  when node starts, which is after the OS created the process, and ends before
+  exit rather than at it, so it is a **subset** of the true lifetime: a detected
+  overlap is real, and this zero is evidence rather than proof. **The limit
+  therefore moves from *unmeasured* to *measured and held on one fixture*, and
+  the two dependents below stay where they are.** What would move them is an
+  overlap on some fixture, not another zero on this one — and the fixture that
+  builds six parallel calls now exists, which is the difference from yesterday.
+
+  **What the cross-identity overlaps confirm, since they were free:** §2's
+  duplicate delivery is not merely two records, it is **two hook processes alive
+  at the same time**, on every event, for the same session and the same agent.
+  They are separated by nothing except the identity each hook declares — which is
+  precisely the filename component this design puts there, and the reason the key
+  cannot be *"the settings file it came from"* or anything else the payload
+  carries.
+
   **TWO things rest on this limit, not one, and the second was found by reading
   rather than by measuring.** *Added 2026-08-18, while building the reader.*
   Recorded here rather than beside the reader, so anyone re-deciding the limit
@@ -751,6 +904,29 @@ requirements because the reversal moved them from *"a price `http` avoids"* to
   delivery semantics unpinned**, which is the half that decides whether absence
   means anything. `http` would have inherited this identically; the reversal
   does not reduce it.
+
+  **The three names are not the whole set, and the two that were missing are the
+  same class.** *Amended 2026-08-19, from the schema the installed build ships
+  (§2, round 3).* A `command` hook carries ten properties — `type`, `command`,
+  `args`, `if`, `shell`, `timeout`, `statusMessage`, `once`, `async`,
+  `asyncRewake` — and the matcher-group above it carries `matcher`. Of those:
+
+  - **`once`** removes the hook after a single execution. A contract that does
+    not pin it admits a hook that delivers exactly one record and then silently
+    stops being installed, which is §7's non-delivery hazard with a name in the
+    schema.
+  - **`if` and `matcher`** suppress the invocation for calls they do not match,
+    so records are a **subset** by configuration. Absence then means *filtered*,
+    and nothing downstream can tell that from *nothing happened*.
+  - **`shell`** decides whether a shell is in the channel at all. §7a's transport
+    is the `args` exec form precisely because it spawns directly; a `command`
+    without `args` runs through a shell, and that is a different channel wearing
+    the same `type`.
+
+  `statusMessage` is presentation and pins nothing. **So the contract's execution
+  half is `timeout`, `async`, `asyncRewake`, `once`, `if`, `matcher` and `shell`,
+  and the earlier list of three was an enumeration of what had been read rather
+  than of what exists** — the same rate §2 records for the event table.
 - **Writer identity is declared by the hook, so `unattributed` is a state rather
   than an error.** *Measured: the payload does not name the settings source it
   was delivered through* — §2's two deliveries are distinguishable only by
@@ -1071,6 +1247,16 @@ missing transport, which is now §7a. What follows is the state after round 2.*
    unmeasured (§5). This is the first thing to measure when the feature is picked
    up, and it is blocked on measurement rather than on preference.
 
+   **Half-answered on 2.1.234, and the half that moved is the fixture.** *Added
+   2026-08-19.* Multi-tool batches exist: `tool_calls` held **two** entries in
+   one run and **six** in another, both from a subagent issuing parallel `Read`
+   calls, so *"single-tool batches only"* was a property of the fixtures rather
+   than of the event. What is still open is the part the question was actually
+   about — **whether the batch closes anything `PostToolUse` leaves open** — and
+   that is unchanged: every call in both batches also produced its own
+   `PreToolUse`/`PostToolUse` pair, so nothing observed requires the batch to be
+   a closer. Nested semantics remain unmeasured.
+
 ### 9. Negative-control obligations for whatever gets built
 
 - **The third state needs a paired control**, per ADR-0002 §7's rule against
@@ -1262,6 +1448,13 @@ missing transport, which is now §7a. What follows is the state after round 2.*
   passes against a hook whose `async` variant delivers nothing at session end,
   which is silent non-delivery arriving through the mechanism installed to
   prevent it.
+
+  **And the set is seven, not three.** *Amended 2026-08-19, see §7a.* `once`,
+  `if`, `matcher` and `shell` belong to the same class and were not named. A
+  control that covers three of seven and says so is honest; one that covers three
+  and reads as covering the class is the quantifier failure this document keeps
+  finding, so **whatever is built states which properties it pins and which it
+  does not.**
 
 ## Consequences
 

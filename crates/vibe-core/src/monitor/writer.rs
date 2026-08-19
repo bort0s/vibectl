@@ -142,31 +142,59 @@ impl IoFailure {
 /// and *"permission denied appending to a file inside it"* are different
 /// problems with different remedies, and the `ErrorKind` is identical.
 ///
-/// # DECLARED GAP: two of these four have never been exercised
+/// # DECLARED GAP: one of these three has never been exercised
 ///
-/// The variants look uniform from outside and their coverage is not. Written
-/// here rather than left for someone to infer from a green suite, because a
-/// list that reads as complete and is not is the failure this project keeps
-/// paying for.
+/// *Narrowed from two of four on 2026-08-19, by deleting a variant rather than
+/// by covering it.* The variants look uniform from outside and their coverage
+/// is not. Written here rather than left for someone to infer from a green
+/// suite, because a list that reads as complete and is not is the failure this
+/// project keeps paying for.
 ///
 /// | variant | control | how it is reached |
 /// | --- | --- | --- |
 /// | [`CreateSink`](WriteStage::CreateSink) | yes, paired | a file planted where the sink directory must go |
 /// | [`OpenFile`](WriteStage::OpenFile) | yes, paired | a directory planted at the record path |
-/// | [`Append`](WriteStage::Append) | **none** | needs a full disk or a process killed mid-write |
-/// | [`Flush`](WriteStage::Flush) | **none** | same |
+/// | [`Append`](WriteStage::Append) | **none** | needs a full disk |
 ///
-/// **Neither gap is inducible from this machine deterministically.** A full
-/// volume is not constructible in a `tempfile::tempdir`, and killing the writing
-/// process mid-`write_all` is a race — ADR-0002 §7 rejects a control whose
-/// firing depends on winning one, because it can stop proving anything without
-/// ever failing, and it arrives as a green check. So there is no control rather
-/// than a flaky one, and no synthesised value dressed as a measurement.
+/// **The enum survives the deletion; the gap narrows rather than closing.**
+/// Three variants remain and two are controlled, so the type still carries a
+/// distinction the `ErrorKind` cannot. What is gone is `Flush`.
 ///
-/// **What that costs, precisely — narrowed 2026-08-18.** `torn_bytes` is
-/// computed only on these two arms, so for a while **the field had never held a
-/// measured value in any test**: unexecuted code that would read as a fact the
-/// first time it appeared in a record.
+/// # Why `Flush` was deleted rather than left uncovered
+///
+/// *2026-08-19.* It was recorded beside `Append` as *"cannot be induced from
+/// this machine"*, and that was the wrong reason. Measured: `File::flush` costs
+/// **~0 ns** per call against `sync_all`'s **~90 µs** — paired against a call
+/// known to issue a syscall, so *"fast"* is measured rather than assumed — and
+/// there is **no buffered writer anywhere in this path**. With nothing to
+/// flush, the branch could not be taken at all.
+///
+/// An unreachable variant is a representable invalid state, and this document's
+/// rule is to make those unrepresentable rather than to filter them: the
+/// missing `FileOp::Delete`, `HookExit` having no `2`, `agent_id`'s absence
+/// encoded by component count. A `Flush` in a record would have been a value
+/// some reader eventually tried to explain.
+///
+/// # ONE CHANGE WOULD UNDO TWO PROPERTIES, AND NOTHING ELSE WOULD SAY SO
+///
+/// Both of these rest on the writer being a **bare [`std::fs::File`]**:
+///
+/// 1. `flush` is a no-op, so no stage is missing here.
+/// 2. `write_all` issues **one** `write` call — measured at every size to
+///    64 MiB — so there is no user-space window for a killed process to tear a
+///    record in (ADR-0011 §2, round 3d).
+///
+/// Introducing a `BufWriter` for speed would take both away in one commit: the
+/// flush becomes live *and* the append becomes a loop. That is the same shape
+/// as `shell` depending on `args`, and it is guarded the same way — by a
+/// control, not by this paragraph. See
+/// `the_write_path_has_no_buffered_writer` and
+/// `a_written_record_is_on_disk_before_append_returns`.
+///
+/// **What that costs for `Append`, precisely — narrowed 2026-08-18.**
+/// `torn_bytes` is computed only on that arm, so for a while **the field had
+/// never held a measured value in any test**: unexecuted code that would read
+/// as a fact the first time it appeared in a record.
 ///
 /// The **body** is now covered. [`torn_bytes`] is factored out of the branch
 /// nobody can reach and exercised over its inputs, including against a real
@@ -181,8 +209,8 @@ impl IoFailure {
 ///
 /// **What would close it:** a filesystem the test controls the size of — a
 /// small loopback or VHD image mounted for the fixture — which is real
-/// machinery and is not built for two arms. The trigger to revisit is a third
-/// uncontrolled arm, or a defect traced to one of these two.
+/// machinery and is not built for one arm. The trigger to revisit is a second
+/// uncontrolled arm, or a defect traced to this one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -193,9 +221,6 @@ pub enum WriteStage {
     OpenFile,
     /// Writing the record bytes. **No control** — see the type docs.
     Append,
-    /// Flushing them to the operating system. **No control** — see the type
-    /// docs.
-    Flush,
 }
 
 /// Why a payload could not be turned into a record.
@@ -273,7 +298,13 @@ impl PayloadRefusal {
 #[serde(tag = "outcome", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum WriteOutcome {
-    /// The record is on disk and flushed.
+    /// The record is on disk.
+    ///
+    /// *Was "on disk and flushed" until 2026-08-19.* There is no flush: the
+    /// path holds a bare [`std::fs::File`] with no user-space buffer, so the
+    /// bytes are with the operating system when `write_all` returns. Swept
+    /// here rather than only at the decision site, because a retraction leaves
+    /// residue at its copies and the copies are what the next reader meets.
     Written {
         path: PathBuf,
         bytes: usize,
@@ -476,14 +507,13 @@ impl Writer {
                 torn_bytes: torn_bytes(before, len_of(&path)),
             };
         }
-        if let Err(e) = file.flush() {
-            return WriteOutcome::Failed {
-                stage: WriteStage::Flush,
-                path: path.clone(),
-                io: IoFailure::from_io(&e),
-                torn_bytes: torn_bytes(before, len_of(&path)),
-            };
-        }
+        // No `flush` call. `File` has no user-space buffer, so `flush` is a
+        // no-op — measured at ~0 ns against `sync_all`'s ~90 us — and the arm
+        // handling its error was guarding a state that cannot occur. Deleted
+        // with the `WriteStage::Flush` variant rather than left as a branch
+        // nobody can reach. If a buffered writer is ever introduced here, this
+        // call has to come back AND the append becomes a loop; both are
+        // controlled, not remembered.
 
         WriteOutcome::Written {
             bytes: line.len(),
@@ -507,11 +537,12 @@ fn len_of(path: &Path) -> Option<u64> {
 
 /// How much of a record reached the file before the write failed.
 ///
-/// **Extracted so it can be exercised**, because the two arms that call it —
-/// `Append` and `Flush` — cannot be induced on this machine without a full disk
-/// or a killed process. That leaves the *dispatch* uncovered and the *body*
-/// covered, which is the same repair ADR-0010 §10 applies to the no-exit-code
-/// mapping and ADR-0011 §5 to the start-time read: factor the computation out
+/// **Extracted so it can be exercised**, because the one arm that calls it —
+/// `Append` — cannot be induced on this machine without a full disk. *It was
+/// two arms until 2026-08-19, when `Flush` was deleted for being unreachable
+/// rather than merely hard to reach.* That leaves the *dispatch* uncovered and
+/// the *body* covered, which is the same repair ADR-0010 §10 applies to the
+/// no-exit-code mapping and ADR-0011 §5 to the start-time read: factor the computation out
 /// of the branch nobody can reach, and test it over its inputs.
 ///
 /// Unknown propagates. If either `stat` failed there is no difference to
@@ -580,10 +611,10 @@ mod tests {
 
     /// **The control `torn_bytes` never had.** *Added 2026-08-18.*
     ///
-    /// `Append` and `Flush` are the only arms that compute it, and neither can
-    /// be induced here — a full volume is not constructible in a temporary
-    /// directory, and killing the writer mid-`write_all` is a race ADR-0002 §7
-    /// refuses. So until now **the field had never held a measured value in any
+    /// `Append` is the only arm that computes it — `Flush` was the other until
+    /// it was deleted for being unreachable — and it cannot be induced here,
+    /// because a full volume is not constructible in a temporary directory. So
+    /// until this control **the field had never held a measured value in any
     /// test**: unexecuted code that would read as a fact the first time it
     /// appeared in a record.
     ///

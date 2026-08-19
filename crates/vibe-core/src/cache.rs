@@ -241,19 +241,22 @@ impl Cache {
             return false;
         };
 
-        let tmp = parent.join(format!("{}.tmp", cache_file_name()));
-        if std::fs::write(&tmp, json).is_err() {
-            return false;
-        }
-        if std::fs::rename(&tmp, path).is_err() {
-            // Windows will not rename onto an existing file in every case.
-            let _ = std::fs::remove_file(path);
-            if std::fs::rename(&tmp, path).is_err() {
-                let _ = std::fs::remove_file(&tmp);
-                return false;
-            }
-        }
-        true
+        // One write primitive for the whole crate. This used to have its own
+        // temp-and-rename with a fallback that DELETED the destination and
+        // retried, under the comment *"Windows will not rename onto an existing
+        // file in every case"*.
+        //
+        // The comment was read rather than measured, and the fallback could not
+        // help. Measured on Windows 10 Pro 19045: a rename-over is refused
+        // exactly when another process holds the destination without
+        // `FILE_SHARE_DELETE` — and `DeleteFile` is refused in exactly the same
+        // two cases and permitted in exactly the one where the rename already
+        // worked. So the fallback was inert where it was aimed, and destructive
+        // if it had ever fired: it left the destination MISSING between the
+        // delete and the retry, which is the window the rename exists to
+        // remove. A `remove_file` in a tool whose second constraint is enforced
+        // by there being no delete.
+        crate::write_atomically(path, &json).is_ok()
     }
 }
 

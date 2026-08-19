@@ -265,6 +265,142 @@ fn canonical_existing_ancestor(path: &Path) -> Option<PathBuf> {
     None
 }
 
+/// The temporary path one [`write_atomically`] will use, beside its target.
+///
+/// **Exposed so the naming property can be asserted without a race.** The first
+/// version of its control watched the directory from a spinning thread and
+/// asserted it had seen more than one `.tmp` name — a control whose firing
+/// depends on the reader being scheduled at the right moment, which is exactly
+/// what ADR-0002 §7 refuses because it can stop proving anything without ever
+/// failing. It was caught doing that once, in the round it was written.
+///
+/// Same seam as `vibectl`'s `panic_report`: the part that can be asserted
+/// directly is extracted, so the assertion does not have to be inferred from
+/// timing.
+///
+/// **Each call advances the serial**, so two calls never agree — which is the
+/// property, and is why this is not a pure function of its argument.
+#[must_use]
+pub fn temp_path_for(path: &Path) -> PathBuf {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .map_or_else(|| "vibe".to_owned(), |n| n.to_string_lossy().into_owned());
+    let serial = TEMP_SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    dir.join(format!(".{name}.vibe-{}-{serial}.tmp", std::process::id()))
+}
+
+/// Serial number for temp names, so two writes in one process cannot collide.
+static TEMP_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Replace a file's contents without ever leaving it partial.
+///
+/// # The defect this repairs, and where it lived
+///
+/// *Added 2026-08-19.* `std::fs::write` is `File::create` followed by
+/// `write_all`, and `File::create` **truncates before any byte is written**.
+/// There was therefore a window where the target is **zero bytes**, and it
+/// existed **by construction** — not a race that might not happen, a state the
+/// sequence passed through every single time.
+///
+/// **This was not install's path.** It is the arm of [`apply`] that serves
+/// `CreateFile` *and* `UpdateFile`, which is every manifest write this tool has
+/// ever done: `vibe new`, `sync`, `archive`, `render`. See ADR-0001's defect
+/// entry for the cost.
+///
+/// # The shape
+///
+/// Write to a temporary file **beside the target**, then rename over it. A
+/// reader sees the old file or the new one.
+///
+/// **Beside the target, not in the system temp directory**, and that is
+/// load-bearing rather than tidy: a rename across volumes is a copy plus a
+/// delete, which puts the window back and adds a delete to a tool that has
+/// none. The temp path is derived from the target, so it inherits the
+/// containment already checked for it (ADR-0005 §10 rule 5).
+///
+/// **The name carries the process id and a serial**, so neither two vibe
+/// processes nor two writes inside one process can land on one temp. What it
+/// does not do is coordinate two writers of the same target: they still race on
+/// the rename, and one of them wins **whole**. That is the property here, and
+/// extending it to mutual exclusion would be a lock, which this project does
+/// not have.
+///
+/// # What is measured, and what is only known
+///
+/// **Measured** (ADR-0011 §2 round 3f, and in the ordinary test job on all three
+/// platforms): a reader spinning on the target through 400 replacements sees
+/// only whole contents, where the same reader catches `std::fs::write` at
+/// `Empty`. **The zero is bounded by that reader's resolution** — the truncating
+/// window is long and a rename's is short, so *"never observed"* is weaker than
+/// *"cannot occur"*, and the structural argument below is what carries the
+/// claim.
+///
+/// **Structural.** On POSIX, `rename(2)` is specified atomic: a reader sees the
+/// old inode or the new one. On Windows, `std::fs::rename` calls `MoveFileExW`
+/// with `MOVEFILE_REPLACE_EXISTING`, which replaces an existing destination —
+/// and **fails, leaving the destination untouched, when another process holds it
+/// open without `FILE_SHARE_DELETE`**. Measured on Windows 10 Pro 19045: a
+/// holder at `FileShare.None` or `FileShare.Read` refuses the replacement and
+/// the original survives; a holder at `FileShare.ReadWrite | Delete`, which is
+/// what Rust's own `File::open` requests, permits it. **The failure direction is
+/// the safe one** — an error, with the user's file intact.
+///
+/// # What it does NOT promise
+///
+/// **Durability is not promised, and nothing here claims what a power failure
+/// cannot produce.** There is no `fsync` of the temp file and none of the
+/// directory, so a crash can lose the new contents. Whether it can also lose the
+/// *old* ones is a property of the filesystem, not of this code — ext4 with
+/// delayed allocation historically could, before the rename heuristics — and it
+/// is **not measurable here**, so it is not asserted. The strong version costs
+/// two syncs on a path the manifest write takes constantly, and it has not been
+/// costed.
+///
+/// **Permissions are carried, and only the ones the standard library models.**
+/// When the target exists its permissions are copied to the temp before the
+/// rename, so a `settings.json` at `0600` does not come back `0644` from the
+/// umask. On Windows that is the read-only flag; **ACLs are not carried** — the
+/// renamed file keeps the temp's, which inherits from the directory. Stated
+/// because *"permissions preserved"* would be the label reaching past the
+/// mechanism.
+///
+/// # Errors
+///
+/// The io error, with the path it happened on. A failure to write the temp
+/// leaves the target untouched; a failure to rename leaves the target untouched
+/// **and the temp file behind**, which is reported rather than swallowed —
+/// removing it would need a delete on the error path of a tool that deliberately
+/// has none, and a stray `.settings.json.vibe-1234-7.tmp` is a visible fact
+/// about a failed write rather than a silent one.
+pub fn write_atomically(path: &Path, contents: &str) -> Result<(), CoreError> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .map_or_else(|| "vibe".to_owned(), |n| n.to_string_lossy().into_owned());
+    let serial = TEMP_SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temp = dir.join(format!(".{name}.vibe-{}-{serial}.tmp", std::process::id()));
+
+    let io = |p: &Path, source: std::io::Error| CoreError::Io {
+        path: p.to_path_buf(),
+        source,
+    };
+
+    std::fs::write(&temp, contents).map_err(|e| io(&temp, e))?;
+
+    // Carry the target's permissions onto the replacement. Only if it exists:
+    // a first write has no permissions to inherit and takes the umask, which is
+    // the same thing `File::create` would have done.
+    if let Ok(meta) = std::fs::metadata(path) {
+        let _ = std::fs::set_permissions(&temp, meta.permissions());
+    }
+
+    if let Err(e) = std::fs::rename(&temp, path) {
+        return Err(io(path, e));
+    }
+    Ok(())
+}
+
 /// Execute a plan.
 ///
 /// Every op is validated and every precondition checked **before any op runs**,
@@ -321,10 +457,7 @@ pub fn apply(plan: &WritePlan, rep: &dyn Reporter) -> Result<ApplyReport, CoreEr
                         source,
                     })?;
                 }
-                std::fs::write(path, contents).map_err(|source| CoreError::Io {
-                    path: path.clone(),
-                    source,
-                })?;
+                write_atomically(path, contents)?;
                 applied.push(display.clone());
             }
             FileOp::RemoveOwnedAgent { path, .. } => {

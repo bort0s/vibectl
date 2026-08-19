@@ -122,7 +122,33 @@ pub struct ApplyReport { pub applied: Vec<AppliedOp>, pub skipped: Vec<SkippedOp
 - `UpdateFile` carries both `before` and `after` so `vibectl` can render a real diff without re-reading the file.
 - Each op carries `Precondition`s captured at plan time. `apply` re-hashes and **aborts the whole plan** if any target changed since planning. Apply is all-or-nothing at the *decision* level; it is not transactional at the filesystem level (see Consequences).
 - `FileOp::RunCommand` exists so `vibe new`'s `git init` / `gh repo create` show up in a dry run instead of being invisible side effects.
-- There is deliberately **no `FileOp::Delete`**. Hard constraint 2 is enforced by the absence of the variant — a destructive command is not merely discouraged, it is unrepresentable. `vibe archive` is a single `UpdateFile` op that flips one key in `.vibe/project.toml` (see ADR-0002 for which key).
+- There is deliberately **no `FileOp::Delete`**. `vibe archive` is a single `UpdateFile` op that flips one key in `.vibe/project.toml` (see ADR-0002 for which key).
+
+  **The enforcement claim used to read *"hard constraint 2 is enforced by the absence of the variant — a destructive command is not merely discouraged, it is unrepresentable"*, and that was stronger than what the type system was doing.** *Corrected 2026-08-19.* The absence of `Delete` makes **one form** of destruction unrepresentable: an op that names a path and removes it. It does not make destruction unrepresentable. The write path below passed every file through a **zero-byte state** on every write, with `Delete` nonexistent throughout — so the tool was destroying files by a route the missing variant does not cover.
+
+  The honest form: **`FileOp` has no variant that expresses "delete this path", and that closes deletion-as-an-operation. Everything else about not being destructive is a property of how the ops are carried out, and has to be established there.**
+
+### 3a. DEFECT: every write passed through a zero-byte state, from P0 until 2026-08-19
+
+*Filed 2026-08-19, where the write path lives rather than in the work that found it.*
+
+**What it was.** `apply` wrote `CreateFile` and `UpdateFile` — one shared arm — through `std::fs::write`, which is `File::create` followed by `write_all`. **`File::create` truncates before any byte is written.** So between the truncate and the write the target was **zero bytes**, and that was not a race that might not happen: it was a state the sequence passed through **every single time**.
+
+**How long, and what it reached.** Since the write path was first built. Every command that writes a manifest went through it — `vibe new`, `vibe sync`, `vibe archive`, `vibe render` — and so did the agent-file writes. It was not confined to one caller; it was the primitive.
+
+**What it cost.** A user whose machine lost power, or whose `vibe sync` was killed, in that window had a **zero-byte `.vibe/project.toml`** — their project's manifest, replaced with nothing. No control would have caught it and no message would have said so; the next `vibe list` would simply have found a manifest that no longer parsed. Nobody has reported it, which bounds nothing: the window is short and the population is small.
+
+**Why nobody saw it.** It was invisible in exactly the way this project's failures usually are — the code reads as a write, the tests assert the *result* of the write, and the intermediate state has no observer unless somebody builds one. It surfaced only when ADR-0011's settings editor asked what happens to a file **vibe does not own**, and three rounds had by then gone into whether a killed process could tear a record in a sink where the writer appends and the reader tolerates damage. **The severe hazard was in the primitive the whole time, and the work was aimed at the safer path.**
+
+**The repair.** `write_atomically`: a temporary file **beside the target**, then a rename over it. Beside, not in the system temp directory, because a cross-volume rename is a copy plus a delete. It covers **the primitive**, not the call site that surfaced it — `CreateFile` onto an existing path truncates exactly as `UpdateFile` does, and has its own control saying so.
+
+**Measured, not read.** A reader spinning on the target through 400 replacements sees `Empty` on the old path and only whole contents on the new one, and **the negative half is what licenses the positive one** — a reader too slow to catch anything reports a clean sweep too. Both halves run in the ordinary test job on all three platforms.
+
+**What the repair does not promise.** Durability. There is no `fsync`, so a crash can lose the *new* contents; whether it can also lose the old ones is a property of the filesystem rather than of this code and is not measurable here, so it is not asserted.
+
+**And the second write path had the same shape with a delete in it.** `Cache::save` had its own temp-and-rename plus a fallback that **removed the destination and retried**, under the comment *"Windows will not rename onto an existing file in every case"*. The comment was read rather than measured and the fallback could not help: measured on Windows 10 Pro 19045, a rename-over is refused exactly when another process holds the destination without `FILE_SHARE_DELETE` — and `DeleteFile` is refused in **the same two cases** and permitted in **the one where the rename already worked**. So the fallback was inert where it was aimed and destructive if it had ever fired, since it left the destination missing between the delete and the retry. It now goes through the one primitive.
+
+**The trigger to revisit:** a third write path appearing outside `apply`. There are two today — `apply` and `Cache::save` — and they share one primitive; a third would mean the invariant *"core mutates the filesystem in one place"* has stopped being true, which is the thing §3 exists to say.
 
 ### 4. Errors: `thiserror` in core, `anyhow` in the CLI, no exceptions
 

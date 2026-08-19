@@ -526,6 +526,139 @@ fn a_torn_tail_is_reported_by_the_listing() {
     assert_eq!(listing.files[0].entries.len(), 1);
 }
 
+/// **One damaged file must not darken the sink**, and this control exists
+/// because a decision rests on it that predates it.
+///
+/// ADR-0011 §2 measured that Claude Code's `timeout` kills a hook. §7a admits
+/// exactly one corruption under one-writer-per-file — truncation — so a kill
+/// can in principle leave a torn trailing record. The question that decides
+/// whether a short `timeout` is admissible at all is what happens to the
+/// **rest** of the sink when it does.
+///
+/// The existing torn-tail control uses a sink of one file, so it cannot see the
+/// difference between *"this file reports a partial tail"* and *"a partial tail
+/// costs you everything else"*. That difference is the whole of the concern: if
+/// one torn line darkened the read, any kill, ever, would permanently blank the
+/// monitor — silent non-delivery produced by the reader rather than by the
+/// channel.
+///
+/// Four files in one sink, three of them damaged in different ways, and the
+/// assertion is that **every whole record in every file is still read**.
+#[test]
+fn one_damaged_file_does_not_cost_the_sink_its_other_records() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    // Undamaged.
+    plant(
+        dir.path(),
+        "good__alpha.jsonl",
+        &[
+            &rec("good", None, "SessionStart", "1000", ""),
+            &rec("good", None, "SessionEnd", "2000", ""),
+        ],
+    );
+
+    // A whole record followed by a torn one — the kill case.
+    fs::write(
+        dir.path().join("torn__alpha.jsonl"),
+        format!(
+            "{}\n{{\"v\":\"1\",\"ses",
+            rec("torn", None, "SessionStart", "1000", "")
+        ),
+    )
+    .expect("plant");
+
+    // A whole line that does not parse, between two that do — not a tail
+    // problem at all, and a different arm of the reader.
+    fs::write(
+        dir.path().join("junk__alpha.jsonl"),
+        format!(
+            "{}\nthis line is not json at all\n{}\n",
+            rec("junk", None, "SessionStart", "1000", ""),
+            rec("junk", None, "SessionEnd", "2000", "")
+        ),
+    )
+    .expect("plant");
+
+    // A name the reader cannot attribute, whose records are still real.
+    fs::write(
+        dir.path().join("not-a-sink-name.jsonl"),
+        format!("{}\n", rec("orphan", None, "SessionStart", "1000", "")),
+    )
+    .expect("plant");
+
+    let (listing, unreadable) = read_sink(dir.path()).expect(
+        "a sink containing damaged files is still readable — the error case is a \
+         directory that cannot be enumerated, which is a different fact",
+    );
+    assert!(unreadable.is_empty(), "{unreadable:?}");
+    assert_eq!(listing.files.len(), 4);
+
+    let records_in = |name: &str| -> usize {
+        listing
+            .files
+            .iter()
+            .find(|f| f.path.file_name().and_then(|n| n.to_str()) == Some(name))
+            .unwrap_or_else(|| panic!("{name} is missing from the listing"))
+            .entries
+            .len()
+    };
+
+    assert_eq!(records_in("good__alpha.jsonl"), 2, "the undamaged file");
+    assert_eq!(
+        records_in("torn__alpha.jsonl"),
+        1,
+        "the whole record BEFORE a torn tail is still a record"
+    );
+    assert_eq!(
+        records_in("junk__alpha.jsonl"),
+        2,
+        "a whole line that does not parse must not take its neighbours with it"
+    );
+    assert_eq!(
+        records_in("not-a-sink-name.jsonl"),
+        1,
+        "an unattributable name is a state, not a reason to drop records"
+    );
+
+    // And the damage is REPORTED rather than absorbed, or the assertions above
+    // are satisfied by a reader that silently discards what it cannot read.
+    let torn = listing
+        .files
+        .iter()
+        .find(|f| f.path.file_name().and_then(|n| n.to_str()) == Some("torn__alpha.jsonl"))
+        .expect("present");
+    assert!(
+        matches!(torn.tail, TailState::Partial { .. }),
+        "a torn tail must be reported, not merely survived"
+    );
+    let junk = listing
+        .files
+        .iter()
+        .find(|f| f.path.file_name().and_then(|n| n.to_str()) == Some("junk__alpha.jsonl"))
+        .expect("present");
+    assert_eq!(junk.unparseable, 1, "the unparseable line must be counted");
+    assert!(
+        matches!(junk.tail, TailState::Complete),
+        "a bad line in the middle is not a tail problem, and the two must not \
+         share an observable"
+    );
+    assert_eq!(listing.unattributed, 1);
+
+    // Paired: the same sink with nothing damaged reports no damage, or every
+    // assertion above is satisfied by a reader that reports damage always.
+    let clean = tempfile::tempdir().expect("tempdir");
+    plant(
+        clean.path(),
+        "good__alpha.jsonl",
+        &[&rec("good", None, "SessionStart", "1000", "")],
+    );
+    let (clean_listing, _) = read_sink(clean.path()).expect("readable");
+    assert_eq!(clean_listing.unattributed, 0);
+    assert!(matches!(clean_listing.files[0].tail, TailState::Complete));
+    assert_eq!(clean_listing.files[0].unparseable, 0);
+}
+
 /// An empty sink and an unreadable sink are different facts.
 #[test]
 fn an_empty_sink_and_a_missing_sink_do_not_render_the_same() {

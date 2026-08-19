@@ -488,7 +488,7 @@ fn a_cold_hook_invocation_is_measured_and_reported_per_platform() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sink = dir.path().join("sink");
 
-    // ONE UNTIMED WARM-UP, AND ITS COST IS PRINTED RATHER THAN DISCARDED.
+    // ONE COLD INVOCATION, EXCLUDED FROM THE POPULATION AND KEPT AS A DATUM.
     // The first invocation after a build is dominated by the operating system
     // loading a 5.6 MB binary that was written seconds ago: measured at
     // **1.27 s** against a steady state of ~22 ms, a factor of about fifty. So
@@ -549,7 +549,7 @@ fn a_cold_hook_invocation_is_measured_and_reported_per_platform() {
     println!(
         "steady-state `vibe monitor hook` on {os}/{arch}: \
          min {min:?}, median {median:?}, max {max:?} over {RUNS} runs; \
-         first invocation after a build (untimed): {cold:?}",
+         first (cold page cache), excluded from the population above but \n         asserted and printed: {cold:?}",
         os = std::env::consts::OS,
         arch = std::env::consts::ARCH,
     );
@@ -566,6 +566,25 @@ fn a_cold_hook_invocation_is_measured_and_reported_per_platform() {
 
     // Paired: the measurement is only meaningful if the runs actually did the
     // work. Ten deliveries into one sink for ten sessions is ten files.
+    // THE COLD NUMBER IS ASSERTED AND PRINTED, NOT DISCARDED. Calling it a
+    // "warm-up" attributed it to the build; the cause is a cold page cache,
+    // which recurs after a reboot or after the binary has sat unused — and
+    // `SessionStart` is exactly where that lands. Every CI job builds and then
+    // runs, so the FIRST invocation in CI is always the cold one: one clean
+    // sample per push per platform, which is the best instrument available for
+    // the only number nobody has measured twice. Discarding it threw that away.
+    //
+    // The tripwire is loose on purpose. Printing accumulates the distribution;
+    // asserting only catches the case where the cold path has become something
+    // other than paging. ADR-0011 §7b decides what the rule does with it.
+    const COLD_TRIPWIRE: Duration = Duration::from_secs(30);
+    assert!(
+        cold < COLD_TRIPWIRE,
+        "the first invocation took {cold:?} on {}/{}, past the {COLD_TRIPWIRE:?}          tripwire. Cold start is paging in a binary; at this magnitude it is          waiting on something else.",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    );
+
     let files = std::fs::read_dir(&sink).expect("sink readable").count();
     assert_eq!(
         files,
@@ -612,7 +631,7 @@ fn the_installed_timeout_is_what_the_rule_derives() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sink = dir.path().join("sink");
 
-    // ONE UNTIMED WARM-UP, AND ITS COST IS PRINTED RATHER THAN DISCARDED.
+    // ONE COLD INVOCATION, EXCLUDED FROM THE POPULATION AND KEPT AS A DATUM.
     // The first invocation after a build is dominated by the operating system
     // loading a 5.6 MB binary that was written seconds ago: measured at
     // **1.27 s** against a steady state of ~22 ms, a factor of about fifty. So
@@ -670,7 +689,7 @@ fn the_installed_timeout_is_what_the_rule_derives() {
         "timeout derivation on {os}/{arch} (test profile): max {max:?} \
          x{HOOK_TIMEOUT_MULTIPLIER} = {scaled_secs}s, floor {HOOK_TIMEOUT_FLOOR_SECS}s, \
          so this platform requires >= {required}s; installed value is \
-         {HOOK_TIMEOUT_SECS}s (first after a build, untimed: {cold:?})",
+         {HOOK_TIMEOUT_SECS}s (cold-cache first invocation: {cold:?})",
         os = std::env::consts::OS,
         arch = std::env::consts::ARCH,
     );

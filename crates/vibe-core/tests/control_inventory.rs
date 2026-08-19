@@ -47,6 +47,15 @@ use std::path::{Path, PathBuf};
 
 /// The gate. Raise it only by deciding §9's question, never to make a red go
 /// away.
+///
+/// **WHAT IT DOES NOT MEASURE.** *Added 2026-08-19.* This counts the
+/// **skip-path hazard**: controls that depend on an external tool and can
+/// silently skip when it is missing. It has never counted *how many controls
+/// exist*, and two rounds of controls landing outside it made that look like a
+/// fault in the gate rather than a fault in the reading. **Do not read 5 of 7
+/// as "controls are stable."** The total is derived and printed beside it by
+/// `the_total_control_count_is_reported_beside_the_gated_one`; only this one
+/// is a gate.
 const TRIGGER_AT: usize = 7;
 
 /// What identifies a control: the prefix of the variables that turn a missing

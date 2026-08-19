@@ -166,12 +166,19 @@ impl StampSource for FixedStamps {
 ///
 /// # The payload is stored verbatim, as a JSON string
 ///
-/// Round-tripping it through `serde_json::Value` would **sort the keys** — the
-/// default map is a `BTreeMap` — and normalise number formatting. That is an
-/// instrument altering the subject's data, inside a tool whose entire product
-/// is reported facts, and ADR-0011 §7a's falsification table explicitly expects
-/// a malformed payload to *"land in the file exactly as it lands at the
-/// receiver"*.
+/// Round-tripping it through `serde_json::Value` **normalises number
+/// formatting**, drops **insignificant whitespace**, and keeps only one half of
+/// a **duplicate key**. That is an instrument altering the subject's data,
+/// inside a tool whose entire product is reported facts, and ADR-0011 §7a's
+/// falsification table explicitly expects a malformed payload to *"land in the
+/// file exactly as it lands at the receiver"*.
+///
+/// **It no longer sorts the keys, and this sentence used to say it did.**
+/// *Corrected 2026-08-19.* The workspace enables `serde_json/preserve_order`
+/// for ADR-0011 §7's settings write, which swaps the map for an `IndexMap`.
+/// Key order was one of two reasons the control here fired; it is now zero of
+/// them, and the reasons above are what remain — counted again rather than
+/// inherited, and split into one control per reason in `monitor_writer.rs`.
 ///
 /// Escaping it into a JSON string keeps it byte-identical, guarantees the
 /// one-record-per-line frame whatever whitespace the payload arrived with, and

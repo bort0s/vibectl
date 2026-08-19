@@ -1127,36 +1127,123 @@ fn the_record_carries_the_identity_the_writer_received() {
     );
 }
 
-/// The payload lands **byte-identical**, including key order.
+// ---------------------------------------------------------------------------
+// Verbatim storage — one control per producer, counted again before the
+// `preserve_order` feature flipped
+// ---------------------------------------------------------------------------
+
+/// # Why this is several controls and used to be one
 ///
-/// Round-tripping it through `serde_json::Value` would sort the keys — the
-/// default map is a `BTreeMap` — and normalise number formatting. That is an
-/// instrument altering the subject's data inside a tool whose whole product is
-/// reported facts, and ADR-0011 §7a's falsification table expects a malformed
-/// payload to *"land in the file exactly as it lands at the receiver"*.
-#[test]
-fn the_payload_lands_byte_identical_including_key_order() {
+/// The single control these replace asserted verbatim storage against a fixture
+/// carrying **two** reasons a round trip would have changed it — key order and
+/// number formatting — and its premise assertion could not tell them apart.
+/// Enabling `serde_json/preserve_order` removes the first. That control would
+/// have **stayed green on the survivor** while its name, its doc comment and
+/// its premise all described something it no longer exercised, and nothing
+/// would have gone red to say so.
+///
+/// That is ADR-0002 §7's claim-outliving-its-retraction, arriving through a
+/// control rather than through prose. So the branches were counted again
+/// **before** the feature flipped. Measured under `preserve_order`, a naive
+/// round trip still changes: **number formatting** (`1.50` becomes `1.5`,
+/// `1e2` becomes `100.0`), **insignificant whitespace**, and **a duplicate
+/// key** — which is the one that loses data rather than shape. It no longer
+/// changes key order, a large integer, or an escaped non-ASCII character.
+///
+/// Key order is therefore deliberately **not** a premise here any more. The
+/// control that pins the new state of that question is
+/// [`serde_json_in_this_build_preserves_key_order`].
+///
+/// A payload that is not JSON at all is **not** in this list: the writer refuses
+/// it (`PayloadRefusal::NotJson`) because the filename needs `session_id`, so
+/// verbatim storage is not what protects that case and a control here would be
+/// asserting the wrong mechanism.
+fn assert_lands_verbatim(original: &str) {
     let dir = tempfile::tempdir().expect("tempdir");
-    // `zzz` before `aaa`, and a float that a re-serialisation would rewrite.
-    let original = r#"{"zzz":1.50,"session_id":"s","aaa":[1,2],"hook_event_name":"Stop"}"#;
     let path = written_path(&writer(dir.path(), "ident").append(original));
     let text = fs::read_to_string(&path).expect("read");
     let value: serde_json::Value = serde_json::from_str(text.trim_end()).expect("json");
-
     assert_eq!(
         value.get("payload").and_then(|v| v.as_str()),
         Some(original),
         "the payload must be stored verbatim"
     );
+}
 
-    // The premise: a naive round-trip really would have changed it.
-    let round_tripped =
-        serde_json::to_string(&serde_json::from_str::<serde_json::Value>(original).unwrap())
-            .unwrap();
+/// The premise for one case: a naive round trip really would have changed it.
+///
+/// Separate from the assertion above so the failure says which half went —
+/// *storage is not verbatim* and *this fixture no longer exercises anything*
+/// are different problems with different repairs, and the second is the one
+/// that arrives silently.
+fn assert_a_round_trip_would_have_changed_it(original: &str, producer: &str) {
+    let round_tripped = serde_json::from_str::<serde_json::Value>(original)
+        .ok()
+        .and_then(|v| serde_json::to_string(&v).ok());
     assert_ne!(
-        round_tripped, original,
+        round_tripped.as_deref(),
+        Some(original),
         "the fixture's premise failed: a round trip did not alter this payload, \
-         so it cannot demonstrate that verbatim storage matters"
+         so it no longer demonstrates that verbatim storage protects {producer}"
+    );
+}
+
+/// Producer 1: number formatting.
+#[test]
+fn the_payload_keeps_a_number_exactly_as_the_agent_wrote_it() {
+    let original = r#"{"session_id":"s","hook_event_name":"Stop","a":1.50,"b":1e2}"#;
+    assert_lands_verbatim(original);
+    assert_a_round_trip_would_have_changed_it(original, "number formatting");
+}
+
+/// Producer 2: insignificant whitespace. The bytes that arrived are the fact.
+#[test]
+fn the_payload_keeps_the_whitespace_it_arrived_with() {
+    let original = r#"{ "session_id" : "s" , "hook_event_name" : "Stop" }"#;
+    assert_lands_verbatim(original);
+    assert_a_round_trip_would_have_changed_it(original, "insignificant whitespace");
+}
+
+/// Producer 3: a duplicate key — the one that loses **data** rather than shape.
+/// A round trip keeps one of the two and reports nothing.
+#[test]
+fn the_payload_keeps_both_halves_of_a_duplicate_key() {
+    let original = r#"{"session_id":"s","hook_event_name":"Stop","a":1,"a":2}"#;
+    assert_lands_verbatim(original);
+    assert_a_round_trip_would_have_changed_it(original, "a duplicate key");
+}
+
+/// **`serde_json` preserves key order in this build, and that is a dependency
+/// feature rather than a property of the crate.**
+///
+/// Nothing above exercises key order any more, on purpose. But ADR-0011 §7's
+/// settings write **depends** on it: a `Cargo.toml` edit dropping
+/// `preserve_order` would make vibe re-sort the keys of a file it does not own,
+/// and every other control here would stay green while it happened.
+///
+/// So the guarantee is checked rather than remembered — the `VIBE_REQUIRE_GH`
+/// shape (ADR-0002 §7), where the result carries the evidence and no second
+/// channel has to be read. The fixture's own premise is asserted too: keys that
+/// were already sorted would make preserving and sorting look identical.
+#[test]
+fn serde_json_in_this_build_preserves_key_order() {
+    let original = r#"{"zzz":1,"mmm":2,"aaa":3}"#;
+    let written = ["zzz", "mmm", "aaa"];
+    let mut sorted = written;
+    sorted.sort_unstable();
+    assert_ne!(
+        sorted, written,
+        "the fixture's premise failed: these keys are already in sorted order, \
+         so preserving them and sorting them would look the same"
+    );
+
+    let value: serde_json::Value = serde_json::from_str(original).expect("json");
+    let round_tripped = serde_json::to_string(&value).expect("serialise");
+    assert_eq!(
+        round_tripped, original,
+        "serde_json re-ordered the keys, so `preserve_order` is not enabled for \
+         this build — and the settings write would rewrite the key order of a \
+         file vibe does not own"
     );
 }
 

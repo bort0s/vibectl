@@ -659,6 +659,68 @@ fn one_damaged_file_does_not_cost_the_sink_its_other_records() {
     assert_eq!(clean_listing.files[0].unparseable, 0);
 }
 
+/// **A file written under the old charset reads as `unattributed`, and its
+/// records are still read.**
+///
+/// The charset lost `_` on 2026-08-19 (ADR-0011 §2 round 3h), which makes every
+/// filename written before that with an underscore in a component unparseable by
+/// `Attribution::of`. **The cost of the breaking change was zero because monitor
+/// is unshipped — not because migration was handled — and that reason expires
+/// the moment §8 ships a display.** So what a legacy file does now is worth
+/// pinning rather than discovering later.
+///
+/// It is the degradation §7a already designed for: `unattributed` is a **state,
+/// not an error**, because §7 permits hand-installed hooks and a file whose
+/// writer omitted or mangled the identity is the ordinary case. The events are
+/// real and the session is named in every payload; only the *source* is unknown.
+///
+/// **Paired**, or "records survive" is satisfied by a reader that attributes
+/// nothing: the same records under a name that parses must come back attributed.
+#[test]
+fn a_filename_from_the_old_charset_is_unattributed_and_keeps_its_records() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // Legal before the change, refused now: a single `_` in the identity.
+    plant(
+        dir.path(),
+        "sess__my_hook.jsonl",
+        &[
+            &rec("sess", None, "SessionStart", "1000", ""),
+            &rec("sess", None, "SessionEnd", "2000", ""),
+        ],
+    );
+
+    let (listing, unreadable) = read_sink(dir.path()).expect("readable");
+    assert!(unreadable.is_empty());
+    assert_eq!(listing.unattributed, 1);
+    assert!(
+        matches!(
+            &listing.files[0].attribution,
+            Attribution::Unattributed { reason } if reason.contains("identity")
+        ),
+        "{:?}",
+        listing.files[0].attribution
+    );
+    assert_eq!(
+        listing.files[0].entries.len(),
+        2,
+        "a legacy filename must not cost the records inside it — the events are          real and only the source is unknown"
+    );
+
+    // Paired: the same records under a name that parses come back attributed.
+    let dir2 = tempfile::tempdir().expect("tempdir");
+    plant(
+        dir2.path(),
+        "sess__my-hook.jsonl",
+        &[&rec("sess", None, "SessionStart", "1000", "")],
+    );
+    let (ok, _) = read_sink(dir2.path()).expect("readable");
+    assert_eq!(ok.unattributed, 0);
+    assert!(matches!(
+        &ok.files[0].attribution,
+        Attribution::Attributed { .. }
+    ));
+}
+
 /// An empty sink and an unreadable sink are different facts.
 #[test]
 fn an_empty_sink_and_a_missing_sink_do_not_render_the_same() {

@@ -782,12 +782,16 @@ distinction. `Attribution::of` matches both arities. So the observation was the
 design working, and the summary of it was not.
 
 **The count only decides if no component can contain the separator, and that is
-enforced rather than assumed.** `validate_component` rejects any byte outside
-`[A-Za-z0-9-_]` **and** rejects any component containing `__` outright
+enforced rather than assumed.** **~~`validate_component` rejects any byte outside
+`[A-Za-z0-9-_]` and rejects any component containing `__` outright
 (`ComponentRejection::ContainsSeparator`). A single `_` is legal; two adjacent
-are not. So two distinct keys cannot collapse onto one filename — the twin
-writer §7a exists to exclude — and it is a construction rather than a property of
-the values that happen to arrive.
+are not.~~** *Retracted 2026-08-19 — that rule was the defect, see round 3h below:
+a single `_` at a boundary let two legal components form the separator between
+them.* The charset is `[A-Za-z0-9-]`, `_` is refused outright, and
+`ComponentRejection::ContainsSeparator` was deleted for being unreachable. So two
+distinct keys cannot collapse onto one filename — the twin writer §7a exists to
+exclude — and it is now a construction rather than a property of the values that
+happen to arrive, which is what the earlier version only appeared to be.
 
 **Measured on the values that do arrive**, since the enforcement is only
 interesting if real ids pass it: across five distinct real `session_id`s and five
@@ -890,6 +894,23 @@ rename paid. **The deciding reason is standing, not cost** — the alternative's
 safety rests on *measured ids are UUID and hex, n=5*, and an upstream change to
 the agent-id format must not be able to reopen a file collision. `_` removal
 needs no knowledge of what id formats look like today.
+
+**It is a breaking change whose cost is zero for a reason that EXPIRES.**
+`[A-Za-z0-9-]` refuses hand-written identities containing `_` and makes any
+filename already written with one unparseable. That costs nothing **because the
+monitor is unshipped** — not because migration is handled — and the reason stops
+holding the moment §8 ships a display and somebody has a sink on disk. Recorded
+here rather than assumed, because a zero-cost breaking change is the kind that
+gets repeated once it stops being zero-cost.
+
+**And `read_sink` does meet legacy-form files, so that case is not hypothetical.**
+`Attribution::of` parses every component, so a name containing `_` now fails and
+the file reads as **`unattributed`** — which is the degradation §7a already
+designed for rather than a new one: the events are real, the session is named in
+every payload, only the *source* is unknown, and **every record inside is still
+read**. Pinned by
+`a_filename_from_the_old_charset_is_unattributed_and_keeps_its_records`, paired
+against the same records under a name that parses.
 
 **Three things it carries**, recorded so none of them survives as a separate
 gap: the **two-component misattribution** dies with the same change, since

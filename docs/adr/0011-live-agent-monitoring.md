@@ -124,6 +124,17 @@ it.** *Ended at least once, reopenable* carries no information, because
 directory. So prunability is **not derivable from event content at all**, which
 is a simpler and stronger finding than a third variant.
 
+**Round 3g (2026-08-19) retracts prunability entirely and corrects a report
+rather than a mechanism.** The third state was checked and carries no
+information, so the type is deleted, the two controls that pinned it are
+withdrawn with their subject, and **what must not be written in its place —
+file-age prunability — is recorded where the next reader will stand**. Round 3f
+also reported the sink's two-component filename as if it contradicted the
+declared key: it does not, §7a encodes *no agent* by the component count, and
+the separator is refused inside every component so the count decides. The report
+was wrong and the code was right, which is worth recording in a document whose
+subject is claims outliving what produced them.
+
 **Round 3d (2026-08-19) refines round 3c rather than extending it, and the
 refinement changed three answers.** Reading the write path first turned out to
 decide more than the sweep did: there is **no `BufWriter`**, and `write_all`
@@ -744,6 +755,70 @@ integration targets plus 2 lib-unittest binaries plus 1 doc-test binary — whil
 `control_inventory.rs` counts **integration-test targets excluding itself**.
 Neither was wrong; the report that put 28 beside 24 was. Measure the tool with
 the tool.
+
+**Round 3g (2026-08-19): the filename key, and a report that mis-read its own
+result.** *Added 2026-08-19.*
+
+**Round 3f reported two components as a success and did not notice it looked
+like a contradiction.** The sink showed `<session>__user.jsonl` beside
+`<session>__<agent_id>__user.jsonl`, and the report described the declared key as
+`<session>__<agent>__<identity>`. **The report was wrong, not the code**: §7a
+records that `agent_id` is absent on parent-level events and that its absence is
+*"encoded structurally rather than by a reserved word"* — **two components is a
+session-level record, three is an agent-level one**, and the count carries the
+distinction. `Attribution::of` matches both arities. So the observation was the
+design working, and the summary of it was not.
+
+**The count only decides if no component can contain the separator, and that is
+enforced rather than assumed.** `validate_component` rejects any byte outside
+`[A-Za-z0-9-_]` **and** rejects any component containing `__` outright
+(`ComponentRejection::ContainsSeparator`). A single `_` is legal; two adjacent
+are not. So two distinct keys cannot collapse onto one filename — the twin
+writer §7a exists to exclude — and it is a construction rather than a property of
+the values that happen to arrive.
+
+**Measured on the values that do arrive**, since the enforcement is only
+interesting if real ids pass it: across five distinct real `session_id`s and five
+real `agent_id`s captured from live sessions —
+
+| field | n | max length | observed charset | contains `__` |
+| --- | --- | --- | --- | --- |
+| `session_id` | 5 | 36 | `[0-9a-f-]` (a UUID) | 0 |
+| `agent_id` | 5 | 17 | `[0-9a-f]` | 0 |
+
+Both inside the accepted set and inside the length bounds (64 and 48), so the
+charset check refuses nothing real today. **That is a sample, not a guarantee
+about the fields**, which is why the check exists: a value outside the set is
+refused rather than assumed impossible.
+
+**And the rename's argument is structural, not sampled — which round 3f left
+implicit.** The spinning-reader result is bounded by reader resolution: the
+truncating window is a `File::create` plus a ~500-byte `write_all` and is long;
+a rename's is orders of magnitude shorter, and a reader shown to sample inside a
+long window is **not** shown to sample inside a short one. What carries the claim
+is the specification: on POSIX `rename(2)` is atomic; on Windows
+`std::fs::rename` calls **`MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`**.
+
+**Measured on Windows 10 Pro 19045, because the Windows half is where the answer
+is least obvious — and it fails, safely, in one case:**
+
+| the holder's share mode | rename-over | `DeleteFile` |
+| --- | --- | --- |
+| `FileShare.None` | **refused**, original intact | refused |
+| `FileShare.Read` | **refused**, original intact | refused |
+| `FileShare.ReadWrite, Delete` (Rust's `File::open`) | succeeded | succeeded |
+
+**Two things follow.** The failure direction is the safe one — an error, with the
+user's file untouched. And `cache.rs`'s long-standing fallback, which **deleted
+the destination and retried** under the comment *"Windows will not rename onto an
+existing file in every case"*, was **inert where it was aimed**: `DeleteFile` is
+refused in exactly the two cases the rename is, so the retry could never have
+helped, and if it had fired it would have left the destination *missing*.
+
+**And the case install actually meets was measured rather than feared:** install
+runs while Claude Code runs, so `claude doctor` was run against a settings file
+while replacements ran in a loop. **35 replacements, 0 refused.** Claude Code
+does not hold `settings.json` in a way that blocks the write.
 
 **And a fact that was inferred from the schema and is now measured: N hooks
 declared in ONE settings file for one event run CONCURRENTLY.** Three hooks with
@@ -1826,14 +1901,46 @@ direction, since a watermark ahead of the truth **hides records**. So
 read cost above.
 
 It follows that **vibe cannot distinguish pruning a file whose records were read
-from one whose were not**, and it must not pretend to. What it can do is derive
-prunability from the artifact: **a file containing `SessionEnd` is a completed
-session**, and §4 measured that a killed agent writes neither `Stop` nor
+from one whose were not**, and it must not pretend to.
+
+**RETRACTED 2026-08-19: it cannot derive prunability from the artifact either.**
+This paragraph used to read *"a file containing `SessionEnd` is a completed
+session, and §4 measured that a killed agent writes neither `Stop` nor
 `SessionEnd` — so a file lacking it is in-progress-or-dead and must never be
-offered as prunable. That is §7's proof-carrying shape applied to retention, and
-it rests on a measurement rather than on anyone's memory. The read/unread
-distinction is preserved **by showing the user** — per file: the session, the
-event count, the time span, and whether it completed — not by vibe knowing.
+offered as prunable."* Both halves of that are still true and the conclusion does
+not follow from them, because **`SessionEnd` is not terminal**: §2's round 3e
+measured a resumed session emitting `SessionStart` *after* `SessionEnd` under one
+`session_id`.
+
+**The weaker replacement was checked before being built and failed too.** A third
+state — *ended at least once, and reopenable* — carries no information, because
+**`reopenable` is always true**: a session two hours old was resumed from a
+different working directory, no `SessionEnd.reason` bounds it, and the reason set
+is unenumerated. A variant whose predicate never varies distinguishes nothing.
+
+**So prunability is not offered at all.** Not a weaker label, not file age.
+Whether a file will receive more records is **not a function of the events in
+it**, and constraint 5 says the field stays empty and flagged rather than
+carrying a plausible value. The type is deleted rather than softened, which is
+this document's usual move for a state that should not be representable.
+
+**What must not be written in its place, recorded where the next reader will
+stand:** *"a file untouched for N days is prunable"* is the same claim on a worse
+basis. Age measures **when vibe last received an event**, which is the observable
+§7 spends its length establishing means nothing on its own — a quiet agent, a
+removed hook and a finished session all produce it. What could ground it is an
+**explicit user action**, because that is a fact vibe was told rather than one it
+inferred; nothing is built for that and §8 has not asked.
+
+**The cost of having shipped the wrong label was bounded structurally**, not by
+the display being unbuilt: no `FileOp::Delete` exists, so nothing vibe can do
+could act on it. **The reason for the retraction is constraint 5** — the label
+claimed what the tool does not know — and that reason survives §8 shipping a
+display, where *"nothing renders it"* would not.
+
+The read/unread distinction is preserved **by showing the user** — per file: the
+session, the event count and the time span — not by vibe knowing, and not by
+vibe recommending.
 
 **And the residual is stated rather than dissolved:** a file that stops growing
 is indistinguishable from a quiet agent. Neither transport ever fixed that. It is
@@ -2418,10 +2525,18 @@ that leave it say where they went.*
   the collision accepted, which is the twin writer arriving through a check that
   reads as correct.
 
-  **f. Prunability is derived, paired.** A file containing `SessionEnd` is
-  offered as prunable; a file without one — in progress, or a killed agent per §4
-  — is **not**, and the two must be reported differently. Sabotage by offering
-  every file and observing an in-progress session listed as prunable.
+  **f. RETRACTED 2026-08-19 — prunability is not derivable from event
+  content.** This required a paired control on *"a file containing `SessionEnd`
+  is offered as prunable"*. Two controls were built, both passed throughout, and
+  both were pinning a claim the payload does not support: `SessionEnd` is not
+  terminal, and *reopenable* is always true. The obligation is withdrawn with its
+  subject, per ADR-0002 §7's rule that a retraction removes a control's subject
+  and nothing inherits the removal.
+
+  **Nothing replaces it.** A control asserting that no prunability is offered
+  would be asserting the absence of a type, which the compiler already does. And
+  see `monitor::sink`'s docs for what must **not** be built here — file-age
+  prunability — since a later reader will propose it.
 
 - **DECLARED GAP: two of the writer's four failure stages have no control.**
   *Added 2026-08-18.* `CreateSink` and `OpenFile` are controlled and paired — a

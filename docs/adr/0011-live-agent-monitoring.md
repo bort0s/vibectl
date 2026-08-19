@@ -135,6 +135,18 @@ the separator is refused inside every component so the count decides. The report
 was wrong and the code was right, which is worth recording in a document whose
 subject is claims outliving what produced them.
 
+**Round 3h (2026-08-19) finds the filename encoding is NOT INJECTIVE**, and the
+guard §7a wrote to exclude the twin writer covers one form of the hazard.
+`validate_component` refuses a literal `__` inside a component and permits a
+single `_`, so two distinct triples can form one filename at a boundary —
+constructed, with every component accepted. **`identity` is user-declared**,
+which makes one half of every such collision a choice rather than a coincidence;
+the other half needs a machine id ending in `_`, which the measured UUID and hex
+ids cannot produce **today**. The repair is a product decision with a
+user-visible refusal attached and is not taken here, with one shape refused in
+advance: widening the check to `___` and `____` is filtering invalid states
+rather than making them unrepresentable.
+
 **Round 3d (2026-08-19) refines round 3c rather than extending it, and the
 refinement changed three answers.** Reading the write path first turned out to
 decide more than the sweep did: there is **no `BufWriter`**, and `write_all`
@@ -819,6 +831,93 @@ helped, and if it had fired it would have left the destination *missing*.
 runs while Claude Code runs, so `claude doctor` was run against a settings file
 while replacements ran in a loop. **35 replacements, 0 refused.** Claude Code
 does not hold `settings.json` in a way that blocks the write.
+
+**Round 3h (2026-08-19): the filename encoding is not injective, and the guard
+that was supposed to prevent that covers one form of the hazard.** *Added
+2026-08-19.*
+
+**Constructed, not reasoned.** Two distinct triples, every component accepted by
+`validate_component`, producing one filename:
+
+```
+("sess", agent "abc_",  identity "user")   ->  sess__abc___user.jsonl
+("sess", agent "abc",   identity "_user")  ->  sess__abc___user.jsonl
+```
+
+**That is the twin writer §7a exists to make unrepresentable, arriving through
+the check that was written to exclude it.** The check refuses a component
+containing a **literal `__`** and permits a single `_`, so it covers *separator
+inside a component* and not *separator formed at a boundary*. The two-component
+form has the same defect and adds a misattribution: session `sess_` with identity
+`X`, and session `sess` with identity `_X`, both render `sess___X.jsonl`, which
+`Attribution::of` parses as `("sess", "_X")` — so one of the two writers is read
+back under a session it does not belong to.
+
+**Where `identity` comes from, since that decides whether this is
+input-reachable.** It is **user-declared**. It arrives as `--identity` in the
+hook's argv (§7a: *"the identity the hook itself declares, one per installed
+hook"*), written either by `vibe monitor install` or **by hand** — §7 permits
+hand-installed hooks explicitly, and §7a's uniqueness check exists because more
+than one identity can exist. So **one half of every collision above is chosen by
+a person**, not stumbled into.
+
+**The other half is not reachable from the ids measured today, and that is a
+property of the sample.** `session_id` is a UUID and `agent_id` is 17 hex
+characters (§2, round 3g), so neither can end in `_`. **This is exactly the
+standing this document refuses elsewhere**: the charset accepts `_` in those
+components, nothing upstream promises hex, and *"the values we have seen cannot
+trigger it"* is what round 3g's own sample note says not to lean on.
+
+**Two repair shapes, and one of them is refused now so it does not get proposed
+later.**
+
+- **Refused: widen the refusal to `___`, `____`, and so on.** That is filtering
+  invalid states rather than making them unrepresentable, and the enumeration has
+  no end — the same move ADR-0005 §10 rule 4 rejects for URLs, for the same
+  reason.
+- **Forbid `_` inside every component**, leaving `[A-Za-z0-9-]`. Then `__` cannot
+  be **formed** from component content at all, at a boundary or inside, and the
+  concatenation is injective by construction. It is the closed-allowlist move the
+  charset already is, applied one notch tighter. **The cost is real and small**:
+  an identity like `my_hook` is refused and has to be `my-hook`, which is a
+  message at install rather than a silent loss — and it is a message a
+  hand-installer sees too, because the same validation runs at write.
+- **Or make the encoding unambiguous some other way** — a length prefix, or an
+  escape — at the cost of a filename that stops being readable, which §7a values.
+
+**Not decided here.** What a component may contain is a product question with a
+user-visible refusal attached, and it is Riccardo's.
+
+**And `validate_component`'s failure direction is recorded, because today it
+reads as a guard and it is also a producer of silence.** A `session_id`,
+`agent_id` or identity outside the charset is **refused, and the event is lost**.
+§7a already says this for the `session_id` case and frames it as *"loud loss
+beats silent invention"* — loud **to the hook's stderr**, which nobody reads, and
+silent to vibe. So it belongs in the same list as the other non-delivery
+producers: **a charset that is too narrow does not corrupt anything, it deletes
+events.** n=5 on one build bounds nothing about the value space, and tightening
+the charset — which the repair above would do — moves this risk rather than
+removing it.
+
+**Separately: nothing holds `settings.json` open during a live session.** Round
+3g reported 35 replacements during a `claude doctor` run with 0 refused, and that
+had **no reachability premise** — both are short, and if the read never
+overlapped a replacement the zero was a guard never reached. The question
+underneath is better asked directly, and it was: an exclusive open
+(`FileShare.None`) was attempted every 20 ms throughout a live headless session —
+start, tool use, stop, end.
+
+| run | attempts | exclusive open succeeded | refused |
+| --- | --- | --- | --- |
+| live session | 307 | **307** | 0 |
+| **paired control** — the file held for 3 s on purpose | 89 | 1 | **88** |
+
+The control is what makes the zero reportable: the instrument **can** see a hold,
+and saw none. **A hold shorter than 20 ms would be missed**, and that is the
+open-and-close case rather than an extended one — which the replacement
+measurement already covers. So the refusal rows of the share-mode table are not
+reachable through this consumer, and install writing while an agent runs is the
+ordinary case it looked like.
 
 **And a fact that was inferred from the schema and is now measured: N hooks
 declared in ONE settings file for one event run CONCURRENTLY.** Three hooks with

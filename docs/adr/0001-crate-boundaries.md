@@ -133,7 +133,17 @@ pub struct ApplyReport { pub applied: Vec<AppliedOp>, pub skipped: Vec<SkippedOp
   1. **`FileOp` has no variant expressing "delete this path"**, which closes deletion for any call site that goes through `apply`.
   2. **The enforcement boundary is therefore not the type — it is whether a call site routes through `apply` at all.** That is a property of the source, not of the type system, and until 2026-08-19 nothing checked it.
 
-  It is checked now, continuously rather than by hand: `no_module_outside_the_primitive_mutates_the_filesystem` scans every `crates/*/src/**/*.rs` for `fs::write`, `fs::remove_file`, `fs::remove_dir_all`, `File::create` and `.truncate(true)` outside the primitive, states its own reach, asserts its premises, and is sabotage-checked. **That is the enforcement this constraint claimed to have.**
+  It is checked now, continuously rather than by hand: `no_module_outside_the_primitive_writes_or_removes_file_contents` scans every `crates/*/src/**/*.rs`, states its own reach, asserts its premises, and is sabotage-checked. **That is the enforcement this constraint claimed to have.**
+
+  **The pattern is wider than the claim, deliberately.** *Amended 2026-08-19.* Its first version enumerated five patterns — `fs::write`, `fs::remove_file`, `fs::remove_dir_all`, `File::create`, `.truncate(true)` — which made it **an inverted allowlist that did not say so**: it proved the absence of those five, not the absence of mutation. `OpenOptions` with `.write(true)`, `fs::rename`, `fs::copy`, `fs::set_permissions`, symlink creation and `use std::fs as f` all passed it, and constraint 2 rested on it. It matches **every** `fs::`, `File::` and `OpenOptions` now and allows back by name, because a false positive costs one line and a false negative cost `Cache::save` surviving from P0. All four of those previously-invisible patterns are sabotage-checked red.
+
+  **Three allowlists, each with its size asserted**, so none can grow quietly — which is the failure an allowlist exists to replace:
+
+  1. **Reads** (7): `read`, `read_to_string`, `read_dir`, `read_link`, `metadata`, `symlink_metadata`, `canonicalize`, plus `File::open`. Allowed by name because the property is in the function, not the caller.
+  2. **Mutations that cannot destroy** (1): `create_dir_all`. It adds directories, cannot truncate or remove, and fails rather than replacing when a file is in the way. **This is where *mutating* and *destroying* separate**, and the control is named for the second because that is what constraint 2 is about.
+  3. **By design** (1): `monitor::writer`, which is what `vibe monitor hook` runs — a separate process spawned by Claude Code, appending to a sink vibe manages (ADR-0011 §7a). It never truncates, never removes, and never touches a file a user wrote. A second member here is §3a's revisit trigger firing.
+
+  **And the excluded regions are bounded rather than merely named.** `benches/` does not exist and the control **asserts that**, so adding one turns red and asks to be extended. `examples/` is excluded for the same reason tests are — an example is a fixture and is not installed — and **its size is asserted**, so it cannot become somewhere real code hides. `src/prompts/tests.rs` is excluded because an ancestor gates it with `#[cfg(test)]`, proved by walking the module chain rather than by trusting the filename, with the count of such files asserted.
 
 ### 3a. DEFECT: every write passed through a zero-byte state, from P0 until 2026-08-19
 

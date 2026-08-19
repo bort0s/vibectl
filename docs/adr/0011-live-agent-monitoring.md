@@ -107,6 +107,23 @@ is §4's *"the last event is never terminal"* arriving at retention, where
 it is recorded as a defect with a decision attached rather than repaired in
 passing.
 
+**Round 3f (2026-08-19) found the destructive window where nobody had been
+looking: vibe's own `apply`.** `FileOp::UpdateFile` wrote through
+`std::fs::write`, which truncates before writing, so the target was observably
+**zero bytes** part way through — a window that exists **by construction**, not
+a race. Three rounds had gone into whether a killed hook could tear a record in
+a sink that appends and whose reader tolerates damage, while this sat in the
+path that rewrites a file **vibe does not own** for a reader with no tolerance
+at all. Repaired with a temp file beside the target and a rename over it,
+measured with a paired control that catches the truncating path mid-replacement.
+It repairs the manifest write too, which had the same window since ADR-0001.
+
+**And round 3e's proposed repair was checked before being built, which killed
+it.** *Ended at least once, reopenable* carries no information, because
+`reopenable` is always true — a session two hours old resumed from a different
+directory. So prunability is **not derivable from event content at all**, which
+is a simpler and stronger finding than a third variant.
+
 **Round 3d (2026-08-19) refines round 3c rather than extending it, and the
 refinement changed three answers.** Reading the write path first turned out to
 decide more than the sweep did: there is **no `BufWriter`**, and `write_all`
@@ -629,6 +646,104 @@ earlier. A rule that multiplies *the maximum* therefore multiplies whichever
 mode the run sampled. The controls take **one untimed warm-up** and time the
 steady state, printing the discarded number rather than hiding it; whether the
 rule should name the cold mode instead is recorded in §7b as open.
+
+**Round 3f (2026-08-19): the destructive window was in vibe's own `apply`, and
+three rounds of tearing work had been aimed at the wrong file.** *Added
+2026-08-19.*
+
+**`FileOp::UpdateFile` wrote through `std::fs::write`**, which is `File::create`
+plus `write_all` — and `File::create` **truncates before any byte is written**.
+So there was a window where the target is **zero bytes**, and unlike the kernel
+window this document sampled 35 times without finding, **this one exists by
+construction**: not a race that might not happen, a state the sequence passes
+through every time.
+
+**The asymmetry is the finding.** Rounds 3c to 3e went into whether a killed
+hook could tear a record in vibe's **own sink**, where the writer appends, the
+reader tolerates damage, and every whole record before the damage survives.
+None of that transfers to `apply`: it rewrites files whose readers have no
+tolerance at all — `.claude/settings.json` is read by a strict JSON loader — and
+one of them is a file **vibe does not own**. Hard constraint 2 is not *"there is
+no `FileOp::Delete`"*; the absent variant is how the constraint is **enforced**,
+and the constraint is **never destructive**. A zero-byte `settings.json` is
+destructive on any reading.
+
+**Repaired by writing to a temporary file beside the target and renaming over
+it**, and **measured rather than read off documentation** — *"rename is atomic"*
+is exactly the class of cross-platform claim that died on contact with
+measurement in ADR-0002 §7. A reader spins on the target through 400
+replacements and reports every distinct state it sees:
+
+| write mode | states observed |
+| --- | --- |
+| `std::fs::write` | `Empty`, `WholeOld`, `WholeNew` |
+| temp + rename | `WholeOld`, `WholeNew` |
+
+**The negative half is what licenses the positive one.** A reader too slow to
+catch anything reports a clean sweep too, so the identical reader runs against
+the truncating path and **must** catch it mid-replacement. It does — `Empty`.
+Both run in the ordinary test job, so this is carried on all three platforms.
+
+**Beside the target, not in the system temp directory**, and that is
+load-bearing: a rename across volumes is a copy plus a delete, which puts the
+window back and adds a delete to a tool that has none. Asserted by watching the
+directory during the write rather than by reading the implementation. **What it
+does not promise is durability** — there is no `fsync`, so a power failure can
+still lose the new contents; what it cannot do is leave the target empty or half
+written.
+
+**This also repairs the manifest path**, which had the same window and has had
+it since ADR-0001. Recorded because the editor is what made anyone look.
+
+**PRUNABILITY IS NOT DERIVABLE FROM EVENT CONTENT AT ALL, and the third state
+would have carried no information.** Round 3e found `SessionEnd` is not terminal
+and proposed *ended-at-least-once, reopenable* as the repair. Checked before
+building it, which is the right order: **`reopenable` is always true.** A
+session that had already emitted `SessionEnd` was resumed minutes later; a
+different session **two hours old** was resumed **from a different working
+directory**, with its `session_id` preserved and no error. Nothing in the
+payload bounds it — the one `SessionEnd.reason` observed is `"other"`, and the
+value set is unenumerated.
+
+So a variant whose predicate is always true distinguishes nothing, and the
+honest finding is the simpler one: **whether a file will receive more records is
+not a function of the events in it.** Prunability has to come from somewhere
+else — file age, or an explicit user action — or not be offered.
+
+**The cost bound is structural, not situational, and the reason for the repair
+is constraint 5.** *Corrected: round 3e said "nothing renders it yet", which
+makes the bound depend on §8 staying open.* The real bound is that **no
+`FileOp::Delete` exists**, so nothing vibe can do can delete a record whatever
+the label says. The repair is owed anyway, because the label **claims what it
+does not know** — and that survives §8 shipping, where *"nothing renders it"*
+would not.
+
+**The editor's own output was run end to end, into an existing file.** §2's
+round 3d validated a **hand-written** group; the editor generates one, and those
+are different artifacts. Against a 4-space `settings.json` already carrying a
+user's own `PreToolUse` hook: the editor installed, **preserved the 4-space
+indent**, left the user's hook intact, and the loader accepted it with no
+complaint. A live session then delivered **all five lifecycle events** through
+the real `vibe monitor hook` binary into the sink — and the three-part filename
+key separated them for the first time against a real agent, producing
+`<session>__user.jsonl` beside `<session>__<agent_id>__user.jsonl`.
+
+**The cold-start number is kept rather than discarded.** *Corrected.* Calling it
+a warm-up attributed it to the build; the cause is a **cold page cache**, which
+recurs after a reboot or after the binary has sat unused — and `SessionStart` is
+exactly where that lands. It is also the sample CI is best at: **every job builds
+and then runs, so the first invocation in CI is always the cold one**, one clean
+sample per push per platform. It is excluded from the steady-state population,
+**asserted against a loose tripwire, and printed**, so the distribution
+accumulates. Reproduced at **1.20 s** and **1.27 s** on `win32-x64`, debug, a
+5.6 MB binary; release differs in size and has not been measured.
+
+**And two counts of "how many tests" disagreed, so both were measured.**
+`cargo test --workspace` prints one `test result:` line per **binary** — 25
+integration targets plus 2 lib-unittest binaries plus 1 doc-test binary — while
+`control_inventory.rs` counts **integration-test targets excluding itself**.
+Neither was wrong; the report that put 28 beside 24 was. Measure the tool with
+the tool.
 
 **And a fact that was inferred from the schema and is now measured: N hooks
 declared in ONE settings file for one event run CONCURRENTLY.** Three hooks with
@@ -1905,6 +2020,37 @@ re-sorting the keys of a file it does not own. That control was **red before the
 flag and green after**, which is what establishes it tests the flag rather than
 the crate.
 
+#### How the write lands, and the `--dry-run` that precedes it
+
+*Added 2026-08-19. The editor produced text for four rounds and nobody asked how
+the text reached the disk — which is where the only genuinely destructive act in
+this tool lives.*
+
+**The route is `FileOp::UpdateFile` through `Registry::apply`**, so nothing new
+mutates the filesystem (ADR-0001 §3) and `--dry-run` is `plan_*()` plus render.
+`UpdateFile` carries `before` and `after`, so the diff a user sees is the real
+one — which is what makes the sniffing residuals in this section an **output**
+rather than a blocker: mixed indentation and mixed line endings both surface as
+a diff before anything is written.
+
+**`apply` replaces atomically now, and it did not before.** `std::fs::write`
+truncates before writing, so the target was observably **zero bytes** part way
+through — measured, with a paired control catching it (§2, round 3f). The write
+goes to a temporary file **beside the target** and renames over. Same volume, so
+the rename is a rename rather than a copy-plus-delete.
+
+**What it does not promise:** durability. No `fsync`. A power failure can lose
+the new contents; it cannot leave the file empty or half written. Stated because
+*"atomic"* is a word that invites the stronger reading.
+
+**A refusal happens before anything opens for writing.** The parse is the first
+step and an unparseable file never reaches the write, which matters because the
+syntactic case is the likely one: users edit this file by hand, and §7 measured
+the loader refusing comments and trailing commas. Controlled against the **bytes
+on disk** rather than against a `Result` — *"parse returned an error"* and
+*"nothing was written"* are different claims and only the second is the one that
+reaches somebody's config.
+
 #### Events: the lifecycle five, and the rest deferred with a reason
 
 **Installed: `SessionStart`, `SessionEnd`, `SubagentStart`, `SubagentStop`,
@@ -1982,9 +2128,26 @@ reports on **all three platforms** rather than on the one every other
 measurement here was taken on. On `windows/x86_64` in the test profile: min
 **11.7 ms**, median **22.8 ms**, max **37.5 ms**.
 
-**The rule, stated so it re-derives when the other two platforms report:**
-`timeout` is **100× the largest cold-start maximum across the three platforms,
-rounded up to a whole second, with a floor of 5 s.** At 37.5 ms that is 3.75 s,
+**The rule has TWO TERMS with different subjects, and the first draft
+conflated them.** *Corrected 2026-08-19.* Cold start is bimodal (§2, round 3e),
+so *"the maximum"* was whichever mode the run sampled:
+
+- **A multiplier over the STEADY-STATE maximum** — catches gradual regression in
+  what the hook does.
+- **A floor over the COLD-MODE maximum, with a stated margin** — catches the
+  paging case, which is where `SessionStart` lands.
+
+**The floor is currently inherited rather than derived, and that is recorded as
+a debt.** 5 s covers the 1.20–1.27 s cold measurements at about 4×, but the 5
+was chosen before those numbers existed. The multiplier has never bound, so the
+floor has carried the whole load without anybody deriving it for that job. It is
+derived from the cold distribution once CI has more than two samples on more
+than one platform, and **the margin is recorded as chosen rather than inherited**
+when it is. If it lands back on 5 s, good — but it will have been derived.
+
+**So the rule as it stands:** `timeout` is **100× the largest steady-state
+maximum across the three platforms, rounded up to a whole second, with a floor
+of 5 s** — the floor provisional per the paragraph above. At 37.5 ms that is 3.75 s,
 so the floor decides and the value is **`timeout: 5`**. It is not a performance
 budget: almost all of the measured time is process startup, and the multiple is
 there to survive a cold, loaded, virus-scanned machine that no benchmark here
@@ -2452,6 +2615,45 @@ that leave it say where they went.*
   bytes**, not on a constant in the source: what ships is what install writes.
   Paired against a fixture that does declare `async: true` and is observed
   losing the record, so the control's premise is exercised rather than assumed.
+
+- **The atomic replacement needs its negative half, and that half is the
+  control.** *Added 2026-08-19.* A reader spinning on a target through many
+  replacements and seeing only whole contents proves nothing on its own: a
+  reader too slow to catch anything reports exactly that. So the **identical**
+  reader runs against `std::fs::write` and **must** catch it between the
+  truncate and the write. It does — `Empty` — and that is what licenses the
+  clean sweep beside it. `the_truncating_write_is_caught_mid_replacement` and
+  `a_replace_is_never_observed_partial`, both in the ordinary test job, so the
+  claim is three-platform rather than read off documentation.
+
+  **And a third asserts the temp file lands beside the target**, by watching the
+  directory rather than by reading the implementation — a rename across volumes
+  is a copy plus a delete, which puts the window back.
+
+- **DECIDED, and it replaces the third-state proposal: prunability is not
+  derivable from event content.** *Added 2026-08-19.* Round 3e proposed *ended
+  at least once, reopenable*. Checked before building: **`reopenable` is always
+  true** — a session two hours old was resumed from a different directory, and
+  nothing in the payload bounds it. A variant whose predicate is always true
+  distinguishes nothing. So control (f) is asserting a claim the payload cannot
+  support, and what replaces it has to come from outside the events — file age,
+  or an explicit user action — or prunability is not offered at all.
+
+  **The cost is bounded structurally rather than by §8 staying open**: no
+  `FileOp::Delete` exists, so nothing can act on a wrong label. The repair is
+  owed because the label **claims what it does not know**, which is constraint 5
+  — and that reason survives a display shipping, where *"nothing renders it"*
+  would not.
+
+- **The trigger says what it does not measure.** *Added 2026-08-19, and the
+  definition is deliberately unchanged.* ADR-0008 §9's gate measures the
+  **skip-path hazard**: controls that depend on an external tool and can
+  silently skip when it is missing. That is a real hazard and the number is a
+  fair proxy for it. It has never measured *"how many controls exist"*, and two
+  rounds of controls landing outside it made that look like a fault in the gate
+  rather than a fault in the reading. **Nobody should read 5 of 7 as "controls
+  are stable."** Both numbers are printed in one invocation; only the second is
+  a gate.
 
 - **The measurement instruments are ON-DEMAND, and that is a capability rather
   than a proof.** *Added 2026-08-19.* `scratchpad/hook-{collect,fixture,probe,

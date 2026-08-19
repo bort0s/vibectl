@@ -46,11 +46,13 @@
 //!   and that asymmetry is the point.** *Amended 2026-08-19.* A `#[cfg(test)]`
 //!   item is excluded **structurally**: it is not compiled into the library a
 //!   user links, so it cannot be the tool mutating anything. An example is
-//!   excluded on a **judgement about its content** — `scan_bench.rs` builds a
-//!   synthetic corpus for a benchmark, which is a fixture *today*. Nothing
-//!   structural stops an example from doing real work tomorrow. So the
-//!   **file count** is asserted below, and a new `examples/anything.rs` turns
-//!   this red and forces the judgement to be re-made rather than inherited.
+//!   excluded on a **judgement about its content**, and nothing structural stops
+//!   an example from doing real work tomorrow. So each one is listed in
+//!   [`EXAMPLES`] **with the reason it is excluded**, and the directory must
+//!   match that list exactly — a new example turns this red until somebody makes
+//!   the call about it. Only one of them mutates outside the primitive
+//!   (`scan_bench.rs`, a benchmark fixture builder); the other two invoke
+//!   `write_atomically`, which is the shipped path rather than a second one.
 //! - `crates/*/benches/` — **there are none, and that is asserted**, so the day
 //!   somebody adds one this turns red and asks to be extended rather than
 //!   silently not covering it.
@@ -108,6 +110,40 @@ const HARMLESS_MUTATIONS: [&str; 1] = ["fs::create_dir_all"];
 /// [`a_second_append_does_not_replace_the_first`] — source and effect, in that
 /// order of authority.
 const BY_DESIGN: [&str; 1] = ["writer.rs"];
+
+/// Every file under `crates/*/examples/`, **with the judgement that excludes
+/// it**, because a count is not a judgement.
+///
+/// *Changed 2026-08-19 from a bare count of 2, which the rebase promptly turned
+/// red — correctly: a third example arrived and the assertion said "this number
+/// moved" rather than "make the call about this file". The number was the thing
+/// being asserted, and the number was never the point.*
+///
+/// Examples are excluded on a **judgement about content**, not structurally the
+/// way `#[cfg(test)]` is (see the module docs). So the judgement is written down
+/// per file and the directory has to match this list exactly — a new example
+/// fails until somebody adds it here, which is the judgement being made rather
+/// than inherited.
+const EXAMPLES: [(&str, &str); 3] = [
+    (
+        "atomic_replace_once.rs",
+        "one call to `write_atomically` — it EXERCISES the primitive rather than \
+         reimplementing a write, which is what an example touching the \
+         filesystem has to do to stay excluded",
+    ),
+    (
+        "emit_install_settings.rs",
+        "reads a settings file, installs into it and writes back through \
+         `write_atomically` — the shipped path, invoked, not a second one",
+    ),
+    (
+        "scan_bench.rs",
+        "builds a synthetic corpus for a benchmark with direct `fs::write`, \
+         `create_dir_all` and `rename`. A FIXTURE BUILDER, the same class as a \
+         test that plants files — and the only member here that mutates \
+         outside the primitive, which is why the exclusion is a judgement",
+    ),
+];
 
 fn workspace_crates() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -387,18 +423,22 @@ fn no_module_outside_the_primitive_writes_or_removes_file_contents() {
     }
 
     // Premise seven: the excluded `examples/` region is BOUNDED.
-    let examples: Vec<PathBuf> = std::fs::read_dir(workspace_crates())
+    let mut found: Vec<String> = std::fs::read_dir(workspace_crates())
         .expect("readable")
         .flatten()
         .flat_map(|c| rs_files_under(&c.path().join("examples")))
+        .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(str::to_owned))
         .collect();
+    found.sort();
+    let mut judged: Vec<String> = EXAMPLES.iter().map(|(n, _)| (*n).to_owned()).collect();
+    judged.sort();
     assert_eq!(
-        examples.len(),
-        2,
-        "the number of files under `examples/` changed: {examples:?}. They are \
-         excluded on a JUDGEMENT ABOUT CONTENT — today's is a benchmark fixture \
-         — not structurally the way `#[cfg(test)]` is. A new one has to have \
-         that judgement made about it rather than inheriting it"
+        found, judged,
+        "the set of files under `examples/` is not the set that has been judged. \
+         They are excluded on a JUDGEMENT ABOUT CONTENT — not structurally the \
+         way `#[cfg(test)]` is — so a new one has to have that judgement made \
+         about it and written into `EXAMPLES`, rather than inheriting an \
+         exclusion somebody else earned."
     );
 
     let mut offenders: Vec<String> = Vec::new();

@@ -147,3 +147,66 @@ fn the_number_of_require_gated_controls_is_below_the_revisit_trigger() {
             .join("\n")
     );
 }
+
+/// **The gate's numerator and the number of controls have come apart, and this
+/// prints both so the divergence is visible where the gate is.**
+///
+/// *Added 2026-08-19.* ADR-0008 §9's trigger counts **integration-test targets
+/// gated on a `VIBE_REQUIRE_*` variable**, and that marker has one job: turn a
+/// *missing external tool* into a failure instead of a skip. Two rounds running,
+/// real controls have landed — the reader's damaged-file behaviour, the
+/// cold-start measurement, the settings edit, the structural write-path guards —
+/// and the gated count has not moved, because **none of them needs `git` or
+/// `gh`, so none of them has a skip path to close.** Gating them would be
+/// wearing the marker rather than using it.
+///
+/// So the proxy has come loose from the thing the trigger was reaching for, and
+/// *"is a reviewer still holding the whole argument?"* is no longer answered by
+/// the number the gate watches. **That is a definition change, which is not
+/// this file's to make.** What this file can stop is the divergence being
+/// invisible: the total is derived and printed beside the gated count, in the
+/// same invocation, so a round that adds five controls and moves the gate by
+/// zero says so in CI rather than in a report.
+///
+/// The total is **derived, never written down** — the same rule the gated count
+/// already follows, and for the same reason: a number maintained by hand drifts
+/// inside a single commit window.
+#[test]
+fn the_total_control_count_is_reported_beside_the_gated_one() {
+    let targets = integration_test_targets();
+    assert!(
+        targets.len() > 5,
+        "the corpus search found {} targets, so this is not a count",
+        targets.len()
+    );
+
+    let mut total = 0usize;
+    let mut gated_targets = 0usize;
+    for path in &targets {
+        let src = std::fs::read_to_string(path).expect("a test target is readable");
+        total += src
+            .lines()
+            .filter(|l| l.trim_start().starts_with("#[test]"))
+            .count();
+        if src.contains(MARKER) {
+            gated_targets += 1;
+        }
+    }
+
+    // The premise: `#[test]` still identifies a control here. A harness change
+    // would take this to zero and the print below would read as "no controls".
+    assert!(
+        total > 50,
+        "found only {total} `#[test]` items across {} targets, so this is \
+         counting something other than controls",
+        targets.len()
+    );
+
+    println!(
+        "controls: {total} `#[test]` items across {} integration targets; \
+         {gated_targets} of those targets are {MARKER}-gated, and ADR-0008 §9's \
+         trigger is {TRIGGER_AT} gated targets. The two numbers measure \
+         different things and only the second is a gate.",
+        targets.len()
+    );
+}

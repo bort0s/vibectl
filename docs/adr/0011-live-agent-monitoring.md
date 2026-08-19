@@ -89,6 +89,35 @@ costs the rest of the sink — is Rust and runs on all three in CI. The half tha
 needs a live agent session cannot, and §9 says so rather than leaving the
 register reading as if these were properties of the tool.
 
+**Round 3d (2026-08-19) refines round 3c rather than extending it, and the
+refinement changed three answers.** Reading the write path first turned out to
+decide more than the sweep did: there is **no `BufWriter`**, and `write_all`
+issues **one** `write` call at every size to 64 MiB, so the user-space window a
+kill could tear a record in **does not exist** — a structural answer that
+outranks any amount of sampling. The kill sweep's positive control was a
+**static** truncated file where the target is a **live** one, so it controlled
+the classifier and not the observer; a live half-write now shows the observer
+resolving a 30-of-60-byte state, which is what makes the zeros about the
+subject. And *"never sampled inside"* was an unfinished measurement rather than
+a limit: fifteen further kills at 1 ms steps straddle the transition and none
+tore. The 4 KB row is relabelled **unreached** — every kill landed before a byte
+hit disk, so it was a guard never exercised, and the realistic size is covered
+by the structural argument instead.
+
+**One field measurement blocked install and is now cleared, on the right
+class.** `matcher: "*"` had been measured on a **tool** event, where a matcher
+filters tool names; install writes lifecycle events, where it filters something
+else or nothing. Re-measured on all five inside install's own group: it fires,
+1:1 against a no-matcher control. **`shell: false` is not expressible** — the
+field is a string enum and the loader refuses it per hook — so `shell`'s default
+is closed by writing `args`, not by writing `shell`, and §9's platform limit is
+reworded from a live risk to a finding install does not depend on.
+
+**And `File::flush` was measured to do nothing** — ~0 ns against `sync_all`'s
+~90 µs — so `WriteStage::Flush` is a branch that **cannot be taken**. §9's
+declared gap said it was hard to induce. Whether to delete the variant or keep
+it as a declared dead branch is recorded as a decision rather than taken.
+
 ## Context
 
 The feature is seeing which Claude Code instances are running, what they are
@@ -402,6 +431,115 @@ So `matcher` has a written value meaning *do not suppress* and `if` does not —
 worst of the three possible answers: not a syntax error anyone would see, just
 silence. `if` is therefore the one residual omission-dependency (§7b), and its
 failure direction is suppression.
+
+**Round 3d (2026-08-19): the write path read before the measurement was refined,
+and it decides more than the sweep did.** *Added 2026-08-19. Three of round 3c's
+statements were weaker than they read, and this is the repair.*
+
+**The syscall shape, from the code and then measured.** `Writer::append` opens
+with `OpenOptions::new().append(true).create(true)`, which yields a bare
+`std::fs::File`. **There is no `BufWriter` anywhere in the path.** It then calls
+`write_all` once and `flush` once. `write_all` loops over `Write::write` until
+the buffer is consumed, so the question that decides whether a record can be
+torn **in user space** is whether one `write` takes the whole buffer.
+
+Measured on `windows/x86_64`, one call each:
+
+| bytes asked | accepted by ONE `write` | `write_all` calls |
+| --- | --- | --- |
+| 327 (a real record) | 327 | **1** |
+| 4 KiB | 4 KiB | **1** |
+| 64 KiB | 64 KiB | **1** |
+| 1 MiB | 1 MiB | **1** |
+| 16 MiB | 16 MiB | **1** |
+| 64 MiB | 64 MiB | **1** |
+
+**So `write_all` never looped, and the user-space window a kill could land in
+does not exist at any size tried.** That is a structural answer and it outranks
+the sampling: making the state unrepresentable beats filtering for it, which is
+the same move as the missing `FileOp::Delete`. What it does **not** settle is
+whether the kernel can leave a single `WriteFile` partially applied when the
+process is terminated — that is the residual, and the sweep below is what
+addresses it.
+
+**`File::flush` does nothing, and that makes `WriteStage::Flush` unreachable
+rather than untested.** Measured against a call known to issue a syscall:
+`flush` costs **~0 ns** per call over 100,000 calls; `sync_all` costs **~90 µs**.
+With no user-space buffer in the path there is nothing for it to flush. §9's
+declared gap records `Append` and `Flush` together as *"cannot be induced from
+this machine"*; for `Flush` that reason is wrong — it is not hard to induce, it
+**cannot occur**. Whether the right repair is to delete the variant, making the
+unreachable state unrepresentable as this document does elsewhere, or to keep it
+as a declared dead branch, is a decision rather than a detail.
+
+**The positive control for the kill sweep was STATIC and the target is LIVE.**
+*This is the correction that mattered.* Round 3c's control was a file truncated
+on purpose — held open by nobody. The target is a file a live process is
+mid-write on, and on NTFS an observer may see a cached view, be denied, or see
+the size update only at completion. The control proved the **classifier**
+recognises a torn file; it proved nothing about whether the **observer** can see
+one being made, and a blind observer produces the same clean sweep a healthy one
+does.
+
+**Measured with a known live input, and the observer is not blind.** A separate
+process appends 30 of a 60-byte record, holds the handle open, waits, then
+writes the rest. During the hold the observer reads **30 bytes, not whole**;
+after the writer exits it reads **60 bytes, whole**. Paired in both directions,
+so *"sees half"* is not satisfied by an observer that reports half
+unconditionally. The sweep's zeros are therefore about the subject.
+
+**The window is now finished rather than declared.** Round 3c filed *"never
+sampled inside"* as a limit; it was an unfinished measurement, and the untested
+part was 15 ms wide. Fifteen further kills at **1 ms** steps across 231–245 ms
+straddle the transition — the boundary jitters, with complete records at 232,
+238, 240, 241 and 243–245 and nothing on disk between them — and **not one
+produced a partial file**.
+
+| fixture | kills landing on a live process | nothing | whole | torn |
+| --- | --- | --- | --- | --- |
+| 4 KB, 5 ms | 6 | 6 | 0 | **unreached** |
+| 64 MB, 180–700 ms coarse | 20 | 10 | 10 | 0 |
+| 64 MB, 231–245 ms at 1 ms | 15 | 8 | 7 | 0 |
+
+**The 4 KB row is relabelled: it is unreached, not a zero.** All six kills landed
+before any byte hit disk, so the fixture never reached the window and a zero
+there is a guard never exercised. 4 KB is near the real record size, so **the
+realistic size is not measured for tearing at all** — it is covered instead by
+the structural argument above, which is the stronger of the two and does not
+depend on hitting a window.
+
+**A match-all `matcher` holds on the lifecycle five, measured on the class
+install writes.** Round 3c measured `matcher: "*"` on a **tool** event, where a
+matcher filters tool names; on `SessionStart` it filters something else or
+nothing. Installing against the first while shipping the second is a control
+proving one hazard class and shipping against another. Re-measured inside the
+group install writes, one session that spawns a subagent, paired against a
+no-matcher group in the same file:
+
+| event | no matcher | `matcher: "*"` |
+| --- | --- | --- |
+| `SessionStart` | 1 | **1** |
+| `SessionEnd` | 1 | **1** |
+| `SubagentStart` | 1 | **1** |
+| `SubagentStop` | 1 | **1** |
+| `Stop` | 1 | **1** |
+
+The loader also accepts a matcher on all five with no complaint — recorded
+separately, because silent acceptance and silent non-match are the same
+observable from outside and only the firing table separates them.
+
+**`shell` has no value meaning *no shell*, and `shell: false` is refused.**
+Measured from the schema — `shell` is a string enum of `"bash"` and
+`"powershell"` — and from the loader, which reports *"Invalid value. Expected
+one of: bash, powershell"* per hook. **So `shell`'s default is closed by writing
+`args`, not by writing `shell`**, and the dependency install carries is on the
+exec form. Unlike `if: "*"`, this failure is loud.
+
+**And the whole hook install will write was run end to end.** One group carrying
+`matcher: "*"`, `once: false`, `async: false`, `asyncRewake: false`,
+`timeout: 5` in the `args` exec form: **accepted by the loader with no
+complaint, and fired on all five events, 1:1 against a bare control in the same
+file.** `asyncRewake: false` is accepted alongside `async: false`.
 
 **And a fact that was inferred from the schema and is now measured: N hooks
 declared in ONE settings file for one event run CONCURRENTLY.** Three hooks with
@@ -1650,6 +1788,14 @@ project keeps refusing:
 - **Mixed indentation** — the sniffer takes the **first** indented line, which
   may not represent the file. Measured: a 2-space file with one tab-indented
   line sniffs as tab, and would then be rewritten whole.
+- **Mixed line endings** — the newline sniff takes the first occurrence in
+  exactly the same way and carries exactly the same residual. A file with both
+  `
+` and `
+` in it is normalised to whichever appears first, and the
+  other lines are rewritten. Declared beside the indentation residual because
+  the two are one heuristic applied twice, and declaring only one of them would
+  read as if the other had been checked.
 
 Both land in `--dry-run`'s diff before anything is written, which is what
 constraint 2 is for and why neither is a blocker.
@@ -1690,28 +1836,82 @@ correctly registered.
 
 #### Install writes every field it depends on, explicitly
 
-**Decided 2026-08-19.** The emitted hook carries `type`, `command`, `args`,
-`matcher: "*"`, `shell: false`… — every property whose default install would
-otherwise be relying on, written out. **This is not verbosity, it deletes a
-dependency.** Otherwise install's correctness rests on four measured defaults
-staying put across upstream releases, with nothing watching them, which is
-ADR-0005 §10 rule 4a's untriggered channel pointed straight at delivery.
+**Decided 2026-08-19, corrected the same day once the field types were read.**
+The emitted hook carries, in one group of its own:
 
-Two of the seven cannot be closed that way, and the measurement separated them:
+```json
+{ "matcher": "*",
+  "hooks": [ { "type": "command", "command": "<vibe>", "args": [ … ],
+               "once": false, "async": false, "asyncRewake": false,
+               "timeout": 5 } ] }
+```
 
-- **`matcher` CAN be closed.** `matcher: "*"` fires for every tool, measured
-  against a no-matcher control (§2, round 3c). So install writes it.
-- **`if` CANNOT.** No value meaning *do not suppress* was found. `if: "*"` is
-  **accepted by the loader and fires nothing** — not a syntax error anyone would
-  see, just silence.
+**This is not verbosity, it deletes a dependency.** Otherwise install's
+correctness rests on measured defaults staying put across upstream releases with
+nothing watching them, which is ADR-0005 §10 rule 4a's untriggered channel
+pointed straight at delivery.
 
-**`if` is therefore the one residual omission-dependency, registered as exactly
-that, with its failure direction.** Omission is permissive today, so the failure
-mode is **suppression**: a default that changed would silently stop delivery.
-§6 already forbids the reading that hides it — absence of events is not a state,
-so a suppressed hook must render as unknown rather than as an idle agent. It is
-also the reason §9's prohibition on testing defaults is scoped rather than
-blanket.
+**Measured end to end before being written down:** that exact group is accepted
+by the loader with no complaint and **fires on all five lifecycle events**, 1:1
+against a bare control in the same file (§2, round 3d). `asyncRewake: false` is
+accepted alongside `async: false`, which was the condition attached to writing
+it, so it is written rather than registered.
+
+**`matcher: "*"` was blocked and is now cleared, on the right class.** The first
+measurement was on a **tool** event, where a matcher filters tool names; on
+`SessionStart` it filters something else or nothing at all. Installing against
+that would have been a control proving one hazard class and shipping against
+another — and if `"*"` had not matched, the hook would never fire, which is
+exactly §6's suppressed-hook observable written into the config by install
+itself. Re-measured on the lifecycle five inside install's own group: it fires.
+
+**`shell` is NOT written, and the reason is a correction rather than an
+omission.** `shell` is a string enum of `"bash"` and `"powershell"` — **there is
+no value meaning *no shell***, and `shell: false` is refused by the loader per
+hook. What closes it is `args`: with the exec form present, `shell` written and
+`shell` omitted produce byte-identical argv (§2, round 3b). **So the dependency
+install carries here is on `args`, which it writes**, and it is recorded as that
+rather than as a dependency on `shell`'s default.
+
+**`if` remains the one residual omission-dependency.** No value meaning *do not
+suppress* exists — `if: "*"` is accepted by the loader and fires nothing, which
+is the silent failure `shell: false`'s loud one is not. Omission is permissive
+today, so the failure direction is **suppression**, and §6 forbids rendering
+that as an idle agent. It is also the one exclusion from §9's prohibition on
+testing upstream defaults.
+
+#### The `timeout` value comes from a measurement, and the rule outlives the number
+
+**Decided 2026-08-19.** The dependent that blocked this — the fear that a torn
+line would darken a whole sink read — is resolved: it does not, and the control
+saying so runs on three platforms.
+
+**Measured input.** `a_cold_hook_invocation_is_measured_and_reported_per_platform`
+times the whole invocation as Claude Code experiences it — spawn, `clap` parse,
+stdin read, append, exit — over ten cold runs, in the ordinary test job, so it
+reports on **all three platforms** rather than on the one every other
+measurement here was taken on. On `windows/x86_64` in the test profile: min
+**11.7 ms**, median **22.8 ms**, max **37.5 ms**.
+
+**The rule, stated so it re-derives when the other two platforms report:**
+`timeout` is **100× the largest cold-start maximum across the three platforms,
+rounded up to a whole second, with a floor of 5 s.** At 37.5 ms that is 3.75 s,
+so the floor decides and the value is **`timeout: 5`**. It is not a performance
+budget: almost all of the measured time is process startup, and the multiple is
+there to survive a cold, loaded, virus-scanned machine that no benchmark here
+resembles.
+
+**The cost runs in both directions and both are stated.** The hook is
+**blocking** — measured, since `async` omitted or false makes the session wait
+(§2, round 3b) — so `timeout` is the ceiling on how long **one wedged hook can
+stall the agent**, per event. Install writes five events, and `Stop` fires per
+turn, so a wedged hook costs up to `timeout` **per occurrence** rather than once
+per session. Larger is safer against losing a record; smaller is safer against
+stalling somebody's work. Five seconds against a 37.5 ms measurement is a
+factor of 133, and it is chosen deliberately toward not losing the record,
+because §7a already decided that an observer that can stop the subject is not
+one — the *stall* is the failure this trade must not make routine, and a hook
+that hangs at all is already a fault.
 
 #### The hazard is a killed hook, not the `async` field
 
@@ -1964,6 +2164,46 @@ that leave it say where they went.*
   than left to read as coverage, since four variants with two controls look
   uniform from outside.
 
+- **AMENDED: `Flush` is unreachable, not merely uninducible, and the gap above
+  says the wrong thing about it.** *Added 2026-08-19.* The bullet records
+  `Append` and `Flush` together as *"cannot be induced from this machine
+  deterministically"*. Measured (§2, round 3d): there is **no `BufWriter`** in
+  the write path, and `File::flush` costs **~0 ns** per call against
+  `sync_all`'s ~90 µs — a call known to syscall, used as the pair so *"fast"* is
+  measured rather than assumed. With no user-space buffer there is nothing to
+  flush, so `WriteStage::Flush` is a branch that **cannot be taken**, not one
+  that is hard to reach.
+
+  That is a different kind of gap and it has a different repair. **Deleting the
+  variant** makes the unreachable state unrepresentable, which is this
+  document's move everywhere else — the missing `FileOp::Delete`, `HookExit`
+  having no `2`, `agent_id`'s absence encoded structurally. **Keeping it** as a
+  declared dead branch is defensible if a future write path grows a buffer. It
+  is a decision, and it is recorded here rather than taken, because a variant
+  that can appear in a record and never will is a value some reader will one day
+  try to explain.
+
+  `Append`'s half of the gap is unchanged in status and better understood:
+  §2's round 3d measured `write_all` issuing **one** `write` call at every size
+  up to 64 MiB, so there is no user-space window between partial writes; what
+  remains is a full volume, which is still not constructible in a temporary
+  directory.
+
+- **The cold-start measurement is a control, and it is the one number in this
+  document that comes from all three platforms.**
+  `a_cold_hook_invocation_is_measured_and_reported_per_platform` times the real
+  binary over ten cold invocations and prints min, median and max per platform,
+  because §7b's `timeout` is a stated multiple of that maximum and a multiple of
+  a single-platform number would inherit §9's limit.
+
+  **Its assertion is a tripwire, not a budget**, and the distinction is why it
+  is admissible at all: a tight timing assertion on a shared runner goes red for
+  reasons unrelated to this code, which is the flake ADR-0002 §7 rejects because
+  it trains people to ignore a control. The ceiling is ten seconds against a
+  measured maximum of 37.5 ms — it fires only if the hook has started waiting on
+  something it must not. **Paired**: the timed runs must also have written what
+  they were timed for, or the measurement is of a hook that exited early.
+
 - **Ordering needs a control that the reader refuses rather than guesses.** Two
   records with no ordering relation between them in the payload — different turns,
   no shared `tool_use_id`, no `index` — and stamps that are equal or inverted must
@@ -1994,10 +2234,15 @@ that leave it say where they went.*
   platform-dependent rather than merely unverified elsewhere:
 
   - **`shell`.** The default selects bash *on a Windows machine that has Git
-    Bash*. The schema's own prose says powershell without it, and says nothing
-    about `sh` versus `zsh` on Unix. The exec-form result — argv arrives literal
-    — is the one install depends on, and it is the one most likely to hold
-    everywhere; that is a guess, and it is labelled as one.
+    Bash*, and the schema's prose says powershell without it and nothing at all
+    about `sh` versus `zsh` on Unix. **This is not a live risk to install and
+    the wording used to imply it was.** *Reworded 2026-08-19.* `shell` has no
+    value meaning *no shell*, so install closes it by writing `args` rather than
+    by writing `shell` (§7b), and the exec form was measured to make `shell`
+    inert. The correct label is **finding not carried across platforms; install
+    does not depend on it.** What install *does* depend on is `args` behaving as
+    the exec form everywhere, and that is the thing to re-measure on the other
+    two.
   - **The intra-agent serialisation reading.** It rests on how this build
     spawns and waits on hook processes, which is a per-platform code path.
   - **The 15 ms concurrent-hook figure**, and every other latency here.

@@ -50,8 +50,9 @@
 //!   does and does not claim.
 //! - [`writer`] — the append, and the failure taxonomy that keeps a failed
 //!   write from becoming silent non-delivery.
-//! - [`sink`] — the tail check and prunability, built only as far as §9's
-//!   controls (b) and (f) reach.
+//! - [`sink`] — the tail check, built only as far as §9's control (b) reaches.
+//!   Prunability was retracted: see the module's own docs for why, and for what
+//!   must not be written in its place.
 //! - [`settings`] — editing `settings.json`, a file vibe does not own: what
 //!   the write preserves, and why re-install rather than first install is the
 //!   case it is built around.
@@ -77,8 +78,5 @@ pub use settings::{
     INSTALLED_EVENTS, InstallOutcome, MATCH_ALL, SettingsDocument, SettingsRefusal, install,
     read_document,
 };
-pub use sink::{
-    NotPrunableReason, Prunability, ReadRecord, SESSION_END_EVENT, SinkFile, SinkRead, TailState,
-    read_file,
-};
+pub use sink::{ReadRecord, SinkFile, SinkRead, TailState, read_file};
 pub use writer::{IoFailure, PayloadRefusal, WriteOutcome, WriteStage, Writer};

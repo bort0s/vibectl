@@ -35,9 +35,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use vibe_core::monitor::{
-    ComponentRejection, FixedStamps, NotPrunableReason, PayloadRefusal, Prunability, ReadRecord,
-    SessionComponent, SinkRead, StampSource, SystemStamps, TailState, WriteOutcome, WriteStage,
-    Writer, WriterIdentity, collisions, file_key, read_file,
+    ComponentRejection, FixedStamps, PayloadRefusal, ReadRecord, SessionComponent, SinkRead,
+    StampSource, SystemStamps, TailState, WriteOutcome, WriteStage, Writer, WriterIdentity,
+    collisions, file_key, read_file,
 };
 
 // ---------------------------------------------------------------------------
@@ -772,78 +772,29 @@ fn uniqueness_is_checked_on_the_normalised_filename_not_the_declared_string() {
 }
 
 // ---------------------------------------------------------------------------
-// §9 (f) — Prunability is derived, paired
+// §9 (f) — RETRACTED: prunability was not derivable from event content
 // ---------------------------------------------------------------------------
-
-/// ADR-0011 §9 (f). A file containing `SessionEnd` is offered as prunable; a
-/// file without one — in progress, or a killed agent — is not, and the two must
-/// be reported differently.
-///
-/// This rests on ADR-0011 §4's measurement rather than on memory: a killed
-/// agent writes **neither `Stop` nor `SessionEnd`**, confirmed twice by killing
-/// a running agent and reading what was on disk.
-#[test]
-fn prunability_is_derived_from_session_end() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let sink = dir.path();
-
-    let done = writer(sink, "done");
-    done.append(&payload("s1", "SessionStart"));
-    let done_path = written_path(&done.append(&payload("s1", "SessionEnd")));
-
-    // A killed agent: SessionStart, then a tool, then nothing. Exactly the
-    // shape §4 measured.
-    let live = writer(sink, "live");
-    live.append(&payload("s2", "SessionStart"));
-    let live_path = written_path(&live.append(&payload("s2", "PreToolUse")));
-
-    let SinkRead::Read(done_file) = read_file(&done_path) else {
-        panic!("readable");
-    };
-    let SinkRead::Read(live_file) = read_file(&live_path) else {
-        panic!("readable");
-    };
-
-    assert_eq!(done_file.prunability(), Prunability::Prunable);
-    assert_eq!(
-        live_file.prunability(),
-        Prunability::NotPrunable {
-            reason: NotPrunableReason::NoSessionEnd
-        },
-        "a session with no SessionEnd is in-progress-or-dead and must never be \
-         offered as prunable"
-    );
-    assert_ne!(
-        done_file.prunability(),
-        live_file.prunability(),
-        "the two must be reported differently, or a build offering every file \
-         satisfies the first half perfectly"
-    );
-}
-
-/// A torn tail is its own not-prunable reason. Merging it into
-/// `NoSessionEnd` would report *"still running"* about a file we simply do not
-/// understand the end of.
-#[test]
-fn a_torn_tail_is_not_prunable_even_when_session_end_is_present() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("s__ident.jsonl");
-    fs::write(
-        &path,
-        "{\"v\":\"1\",\"session\":\"s\",\"event\":\"SessionEnd\"}\n{\"v\":\"1\",\"ses",
-    )
-    .expect("fixture");
-
-    let SinkRead::Read(file) = read_file(&path) else {
-        panic!("readable");
-    };
-    assert_eq!(
-        file.prunability(),
-        Prunability::NotPrunable {
-            reason: NotPrunableReason::PartialTail
-        }
-    );
-}
+//
+// Two controls stood here: `prunability_is_derived_from_session_end` and
+// `a_torn_tail_is_not_prunable_even_when_session_end_is_present`. Both passed
+// throughout, and both were pinning a claim the payload does not support.
+//
+// ADR-0011 §2 round 3e measured a resumed session emitting `SessionStart`
+// AFTER `SessionEnd` under one `session_id`, so "contains SessionEnd" does not
+// mean "will receive no more records". The proposed repair — a third state,
+// ENDED AT LEAST ONCE AND REOPENABLE — was checked before being built and did
+// not survive either: `reopenable` is always true, so the predicate never
+// varies and the variant would have distinguished nothing.
+//
+// The type is gone rather than weakened, and the retraction is recorded at the
+// module it belonged to rather than only here, because a retraction leaves
+// residue at its copies and the copies are what the next reader meets. What
+// must NOT be written in its place — file-age prunability, and why — is in
+// `monitor::sink`'s own docs.
+//
+// Nothing replaces these controls. A control asserting that no prunability is
+// offered would be asserting the absence of a type, which the compiler already
+// does.
 
 // ---------------------------------------------------------------------------
 // The write-failure taxonomy: a hook that cannot write must not be silent

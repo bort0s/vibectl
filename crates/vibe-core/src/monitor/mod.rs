@@ -52,10 +52,14 @@
 //!   write from becoming silent non-delivery.
 //! - [`sink`] — the tail check and prunability, built only as far as §9's
 //!   controls (b) and (f) reach.
+//! - [`settings`] — editing `settings.json`, a file vibe does not own: what
+//!   the write preserves, and why re-install rather than first install is the
+//!   case it is built around.
 
 pub mod identity;
 pub mod reader;
 pub mod record;
+pub mod settings;
 pub mod sink;
 pub mod writer;
 
@@ -68,6 +72,11 @@ pub use reader::{
     SinkListing, collides, order, read_sink, sequencing,
 };
 pub use record::{CONTRACT_VERSION, FixedStamps, Record, Stamp, StampSource, SystemStamps};
+pub use settings::{
+    HOOK_TIMEOUT_FLOOR_SECS, HOOK_TIMEOUT_MULTIPLIER, HOOK_TIMEOUT_SECS, HookSpec,
+    INSTALLED_EVENTS, InstallOutcome, MATCH_ALL, SettingsDocument, SettingsRefusal, install,
+    read_document,
+};
 pub use sink::{
     NotPrunableReason, Prunability, ReadRecord, SESSION_END_EVENT, SinkFile, SinkRead, TailState,
     read_file,

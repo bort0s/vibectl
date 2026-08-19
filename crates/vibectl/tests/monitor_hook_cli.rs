@@ -16,6 +16,7 @@
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 /// Run the hook with `payload` on stdin. Returns (code, stdout, stderr).
 fn run_hook(args: &[&str], payload: &str) -> (Option<i32>, String, String) {
@@ -440,4 +441,101 @@ fn a_second_invocation_appends_rather_than_truncating() {
     assert_eq!(lines.len(), 2, "the second run appended: {text}");
     assert!(lines[0].contains("SessionStart"));
     assert!(lines[1].contains("SessionEnd"));
+}
+
+// ---------------------------------------------------------------------------
+// Cold-start duration — the input to the `timeout` value, on every platform
+// ---------------------------------------------------------------------------
+
+/// **How long one cold hook invocation takes, measured where CI can see it.**
+///
+/// ADR-0011 §7b writes an explicit `timeout` rather than depending on a default
+/// whose bound §2 could not locate. The value has to come from a measurement of
+/// this binary, and it has to come from **every platform**, because §9's
+/// declared limit is that everything else in that section was taken on
+/// `win32-x64`. This one needs no live agent — the hook is a process that reads
+/// stdin and appends — so unlike the rest of the round-3 corpus it mechanizes,
+/// and the number appears in the ordinary test job on all three runners.
+///
+/// # What is measured, and what that is not
+///
+/// The whole invocation as Claude Code experiences it: process spawn, `clap`
+/// parse, stdin read, the append, exit. **It is not the write.** The write is
+/// one syscall (see the writer's docs); almost all of this is process startup,
+/// which is why it is the quantity a `timeout` has to clear.
+///
+/// # Why this asserts a ceiling rather than only printing
+///
+/// A test that measures and asserts nothing is a report nobody reads, and a
+/// report nobody reads is how a regression ships. But a tight timing assertion
+/// on a shared CI runner fails for reasons that have nothing to do with this
+/// code, which is the flake ADR-0002 §7 rejects — a control that goes red
+/// without a defect trains people to ignore it.
+///
+/// So the ceiling is deliberately **enormous** relative to the expected value:
+/// it is not a performance budget, it is a tripwire for the case where the hook
+/// has started doing something it must not, like waiting on a network or a
+/// lock. The real output is the printed maximum, which CI carries per platform.
+#[test]
+fn a_cold_hook_invocation_is_measured_and_reported_per_platform() {
+    /// Not a budget. A hook that takes longer than this is not slow, it is
+    /// doing something it was never meant to do.
+    const TRIPWIRE: Duration = Duration::from_secs(10);
+    const RUNS: usize = 10;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sink = dir.path().join("sink");
+
+    let mut durations = Vec::with_capacity(RUNS);
+    for i in 0..RUNS {
+        let started = Instant::now();
+        let (code, _out, err) = run_hook(
+            &[
+                "--identity",
+                "coldstart",
+                "--sink",
+                sink.to_str().expect("utf8"),
+                "--contract",
+                "1",
+            ],
+            &payload(&format!("cold-{i}"), "SessionStart"),
+        );
+        let elapsed = started.elapsed();
+        // A run that failed measures a failure path, not a cold start.
+        assert_eq!(code, Some(0), "run {i} did not deliver: {err}");
+        durations.push(elapsed);
+    }
+
+    durations.sort_unstable();
+    let min = durations[0];
+    let median = durations[RUNS / 2];
+    let max = durations[RUNS - 1];
+
+    // Printed unconditionally, and visible in CI with `--nocapture`; the
+    // assertion below is not where the information is.
+    println!(
+        "cold-start `vibe monitor hook` on {os}/{arch}: \
+         min {min:?}, median {median:?}, max {max:?} over {RUNS} runs",
+        os = std::env::consts::OS,
+        arch = std::env::consts::ARCH,
+    );
+
+    assert!(
+        max < TRIPWIRE,
+        "a cold hook invocation took {max:?} on {}/{}, past the {TRIPWIRE:?} \
+         tripwire. This is not a performance budget — at this magnitude the \
+         hook is waiting on something, and ADR-0011 §7b's `timeout` is chosen \
+         against this measurement.",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    );
+
+    // Paired: the measurement is only meaningful if the runs actually did the
+    // work. Ten deliveries into one sink for ten sessions is ten files.
+    let files = std::fs::read_dir(&sink).expect("sink readable").count();
+    assert_eq!(
+        files, RUNS,
+        "the timed runs must have written what they were timed for, or this \
+         measures a hook that exited early"
+    );
 }

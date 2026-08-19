@@ -68,8 +68,8 @@ pub use ignore_state::{IgnoreState, UnknownCause, check_ignore};
 pub use manifest::{FieldEdit, ManifestDocument, SchemaVersion};
 pub use model::{Confidence, Detected, Manifest, Status, UnknownReason, Visibility};
 pub use monitor::{
-    ComponentRejection, PayloadRefusal, Prunability, SessionComponent, SinkRead, TailState,
-    WriteOutcome, Writer, WriterIdentity,
+    ComponentRejection, PayloadRefusal, SessionComponent, SinkRead, TailState, WriteOutcome,
+    Writer, WriterIdentity,
 };
 pub use ops::SyncNotes;
 pub use plan::{

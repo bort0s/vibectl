@@ -885,8 +885,19 @@ later.**
 - **Or make the encoding unambiguous some other way** — a length prefix, or an
   escape — at the cost of a filename that stops being readable, which §7a values.
 
-**Not decided here.** What a component may contain is a product question with a
-user-visible refusal attached, and it is Riccardo's.
+**DECIDED 2026-08-19: forbid `_`.** Charset `[A-Za-z0-9-]`, injectivity taken,
+rename paid. **The deciding reason is standing, not cost** — the alternative's
+safety rests on *measured ids are UUID and hex, n=5*, and an upstream change to
+the agent-id format must not be able to reopen a file collision. `_` removal
+needs no knowledge of what id formats look like today.
+
+**Three things it carries**, recorded so none of them survives as a separate
+gap: the **two-component misattribution** dies with the same change, since
+`sess___X` can no longer be formed; the refusal is **loud at install and silent
+in a hand-installed hook**, so the risk moves rather than disappears; and **the
+tool does not normalise** — `my_hook` becoming `my-hook` is the person's edit,
+because substituting silently is inventing a plausible value.
+`ComponentRejection::ContainsSeparator` became unreachable and was deleted.
 
 **And `validate_component`'s failure direction is recorded, because today it
 reads as a guard and it is also a producer of silence.** A `session_id`,
@@ -912,12 +923,27 @@ start, tool use, stop, end.
 | live session | 307 | **307** | 0 |
 | **paired control** — the file held for 3 s on purpose | 89 | 1 | **88** |
 
-The control is what makes the zero reportable: the instrument **can** see a hold,
-and saw none. **A hold shorter than 20 ms would be missed**, and that is the
-open-and-close case rather than an extended one — which the replacement
-measurement already covers. So the refusal rows of the share-mode table are not
-reachable through this consumer, and install writing while an agent runs is the
-ordinary case it looked like.
+The control is what makes the zero reportable: the instrument **can** see a
+hold, and saw none.
+
+**Recorded on its true footing, which is narrower than the first draft claimed.**
+*Corrected 2026-08-19.* That draft said the sub-20 ms window *"is the
+open-and-close case, which the replacement measurement already covers"* — and
+the replacement measurement is the one this round declared to have **no
+reachability premise**. The two were propping each other up, and neither covers
+the sub-20 ms window. So:
+
+> **No hold longer than 20 ms was observed in a live session, n=307, paired
+> against a deliberate hold that the same instrument caught 88 times of 89. The
+> sub-20 ms window is unsampled, and the replacement measurement does not cover
+> it, because its own overlap premise is not established.**
+
+**The practical conclusion survives on a different footing, and it is the better
+one: argument, not sampling.** A rename refused because a holder forbids
+delete-sharing **leaves the original intact**, reports an error, and now leaves
+no temp behind. So the cost of the unsampled case is a **loud, non-destructive
+failure of `vibe monitor install`**, which the user can retry — not a damaged
+`settings.json`. That claim needs no measurement of how often it happens.
 
 **And a fact that was inferred from the schema and is now measured: N hooks
 declared in ONE settings file for one event run CONCURRENTLY.** Three hooks with
@@ -1884,15 +1910,46 @@ requirements because the reversal moved them from *"a price `http` avoids"* to
   miss:**
 
   1. **The identity is restricted to a conservative charset** — ASCII
-     alphanumerics, `-` and `_`, non-empty, bounded length. That rejects every
+     alphanumerics and `-`, non-empty, bounded length. That rejects every
      row above by construction rather than by enumerating hazards, which is the
      closed-allowlist shape ADR-0005 §10 rule 4 uses for URLs and for the same
      reason: nobody writes down the traversal form they have not met.
+
+     **`_` was in this set until 2026-08-19 and is not any more**, and the
+     removal is the injectivity repair rather than tidying. With `_` admitted,
+     the separator could be **formed at a boundary** by two legal components —
+     `("sess", "abc_", "user")` and `("sess", "abc", "_user")` both rendered
+     `sess__abc___user.jsonl`, and both were accepted (§2, round 3h). With `_`
+     out, `__` cannot be formed from component content at all, the concatenation
+     is **injective by construction**, and `ComponentRejection::ContainsSeparator`
+     became unreachable and was deleted — the same move as `WriteStage::Flush`.
+     **The two-component misattribution dies with it**: `sess_` + `X` and `sess`
+     + `_X` both rendered `sess___X.jsonl`, which the reader parsed as
+     `("sess", "_X")`.
+
+     **The cost, and where it is heard.** `my_hook` must become `my-hook`, and
+     **vibe does not normalise it** — silently substituting is inventing a
+     plausible value, so vibe refuses and states what is permitted. An identity
+     `vibe monitor install` writes is refused **at install, loudly, before
+     anything is written**. A hand-written one (§7 permits those) is refused at
+     **write** time inside the hook, whose stderr nobody reads, and the event is
+     lost. So the repair **moves** that risk rather than removing it, which is
+     the general property recorded below.
   2. **Uniqueness is checked on the normalised filename, not on the declared
      string** — case-folded, with trailing dots and spaces stripped. The
      filesystem's notion of *same file* is coarser than string equality, and the
      check must use the filesystem's, because that is the one that decides
      whether two writers share a file.
+
+  **The charset's failure direction is non-delivery, and it reads as a guard.**
+  *Added 2026-08-19.* A `session_id`, `agent_id` or identity outside the set is
+  **refused, and the event is lost**. §7a frames the `session_id` case as *"loud
+  loss beats silent invention"* — loud to the hook's **stderr**, which nobody
+  reads, and silent to vibe. So it belongs on the list of non-delivery producers
+  beside a broken hook and a killed process: **a charset that is too narrow does
+  not corrupt anything, it deletes events.** n=5 on one build bounds nothing
+  about the value space, and tightening the set (as the `_` removal does) moves
+  that risk rather than removing it.
 
   Validated **at install and at write**, not at install alone: §7 permits
   hand-installed hooks, which install never sees.

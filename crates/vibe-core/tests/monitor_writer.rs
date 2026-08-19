@@ -1248,6 +1248,245 @@ fn serde_json_in_this_build_preserves_key_order() {
 }
 
 // ---------------------------------------------------------------------------
+// The structural argument, and the two things it rests on
+// ---------------------------------------------------------------------------
+
+/// **`write_all` must not loop**, because that is what makes a torn record
+/// unrepresentable rather than merely unobserved.
+///
+/// ADR-0011 §2 round 3d: `Writer::append` holds a bare `File` and calls
+/// `write_all` once. `write_all` loops over `Write::write` until the buffer is
+/// consumed, so a kill can only tear a record if that loop ever runs more than
+/// once. Measured on `win32-x64` it never did, at any size to 64 MiB — and that
+/// measurement was taken on one machine, which §9 declares as a limit for
+/// everything else in that round.
+///
+/// **This one does not need a live agent session, so unlike the rest of that
+/// round it mechanizes.** It runs in the ordinary test job, so the claim is
+/// carried on all three platforms instead of resting on the one it was found
+/// on. If some platform's `write` returns short, that is the finding, and it
+/// arrives as a red rather than as a surprise in a record.
+///
+/// Sizes stop at 4 MiB rather than 64 MiB: a CI runner should not write 64 MiB
+/// to establish a property that is about the loop rather than about the size,
+/// and the scratchpad instrument covers the larger end on demand.
+#[test]
+fn one_write_call_takes_a_whole_record_on_this_platform() {
+    use std::io::Write as _;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    // 327 is a real record, measured from the hook; the rest bracket it.
+    for bytes in [327usize, 4 * 1024, 64 * 1024, 1024 * 1024, 4 * 1024 * 1024] {
+        let path = dir.path().join(format!("w{bytes}.bin"));
+        let buf = vec![b'x'; bytes];
+        let mut f = fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&path)
+            .expect("open");
+        let accepted = f.write(&buf).expect("write");
+        assert_eq!(
+            accepted,
+            bytes,
+            "one `write` of {bytes} bytes took only {accepted} on {}/{}. \
+             `write_all` would then LOOP, which opens the user-space window \
+             ADR-0011 §2 round 3d says does not exist — and the structural \
+             argument that a killed hook cannot tear a record dies with it.",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+        );
+    }
+}
+
+/// **The write path must have no buffered writer**, because two properties rest
+/// on that and one commit would take both.
+///
+/// `File::flush` being a no-op is why `WriteStage::Flush` was deleted; `write`
+/// taking the whole buffer is why a torn record is unrepresentable. Both are
+/// properties of `std::fs::File`, not of this code. A `BufWriter` introduced
+/// for speed would make the flush live *and* turn the append into a loop, in
+/// one change, with **every other control here still green**.
+///
+/// So the dependency is asserted rather than described. This reads the module's
+/// own source, which is the technique `control_inventory.rs` already uses for
+/// the same reason: the property is structural, nothing observable distinguishes
+/// it until it has already cost something, and a paragraph asking the next
+/// author not to do it is a rule that gets broken by someone who never read it.
+///
+/// **Paired**, or a typo in the path would satisfy it forever: the same read
+/// must find the `write_all` call it is reasoning about.
+#[test]
+fn the_write_path_has_no_buffered_writer() {
+    let writer_rs = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("monitor")
+        .join("writer.rs");
+    let src = fs::read_to_string(&writer_rs)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", writer_rs.display()));
+
+    // The premise: this is the file that does the writing. Without it the
+    // assertion below passes against an empty string.
+    assert!(
+        src.contains("write_all(line.as_bytes())"),
+        "the fixture's premise failed: {} no longer contains the append it is \
+         guarding, so finding no `BufWriter` in it establishes nothing",
+        writer_rs.display()
+    );
+
+    // `BufWriter` only ever appears here as prose about why it must not.
+    let in_code = src
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .any(|l| l.contains("BufWriter"));
+    assert!(
+        !in_code,
+        "a buffered writer appeared in the monitor write path. That undoes TWO \
+         measured properties at once (ADR-0011 §2 round 3d): `flush` stops \
+         being a no-op, so the deleted `WriteStage::Flush` is missing rather \
+         than unreachable; and `write_all` becomes a loop, which opens the \
+         user-space window a killed hook can tear a record in. Both, from one \
+         commit, with nothing else going red."
+    );
+}
+
+/// **A record is on disk when `append` returns**, which is the behavioural half
+/// of the control above.
+///
+/// The source check catches a `BufWriter` by name; this catches any buffering
+/// by its effect, including one that arrives through a type that is not called
+/// `BufWriter`. Two instruments for one property, because the first is a string
+/// match and string matches are exactly as literal as they look.
+#[test]
+fn a_written_record_is_on_disk_before_append_returns() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outcome = writer(dir.path(), "ident").append(&payload("sess-flush", "SessionStart"));
+    let path = written_path(&outcome);
+
+    // Read through a fresh handle, immediately, with nothing dropped in
+    // between: the `Writer` still owns whatever it opened.
+    let text = fs::read_to_string(&path).expect("the record must already be readable");
+    assert!(
+        text.ends_with('\n'),
+        "`append` returned Written and the file does not end on a record \
+         boundary — bytes are sitting in a buffer somewhere, and the deleted \
+         flush stage was load-bearing after all"
+    );
+    assert!(text.contains("sess-flush"));
+}
+
+/// The other half of the observer control: this **is** the live writer.
+///
+/// A no-op unless `VIBE_HALFWRITE_TARGET` is set, which only
+/// [`an_observer_can_see_a_partial_write_on_a_live_file`] does — it re-invokes
+/// this test binary with that variable and a filter naming this test. Spawning
+/// the test binary rather than adding a helper `[[bin]]` keeps the production
+/// surface at zero: a flag on the shipped executable that exists only for a
+/// test is a thing users can find.
+///
+/// **The handshake is files, not sleeps.** Half the record, then a `.half`
+/// marker, then a wait for `.go`, then the rest. A timed hold would make this
+/// control's firing depend on winning a race against a loaded runner, and
+/// ADR-0002 §7 rejects exactly that — it can stop proving anything without ever
+/// failing.
+///
+/// The record both halves agree on is [`HALF_WRITE_RECORD`], shared so the
+/// observer is not asserting against a length someone counted by hand.
+const HALF_WRITE_RECORD: &[u8] = b"{\"v\":\"1\",\"identity\":\"ident\",\"session\":\"live\"}\n";
+
+#[test]
+fn half_write_helper() {
+    let Ok(target) = std::env::var("VIBE_HALFWRITE_TARGET") else {
+        return;
+    };
+    let target = PathBuf::from(target);
+    let whole = b"{\"v\":\"1\",\"identity\":\"ident\",\"session\":\"live\"}\n";
+    let (half, rest) = whole.split_at(whole.len() / 2);
+
+    let mut f = fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(&target)
+        .expect("open");
+    use std::io::Write as _;
+    f.write_all(half).expect("half");
+
+    fs::write(target.with_extension("half"), b"1").expect("marker");
+    let go = target.with_extension("go");
+    // The handle stays open across this wait, which is the whole point.
+    for _ in 0..600 {
+        if go.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    f.write_all(rest).expect("rest");
+}
+
+/// **An observer can see a partial write on a file a live process holds open.**
+///
+/// This is the control the kill sweep in ADR-0011 §2 round 3c did not have. Its
+/// positive control there was a file truncated **on purpose** — a static file,
+/// held open by nobody — which established that the classifier recognises a
+/// torn file and established nothing about whether the observer can see one
+/// being made. A blind observer produces exactly the clean sweep a healthy one
+/// does, so a zero measured through it would have belonged to the instrument.
+///
+/// It was measured on `win32-x64` in a scratchpad. It is here because the
+/// subject is an operating system's file-sharing behaviour, it needs no live
+/// agent session, and §9 declares single-platform measurement as a limit for
+/// everything that does — so this one is carried on all three instead.
+///
+/// **Paired both ways**: the same observer must read the whole record once the
+/// writer has finished, or *"sees half"* is satisfied by an observer that
+/// reports half unconditionally.
+#[test]
+fn an_observer_can_see_a_partial_write_on_a_live_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("live.jsonl");
+
+    let mut child = std::process::Command::new(std::env::current_exe().expect("current exe"))
+        .args(["--exact", "half_write_helper", "--test-threads=1"])
+        .env("VIBE_HALFWRITE_TARGET", &target)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn the helper");
+
+    let half_marker = target.with_extension("half");
+    let mut waited = 0;
+    while !half_marker.exists() && waited < 600 {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        waited += 1;
+    }
+    assert!(
+        half_marker.exists(),
+        "the helper never reported its half write, so nothing below is a \
+         measurement of anything"
+    );
+
+    let during = fs::read(&target).expect("read while the writer holds the handle");
+
+    fs::write(target.with_extension("go"), b"1").expect("release the writer");
+    child.wait().expect("helper exits");
+    let after = fs::read(&target).expect("read after");
+
+    assert!(
+        during.len() < after.len() && !during.ends_with(b"\n"),
+        "the observer did not resolve a live partial state: it read {} bytes \
+         while the writer held the handle and {} after. Any 'no torn file' \
+         result measured through this observer belongs to the observer rather \
+         than to the subject.",
+        during.len(),
+        after.len()
+    );
+    assert!(
+        after == HALF_WRITE_RECORD,
+        "the observer did not read the whole record after the writer exited, \
+         so 'sees half' above is not paired"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Sanity on the fixture helpers themselves
 // ---------------------------------------------------------------------------
 

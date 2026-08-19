@@ -126,7 +126,14 @@ pub struct ApplyReport { pub applied: Vec<AppliedOp>, pub skipped: Vec<SkippedOp
 
   **The enforcement claim used to read *"hard constraint 2 is enforced by the absence of the variant — a destructive command is not merely discouraged, it is unrepresentable"*, and that was stronger than what the type system was doing.** *Corrected 2026-08-19.* The absence of `Delete` makes **one form** of destruction unrepresentable: an op that names a path and removes it. It does not make destruction unrepresentable. The write path below passed every file through a **zero-byte state** on every write, with `Delete` nonexistent throughout — so the tool was destroying files by a route the missing variant does not cover.
 
-  The honest form: **`FileOp` has no variant that expresses "delete this path", and that closes deletion-as-an-operation. Everything else about not being destructive is a property of how the ops are carried out, and has to be established there.**
+  **And the first correction was still too generous.** *Amended the same day.* It said the absence of `Delete` closes deletion-as-an-operation. It did not: there was a `std::fs::remove_file` in production, hand-written, in `Cache::save` — deletion, present, with `FileOp::Delete` nonexistent throughout. **The type governs only what routes through `apply`, and nothing bounded what did not.**
+
+  So the honest form is two sentences, and the second is the one that was missing:
+
+  1. **`FileOp` has no variant expressing "delete this path"**, which closes deletion for any call site that goes through `apply`.
+  2. **The enforcement boundary is therefore not the type — it is whether a call site routes through `apply` at all.** That is a property of the source, not of the type system, and until 2026-08-19 nothing checked it.
+
+  It is checked now, continuously rather than by hand: `no_module_outside_the_primitive_mutates_the_filesystem` scans every `crates/*/src/**/*.rs` for `fs::write`, `fs::remove_file`, `fs::remove_dir_all`, `File::create` and `.truncate(true)` outside the primitive, states its own reach, asserts its premises, and is sabotage-checked. **That is the enforcement this constraint claimed to have.**
 
 ### 3a. DEFECT: every write passed through a zero-byte state, from P0 until 2026-08-19
 
@@ -148,7 +155,11 @@ pub struct ApplyReport { pub applied: Vec<AppliedOp>, pub skipped: Vec<SkippedOp
 
 **And the second write path had the same shape with a delete in it.** `Cache::save` had its own temp-and-rename plus a fallback that **removed the destination and retried**, under the comment *"Windows will not rename onto an existing file in every case"*. The comment was read rather than measured and the fallback could not help: measured on Windows 10 Pro 19045, a rename-over is refused exactly when another process holds the destination without `FILE_SHARE_DELETE` — and `DeleteFile` is refused in **the same two cases** and permitted in **the one where the rename already worked**. So the fallback was inert where it was aimed and destructive if it had ever fired, since it left the destination missing between the delete and the retry. It now goes through the one primitive.
 
-**The trigger to revisit:** a third write path appearing outside `apply`. There are two today — `apply` and `Cache::save` — and they share one primitive; a third would mean the invariant *"core mutates the filesystem in one place"* has stopped being true, which is the thing §3 exists to say.
+**A pattern, not just a fix.** The fallback existed because of a **read** property — *"Windows will not rename onto an existing file in every case"* — and the measurement shows it could not have helped. That is the same shape as every other read-versus-measured finding in this repository, and the base rate is now nine to zero. **Suspect the tool first, including when the tool is what a previous commit believed about the tool.**
+
+**One limit on that measurement:** it is Windows-only. On POSIX, `unlink` succeeds on an open file, so *"the delete fallback was inert where it was aimed"* is a **single-platform finding**. Nothing turns on it — the code is gone — but the register should not read as if the claim were universal.
+
+**The trigger to revisit was not hooked to anything, and now it is.** *Amended 2026-08-19.* It said: a third write path appearing outside `apply`. A third write path appearing is visible only if something looks, and nothing did — which is how the second one survived from P0. The control named above is what fires. There are two today — `apply` and `Cache::save` — and they share one primitive; a third would mean the invariant *"core mutates the filesystem in one place"* has stopped being true, which is the thing §3 exists to say.
 
 ### 4. Errors: `thiserror` in core, `anyhow` in the CLI, no exceptions
 

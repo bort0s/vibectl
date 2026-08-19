@@ -50,6 +50,22 @@ turned out to be constructible** — six parallel tool calls from one agent — 
 the hazard it guards did not appear (§7a). Nothing was retracted this round; two
 enumerations were widened and one *"may never be constructible"* was withdrawn.
 
+**Round 3b (2026-08-19), same build, and it withdraws two more claims — this
+time claims read off a SCHEMA rather than off a run.** Install writes some of
+the seven execution properties and omits the rest, so what an OMITTED field does
+is half the contract; §2 measures all seven, paired. `once` does not remove its
+hook — it fired 3 of 3 — and `asyncRewake` does not imply `async`, since it
+still blocks. **Two of seven descriptions false**, which is the same base rate a
+version number produced. The reassuring one: omitting `shell` does not put a
+shell back in the channel when `args` is present. And an `async: true` hook was
+measured **killed with its start written and its end never**, which is §7's
+non-delivery hazard one boolean away.
+
+**Round 3b also turns an inference into a measurement**: N hooks in ONE settings
+file for one event run **concurrently**, 15 ms apart. §7a argued from the
+schema's array-of-matcher-groups shape that two hooks sharing an identity would
+open one file at once. They do.
+
 ## Context
 
 The feature is seeing which Claude Code instances are running, what they are
@@ -178,11 +194,23 @@ visible at config-read time as well as at fire time.
 Round 2's nine and this ten are both enumerations of what one fixture produced.
 This fixture spawned a subagent, so `SubagentStart` and `SubagentStop` fired;
 nothing here says they did not fire on 2.1.233, and nothing says the twenty-one
-names that stayed silent cannot fire. **Every silent name is unconstructed, not
-absent** — `Notification` needs a notification, `PreCompact` needs a compaction,
-`PermissionRequest` and `PermissionDenied` need the interactive path §8 records
-as not measurable here. The positive control for all of it is that ten other
-names from the same two files were written in the same run.
+names that stayed silent cannot fire.
+
+**The label for those twenty-one is *neither fired nor shown to be correctly
+registered*, and the two are not distinguished.** *Corrected 2026-08-19; the
+first draft said "unconstructed, not absent", which claims one step past the
+instrument.* There are three possibilities and this round separates none of
+them: the name has no dispatch site on this build, or it has one this fixture
+never triggered, or **this fixture declared it in a shape that cannot fire** —
+every group here omits `matcher`, and nothing establishes that every event is
+reachable without one.
+
+**What *is* established, and it is narrower than registration:** `claude doctor`
+reported no unknown-hook-event for any of the 31, so the settings loader
+**accepted** every name. That rules out a typo. It does not rule out a wrong
+declaration shape, and it says nothing about dispatch. The positive control for
+the run as a whole is that ten other names from the same two files were written
+in it.
 
 **The name-registration control re-established on this build, paired both ways.**
 A fixture declaring only real names produces no config fault at all; the same
@@ -213,6 +241,61 @@ something other than an absence of events.
 field of all ten types: nothing naming a point in time. §7a's ordering argument
 rests on that measurement, and it is re-established here on ten types rather than
 inherited from eight.
+
+**Round 3b (2.1.234): what a hook does when a field is OMITTED, which is the
+half the schema does not answer.** *Added 2026-08-19.* Install writes some of
+the seven execution properties and omits the rest, and an omitted field is not
+*off* — it is whatever this build defaults to. The descriptions above were read
+off the schema; these are measured, each paired against the same field written
+explicitly, in one session over one settings file so the two observables come
+from the same run.
+
+**The probe emits a line before its dwell and a line after**, so a hook that is
+killed is a **start without an end** rather than an absence — and an absence is
+what a hook that never fired also produces. The two must not share an
+observable, which is the same rule §5's NULL-handle bullet applies to
+`OpenProcess`.
+
+| field | omitted | written | verdict |
+| --- | --- | --- | --- |
+| `timeout` | a 65 s hook **completed** — no kill at 65 s | `2` kills a 5 s hook (start, no end); `30` and `120` let 5 s and 65 s through | description holds; the default is permissive |
+| `async` | **blocking** — session wall 26.8 s against a 6.8 s baseline | `true` → session returns at 6.8 s, and the hook is **killed with its start written and its end never** | holds, and the loss is real and permanent |
+| `asyncRewake` | blocking | `true` → **still blocking**, 26.8 s | **the schema's *"Implies async"* is FALSE on this build** |
+| `once` | fires every time | `true` → **fired 3 of 3 tool calls**, three distinct pids, one session | **the schema's *"runs once and is removed"* is FALSE on this build** |
+| `if` | fires for everything | matching → 3; non-matching → **0** | holds |
+| `matcher` | fires for everything | matching → 3; non-matching → **0** | holds |
+| `shell` | with `args`: **no shell**; without `args`: **bash** | with `args`: `bash` and `powershell` both produce the **identical literal argv** | holds for the string form; **inert when `args` is present** |
+
+**Two of seven descriptions are false, which is the base rate arriving on
+schedule.** The nine was documentation-of-a-run and it was withdrawn; `once` and
+`asyncRewake` were documentation-of-a-property and they are withdrawn here. A
+schema description is a claim about a build like any other.
+
+**The `shell` result is the one install depends on and it is the reassuring
+one.** §7a chose the `args` exec form to keep a shell out of the channel, and
+omitting `shell` does **not** put one back: an argument written as
+`A$(whoami)B` + backtick + `C` + backtick + `D&E|F` arrives byte-identical under
+`shell` omitted, `shell: "bash"` and `shell: "powershell"` alike. Two
+instruments agree — the argv as received, and `SHLVL`, which stays at the
+launcher's value for the exec form and is incremented for the string form.
+Measured paired: the **string** form (no `args`) does interpose a shell, a `;`
+chain runs both halves, and a PowerShell call-operator form runs nothing, so it
+is bash on this machine.
+
+**`once` does not rewrite the settings file.** The file's hash is byte-identical
+before and after a session in which a `once: true` hook fired three times. Worth
+recording because the alternative — a tool editing a file vibe also edits —
+would have been an idempotency problem install could not see.
+
+**And a fact that was inferred from the schema and is now measured: N hooks
+declared in ONE settings file for one event run CONCURRENTLY.** Three hooks with
+a 4 s dwell started within **15 ms** of each other and all ended together. §7a
+already argues that one settings file can declare N×M command hooks and that
+*"all of them would open one file, and concurrent append returns inside the
+design whose entire justification is that it cannot occur"* — that was read off
+the schema's array-of-matcher-groups shape. It is now a measurement: **two hooks
+sharing a declared identity in one file are two writers to one file, at the same
+time.** The uniqueness check is not defensive.
 
 ### 3. Attribution comes from the payload, never from the environment
 
@@ -547,12 +630,46 @@ protect for manifests — a user's comments — cannot be present in this file a
 all**, and what an editor here must preserve is narrower: key order, whitespace,
 and any key vibe does not own.
 
-**What such a file looks like in practice, on this machine.** Three real files
-were found and every one is 2-space indented, LF, no BOM, strict JSON with no
-comments and no trailing commas, between 8 and 14 lines, and **none of them
-declares a `hooks` key**. That is a sample of three on one machine and is
-recorded as such — it bounds nothing about a file someone hand-formatted — but it
-is the population install meets first.
+**What such a file looks like in practice — and the sample is n=1 in cause,
+not n=3.** *Corrected 2026-08-19.* Three real files were found, every one
+2-space indented, LF, no BOM, strict JSON, 8 to 14 lines. **They do not agree
+about formatting; they share a writer.** `~/.claude/settings.json` holds
+`model`, `enabledPlugins` and `effortLevel`, which Claude Code's own `/config`
+and `/model` write. A project's `settings.local.json` holds
+`permissions.allow` entries carrying machine-escaped inner quotes
+(`\(Get-Content \"C:\\Users\\...`) that nobody types. Both are
+**tool-generated**, in the same serialiser's format. The third is a vendored
+crate's file in the same permissions shape, with no history available to say
+which. So *"all three are 2-space"* is one cause observed three times, and it
+establishes **almost nothing about a file a person formatted**.
+
+**None of the three declares `hooks`, so none of them is the file install
+actually has to survive.** That file is a **re-install**: a `settings.json` that
+already contains a vibe hook. Constructed and measured — 49 lines, user keys
+(`model`, `effortLevel`, `permissions`, `env`), a user's own `PreToolUse` hook
+under a `matcher`, and a vibe `SessionStart` hook in the `args` exec form.
+Accepted by `claude doctor`. Round-tripped through `serde_json` with
+`preserve_order` and `to_string_pretty`:
+
+| the same content, formatted as | lines rewritten, of 49 |
+| --- | --- |
+| 2-space | **0 — byte-identical** |
+| 4-space | **44** |
+| tab | **46** |
+
+**So the declared limit is that table, not a shrug.** A 2-space file survives
+untouched; a 4-space or tab-indented file is effectively rewritten whole. Which
+one a user has is not knowable in advance, so the diff is shown before it is
+written rather than predicted — constraint 2's `--dry-run`, which makes this an
+output rather than a blocker.
+
+**`matcher` lives on the GROUP above the hook, and that makes it an idempotency
+constraint rather than a field.** Measured (§2, round 3b): a non-matching
+`matcher` suppresses its group's hooks entirely. So **where** install writes
+decides whether a matcher vibe never wrote can silence vibe's hook — appending
+into an existing group inherits that group's matcher. **Install writes its own
+group**, and a re-install that finds a vibe hook inside somebody else's group
+has found a configuration it did not create and must report rather than repair.
 
 ### 7a. Transport: a file — and `http` chosen, costed, and reversed
 
@@ -724,36 +841,64 @@ requirements because the reversal moved them from *"a price `http` avoids"* to
   *"no batch exists"* but *"the fixture never built one"*, which is ADR-0010 §5's
   rate again.
 
-  **Having built it, the overlap did not appear.** Across 48 hook invocations in
-  that run, **zero pairs sharing `(session_id, agent_id, declared identity)`
-  overlapped in time.** The six invocations for the six parallel calls were
-  dispatched **serially and not narrowly so**: they span 4.9 s, and the smallest
-  gap between the end of one and the start of the next anywhere in the run,
-  across every key, is **101.6 ms**.
+  **What replaced it is a property of a BUILD, not a property of the design,
+  and the register entry says so.** The distinction is the whole finding:
+  *"measured and held"* reads as something this shape guarantees, and it is not.
 
-  **And the zero is reportable, which is the part that took the second
-  instrument.** A first attempt recorded intervals only around the work the
-  collector actually does — 0.02 to 0.10 ms — and reported no overlap **of any
-  kind**, including pairs known to be concurrent. That zero was withheld under
-  ADR-0002 §7's channel rule rather than published. The repair was a disclosed
-  60 ms dwell, which cannot manufacture an overlap under serial dispatch, plus a
-  second instrument that asks the same question with no clock at all — a marker
-  file created at entry, removed at exit, and the directory listed while the
-  process is alive. In the reported run the two agree exactly: **24 overlapping
-  pairs, and every one of them cross-identity**, 43–58 ms, the two settings
-  files' hooks for the same event running at the same time. A paired synthetic
-  control — two collectors started together on purpose, same key — is detected at
-  30.2 ms by both. So the instruments demonstrably see overlap, they see it in
-  this run, and they see none of it within a key.
+  > **Intra-agent same-key concurrency.** The precondition is constructible —
+  > the parallel instruction in the subagent's own prompt, six `Read` calls in
+  > one message. On `anthropic.claude-code-2.1.234` at
+  > `.vscode/extensions/anthropic.claude-code-2.1.234-win32-x64/resources/native-binary/claude.exe`,
+  > **hook invocations under one key serialise**: smallest observed same-key gap
+  > **101.6 ms** against a 60 ms recorded window, **zero** overlapping pairs,
+  > across 48 invocations spanning 4.9 s. Positive control: a **same-key**
+  > synthetic pair, four invocations sharing one
+  > `(session_id, agent_id, identity)`, **6 overlapping pairs at 39–59 ms**, on
+  > both instruments. One fixture. **Both dependents retained** — the file key
+  > and the non-decreasing-stamp check — because serialisation is a measured
+  > property of one build and not a property of the design.
 
-  **The bound runs one way and it is the safe way.** The recorded interval starts
-  when node starts, which is after the OS created the process, and ends before
-  exit rather than at it, so it is a **subset** of the true lifetime: a detected
-  overlap is real, and this zero is evidence rather than proof. **The limit
-  therefore moves from *unmeasured* to *measured and held on one fixture*, and
-  the two dependents below stay where they are.** What would move them is an
-  overlap on some fixture, not another zero on this one — and the fixture that
-  builds six parallel calls now exists, which is the difference from yesterday.
+  **The mechanism the asymmetry points at, stated as the reading rather than as
+  a finding:** this build appears to serialise hook invocations **within** an
+  agent and not **across** them. Six parallel tool calls produced six
+  invocations spread over 4.9 s, while the same run carried 24 cross-identity
+  overlaps at 43–58 ms. *"Six tool calls in one message"* is a different shape
+  from *"two hook processes alive under one key"*, and the 4.9 s span says the
+  second shape did not arrive — the precondition was built and the hazard's own
+  shape was not.
+
+  **The positive control had to be the same shape as the target, and the first
+  one was not.** Cross-identity overlaps prove the analyser can pair invocations
+  **between** files; they say nothing about the grouping path the same-key
+  answer travels, and a bug in that path produces exactly the observed picture —
+  cross-identity at 43–58 ms and a same-key zero. So the control spawns
+  invocations that **share one key** on purpose
+  (`scratchpad/hook-overlap-control.js`) and the analyser must report them as
+  same-key. It also **refuses rather than retries**: if the spawns land too far
+  apart to overlap it exits nonzero and says the control did not fire, because a
+  control that loops until it succeeds cannot tell *"the instrument works"* from
+  *"the twentieth attempt got lucky"*. That is not hypothetical — the first
+  same-key control was a shell backgrounding two `node` calls, it fired at
+  30.2 ms once, and re-running the identical setup produced **no overlap at
+  all**. A control decided by interpreter startup is a coin flip that reads as a
+  control.
+
+  **And a zero was withheld before any of this.** A first collector recorded
+  only the microseconds around its own work — 0.02 to 0.10 ms — and reported no
+  overlap **of any kind**, including pairs known to be concurrent. Withheld
+  under ADR-0002 §7's channel rule rather than published. The repair is a
+  disclosed 60 ms dwell, which cannot manufacture an overlap under serial
+  dispatch, plus a second instrument that asks the same question with no clock
+  at all — a marker file created at entry, removed at exit, and the directory
+  listed while the process is alive. The two agree exactly on every count
+  reported here.
+
+  **The bound runs one way and it is the safe way.** The recorded interval
+  starts when node starts, which is after the OS created the process, and ends
+  before exit rather than at it, so it is a **subset** of the true lifetime: a
+  detected overlap is real, and a zero is evidence rather than proof. What moves
+  the dependents is an overlap on some fixture, or a build whose dispatch is not
+  this one — not another zero on this one.
 
   **What the cross-identity overlaps confirm, since they were free:** §2's
   duplicate delivery is not merely two records, it is **two hook processes alive
@@ -1224,10 +1369,164 @@ check failing in different directions, and **the transport decision was never
 capable of touching it** — which is the thing the first version of this section
 got wrong.
 
+### 7b. What install writes, where, and which events
+
+*Decided 2026-08-19, after round 3's measurements. Recorded here rather than in
+§8 because these were the three items §8 was waiting on, and a list of open
+questions that still names a decided one is the failure §7a's own omission
+records.*
+
+#### One sink, installed at user level
+
+**Decided: a single user-level hook writing to a single sink**, its path
+resolved once at install time from `agents::default_store_path`'s precedent —
+`ProjectDirs::data_dir()`, the data directory rather than the cache — and baked
+into the config, per §7a.
+
+**The reader was the deciding input.** `read_sink` takes one directory and no
+caller merges. Three of its outputs do not survive N sinks:
+
+- **`sequencing` is sink-wide.** Two sinks that are each `FullyOrdered` union to
+  `PartlyUnordered`, because records in different sessions are unordered by
+  construction. Merging listings after the fact reports a sequence where there
+  is none — a plausible history, which is the one nobody investigates.
+- **`identity_collisions` changes meaning.** Two identities colliding under
+  `file_key` in *different* sinks do not share a file, so they are not the twin
+  writer the check exists for — while remaining indistinguishable to §2's
+  dedupe, which identifies a delivery by its source.
+- **One unreadable sink among N has no representation.** `read_sink` returns an
+  error for the whole read, deliberately distinct from an empty sink. Nothing
+  can say *"three of four read"*, and a missing sink rendering as an empty one
+  is §6's *absence of events is not a state*, one level up.
+
+**None of that is a reason to change the reader, because N sinks were never
+required.** One sink keeps `read_sink` as it is, keeps sequencing coherent over
+the whole history, and lets `identity_collisions` keep the meaning it already
+has. **It also collapses the staleness story**: one baked executable path and
+one baked sink path, one blast radius, one health check — where per-project
+install multiplies both by the number of projects and gives each its own way to
+go stale.
+
+#### The containment argument for `~/.claude/settings.json`
+
+*Required because containment is re-established at every new call site rather
+than inherited — ADR-0008 §6 — and this is a new one.*
+
+ADR-0005 §10 rule 5 admits a write whose deepest existing ancestor canonicalizes
+inside **a configured root or the plan's declared target directory**. The
+user-level settings file is in neither, and widening the rule to admit "the home
+directory" would trade a bounded invariant for an unbounded one.
+
+**So the route is a closed variant, not a widened root.** The technique is
+ADR-0001 §3's missing `FileOp::Delete` and ADR-0005 §10 rule 1's constructed
+argv: the op names **no path at all**. It carries which settings file it edits
+as a two-valued choice — user-level or project-level — and `apply` resolves that
+to a path itself. A plan therefore cannot express a write to an arbitrary place
+outside a root, because there is no field to put one in.
+
+**What makes that safe here is a property of this write, not a general
+permission:** the target path has **no component derived from data**. Not from a
+payload, not from a scan, not from a project name, not from anything a user
+typed. It is the home directory plus two fixed literals. The traversal class
+rule 5 exists to stop is a path *assembled* from values; nothing is assembled
+here, so the hazard does not arise rather than being checked for. Compare the
+sink filename, which has three payload-or-argv components reaching a path and is
+charset-validated at both ends precisely because it does.
+
+**Rule 6 is unaffected** — the path is not under `.git/` and cannot be made to
+be. **Rule 5 still runs**, against the resolved path, because a check skipped on
+the ground that it cannot fail is a check that stops running when the ground
+moves.
+
+**The read side needs no route and must not borrow this one.** §7's contract
+read and §7a's uniqueness check both read two settings files. ADR-0001 §3
+governs *mutation*; reads are not `FileOp`s and need nothing. Stated so that a
+later change does not widen the write variant to serve a reader.
+
+**What this costs, stated rather than absorbed:** the invariant stops being
+*"vibe never writes outside a configured root"* and becomes *"…except one named
+path, reachable only through one variant, only from `vibe monitor install`"*.
+That exception is enumerable, and a control that enumerates it is the only thing
+keeping it from growing a second member quietly.
+
+#### Records arrive from projects the registry has never seen
+
+**A user-level hook fires everywhere**, including in directories that are not
+registered projects. That is new: every other thing vibe reports is about a
+project it was told about.
+
+**Such records are shown as unregistered.** Not dropped — the events are real
+and the session is named in every payload. Not attributed to a nearest match —
+that is inventing the fact that decides which project a record belongs to, which
+is constraint 5 pointed at attribution. It is `unattributed`'s neighbour (§7a):
+a fact vibe does not have, named as missing, with everything not depending on it
+still usable. The payload carries `cwd`, so *where* is known; what is unknown is
+which registry entry, if any, it corresponds to.
+
+#### The editor: `serde_json` with `preserve_order`, and `to_string_pretty`
+
+**Decided.** Measured inputs: the file is strict JSON so there are no comments
+to lose (§7); `preserve_order` adds **no crate**, because `indexmap` is already
+in the graph via `toml_edit` and `serde_json`'s only reverse dependents are this
+workspace's own two crates; and the formatting cost is the table in §7 — zero
+lines on a 2-space file, 44 of 49 on a 4-space one.
+
+**The formatting risk is an output, not a blocker**, because `FileOp::UpdateFile`
+already carries `before` and `after` so `--dry-run` renders the real diff before
+anything is written (ADR-0001 §3). A cost the user sees in advance is not the
+same kind of cost as one they discover afterwards.
+
+**The prerequisite was a control repair, not a follow-up, and it is done.**
+`the_payload_lands_byte_identical_including_key_order` had **two** producers of
+its observable — key order and number formatting — and `preserve_order` removes
+the first. It would have stayed green on the survivor while its name, its doc
+comment and its premise all described something it no longer exercised. The
+branches were counted again before the flag moved: under `preserve_order` a
+naive round trip still changes **number formatting**, **insignificant
+whitespace** and **a duplicate key** — and no longer changes key order, a large
+integer, or an escaped non-ASCII character. One control per producer now, each
+with its own premise assertion, plus
+`serde_json_in_this_build_preserves_key_order`, which fails if the feature is
+ever dropped — because nothing else would, and the damage would be vibe
+re-sorting the keys of a file it does not own. That control was **red before the
+flag and green after**, which is what establishes it tests the flag rather than
+the crate.
+
+#### Events: the lifecycle five, and the rest deferred with a reason
+
+**Installed: `SessionStart`, `SessionEnd`, `SubagentStart`, `SubagentStop`,
+`Stop`.** Lifecycle plus a per-turn heartbeat, and every one is in the measured
+ten (§2).
+
+**Deferred, with the reason recorded rather than left as an omission:**
+`PreToolUse`, `PostToolUse`, `PostToolBatch`, `MessageDisplay`,
+`UserPromptSubmit` are **activity-rate** events and nobody has measured write
+volume for a real session. The 24 cross-identity overlaps in §7a's round came
+from six tool calls; a working session is not six.
+
+**Nothing from the twenty-one is installed**, including `TaskCreated` and
+`TaskCompleted` — which **are** among the 31 accepted names and did **not** fire
+(§2). The original product question about them is therefore unchanged rather
+than answered: they sit in the set that neither fired nor was shown to be
+correctly registered.
+
+**And the emitted config writes `async` and `asyncRewake` explicitly false, or
+omits them, and never writes either as true.** §2's round 3b measured an
+`async: true` hook **killed with its start written and its end never**. That is
+§7's non-delivery hazard produced by the mechanism installed to prevent it, and
+it is one boolean away. Omission is safe — measured blocking — but the contract
+pins the property either way, which is what §7a's version declaration is for.
+
 ### 8. Open, and not mine to decide
 
 *Revised 2026-08-17. The previous list had two items and read as complete; it was
 missing transport, which is now §7a. What follows is the state after round 2.*
+
+*Revised again 2026-08-19. **Three items left this list by being decided, not by
+being dropped**: install scope, the settings editor, and which events to install
+are in §7b. They were never numbered here — they lived in a handoff note — and
+that is recorded because a list of open questions is only useful if the things
+that leave it say where they went.*
 
 1. **~~Whether `PermissionRequest` and `Notification` are used~~ — answered on one
    path, open on the other.** They do **not** fire headlessly through the MCP
@@ -1459,6 +1758,54 @@ missing transport, which is now §7a. What follows is the state after round 2.*
   and reads as covering the class is the quantifier failure this document keeps
   finding, so **whatever is built states which properties it pins and which it
   does not.**
+
+- **The containment exception needs a control that ENUMERATES it, not one that
+  tests it.** *Added 2026-08-19 with §7b.* One named path outside every
+  configured root is admissible; two is a widened root wearing the costume of an
+  exception. A control asserting *"this write lands at the user settings file"*
+  passes just as happily against a build that has three such variants. So the
+  assertion is on the **set**: the settings-target enum has exactly the members
+  §7b names, and adding one turns it red. Paired the ordinary way — a plan that
+  tries to name a path directly must not compile, which is the missing-variant
+  technique asserting itself.
+
+- **Records from an unregistered project need a paired control.** *Added
+  2026-08-19 with §7b.* A user-level hook fires everywhere, so: a session in a
+  directory the registry has never seen must render as **unregistered**, **and a
+  session in a registered project must render as that project**. A build that
+  labels everything unregistered satisfies the first half perfectly and is
+  useless, and one that attaches every record to a nearest match satisfies the
+  second while inventing the attribution — which is the failure §7a refuses for
+  `unattributed`, one level out.
+
+- **The emitted config needs a control that `async` is never written true.**
+  *Added 2026-08-19.* §2's round 3b measured an `async: true` hook killed with
+  its start written and its end never — silent non-delivery arriving through the
+  mechanism installed to prevent it, one boolean away. Assert on the **emitted
+  bytes**, not on a constant in the source: what ships is what install writes.
+  Paired against a fixture that does declare `async: true` and is observed
+  losing the record, so the control's premise is exercised rather than assumed.
+
+- **A control on the omission defaults would be a control on somebody else's
+  build, and it is deliberately NOT written here.** *Added 2026-08-19.* §2's
+  round 3b measures what this build does with an omitted field, and two of the
+  seven schema descriptions were false. The temptation is a test asserting those
+  seven behaviours. It would fail on every upstream release that changes one,
+  reporting a fact about Claude Code as a defect in this repository — which is
+  ADR-0005 §10 rule 4a's channel pointed at CI. What is written instead is the
+  **contract**: install emits the properties it depends on explicitly, so a
+  default that moves cannot move vibe with it.
+
+- **The measurement instruments are ON-DEMAND, and that is a capability rather
+  than a proof.** *Added 2026-08-19.* `scratchpad/hook-{collect,fixture,probe,
+  variants,overlap,overlap-control}.js` are committed for the reason `probe.js`
+  is (ADR-0002 §7): an instrument rebuilt from a description is a new instrument
+  with the old one's name. **Nothing runs them.** They are not in CI, they need a
+  real Claude Code binary and a live session, and every number they produced is
+  a fact as of the build named beside it. A later reader must not treat their
+  presence as continuous verification — the ADR's measurements go stale on
+  upstream's schedule (ADR-0005 §10 rule 4a) and these files shorten the
+  re-measurement, they do not perform it.
 
 ## Consequences
 

@@ -38,6 +38,17 @@ set -o pipefail
 
 cd "$(dirname "$0")/.." || exit 2
 
+# The location is an assumption, and an instrument run where its assumptions do
+# not hold reports red for the wrong reason. That happened the first time this
+# was invoked from a copy outside the repo: every step failed and the output
+# read like a broken tree. So the assumption is checked, and its failure says
+# which one it was.
+if [ ! -f Cargo.toml ] || ! grep -q '\[workspace\]' Cargo.toml; then
+  echo "gate.sh is not in <workspace>/scratchpad/ — cwd is $(pwd), which has no" >&2
+  echo "workspace Cargo.toml. Nothing below would be a measurement of this repo." >&2
+  exit 2
+fi
+
 step() {
   local name="$1"; shift
   "$@" >/dev/null 2>&1

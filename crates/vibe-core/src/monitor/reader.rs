@@ -63,8 +63,13 @@ use super::sink::{ReadRecord, SinkRead, TailState, read_file};
 /// What a filename claims about the records inside it.
 ///
 /// Parsed by splitting on [`SEPARATOR`], which is unambiguous because no
-/// component may contain it: two fields is a session-level file, three is an
-/// agent-level one.
+/// component can **form** it: `_` is outside the charset entirely, so `__`
+/// cannot appear inside a component or across a boundary between two. Two
+/// fields is a session-level file, three is an agent-level one.
+///
+/// *That was weaker until 2026-08-19 — the charset admitted `_` and only a
+/// literal `__` inside one component was refused, which left two distinct
+/// triples able to render one filename at a boundary (ADR-0011 §2, round 3h).*
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "attribution", rename_all = "snake_case")]
 #[non_exhaustive]

@@ -66,6 +66,29 @@ file for one event run **concurrently**, 15 ms apart. §7a argued from the
 schema's array-of-matcher-groups shape that two hooks sharing an identity would
 open one file at once. They do.
 
+**Round 3c (2026-08-19), same build, and it is the first round to measure this
+tool rather than Claude Code.** `vibe monitor hook` itself, killed at a
+controlled delay: 26 kills against a live process, at 4 KB and at 64 MB,
+produced **nothing on disk or a whole record and never a torn one** — paired
+against a file torn on purpose, so the verdict was reportable. It is a bound
+rather than a proof: the window exists and was never sampled inside. And the
+dependent that predates install is now checked rather than reasoned — one
+damaged file does **not** cost the sink its other records, with the reader's
+four arms kept distinct and the control sabotaged red.
+
+**The round also closes one omission-dependency and confirms another.**
+`matcher: "*"` is a match-all and is accepted, so install writes it. `if: "*"`
+is **accepted by the loader and fires nothing**, so `if` has no written value
+meaning *do not suppress* and is the one residual — registered with its failure
+direction, which is suppression.
+
+**And it declares a limit the earlier rounds left implicit: every measurement of
+Claude Code here is `win32-x64`, one binary, one machine.** Constraint 3 makes
+three platforms first-class. The half with a dependent — what a damaged file
+costs the rest of the sink — is Rust and runs on all three in CI. The half that
+needs a live agent session cannot, and §9 says so rather than leaving the
+register reading as if these were properties of the tool.
+
 ## Context
 
 The feature is seeing which Claude Code instances are running, what they are
@@ -258,7 +281,7 @@ observable, which is the same rule §5's NULL-handle bullet applies to
 
 | field | omitted | written | verdict |
 | --- | --- | --- | --- |
-| `timeout` | a 65 s hook **completed** — no kill at 65 s | `2` kills a 5 s hook (start, no end); `30` and `120` let 5 s and 65 s through | description holds; the default is permissive |
+| `timeout` | a 65 s hook **completed** — no kill observed at 65 s | `2` kills a 5 s hook (start, no end); `30` and `120` let 5 s and 65 s through | kill confirmed; **the default bound is not located** |
 | `async` | **blocking** — session wall 26.8 s against a 6.8 s baseline | `true` → session returns at 6.8 s, and the hook is **killed with its start written and its end never** | holds, and the loss is real and permanent |
 | `asyncRewake` | blocking | `true` → **still blocking**, 26.8 s | **the schema's *"Implies async"* is FALSE on this build** |
 | `once` | fires every time | `true` → **fired 3 of 3 tool calls**, three distinct pids, one session | **the schema's *"runs once and is removed"* is FALSE on this build** |
@@ -286,6 +309,99 @@ is bash on this machine.
 before and after a session in which a `once: true` hook fired three times. Worth
 recording because the alternative — a tool editing a file vibe also edits —
 would have been an idempotency problem install could not see.
+
+**Two things the table above must not be read as saying.** *Added 2026-08-19.*
+
+**`timeout`'s default bound is NOT located.** A 65 s hook was not killed. That
+is where the observation stops: nothing here finds the bound, and *"the default
+is permissive"* would be the same shape as reading a version number off the
+newest install rather than off the running one. The honest label is **no kill
+observed at 65 s; the default bound is not located**, and install writes an
+explicit `timeout` rather than depending on it (§7b).
+
+**`shell`'s inertness has a precondition, and the precondition is `args`.**
+`shell` written and `shell` omitted produce identical argv **only while `args`
+is present**. Recorded as a dependency rather than as a property: a later change
+that drops `args` — for a `command` string that is easier to read, say — makes
+`shell` live again, puts a shell back in the channel, and **nothing would turn
+red**. The exec form is load-bearing, not stylistic.
+
+**And the two instruments do not have equal reach, which *"two instruments
+agree"* concealed.** `SHLVL` is a bash variable: it is evidence when bash is the
+interposed shell and says **nothing at all** under PowerShell, where its absence
+is indistinguishable from no shell. So the settings are covered unevenly, and it
+is stated per setting rather than in aggregate:
+
+| setting | argv literal | SHLVL |
+| --- | --- | --- |
+| `args` present, `shell` omitted | covered | covered (bash absent, and bash is what the default selects here) |
+| `args` present, `shell: "bash"` | covered | covered |
+| `args` present, `shell: "powershell"` | **covered, and alone** | no reach |
+| no `args` (string form) | covered | covered |
+
+The argv-literal instrument carries every row. `SHLVL` corroborates three of
+four and is blind on the one where a *different* shell would be the finding.
+
+**Round 3c (2.1.234): what a kill leaves on disk, measured against the real
+hook.** *Added 2026-08-19.* §7a admits exactly one corruption under
+one-writer-per-file — truncation — and the round above measured that a `timeout`
+really does kill. What decides whether a short `timeout` is admissible is
+whether a kill can land **inside** the append.
+
+The subject is `vibe monitor hook` itself, killed at a controlled delay, with
+the file classified afterwards into three outcomes that do not share an
+observable: **nothing on disk**, **a whole record**, or **a torn one**.
+
+| payload | kills that landed on a live process | nothing | whole | torn |
+| --- | --- | --- | --- | --- |
+| 4 KB | 6 | 6 | 0 | **0** |
+| 64 MB | 20 | 10 | 10 | **0** |
+
+The 64 MB sweep walks the transition in 15 ms steps: at 230 ms nothing is on
+disk, at 245 ms a complete 67,109,142-byte record is. **No delay produced a
+partial file at any size tried**, so a 64 MB `write_all` is narrower than the
+sampling interval.
+
+**Paired, or the zero is a skipped test.** A file torn deliberately —
+half a record, no trailing newline — is classified **TORN** by the same code
+path. The instrument can report the verdict it never reported.
+
+**What that licenses and what it does not.** On **Windows 10 Pro 19045, NTFS**,
+26 kills against a live hook produced no torn record. It is **not** a proof that
+a kill cannot tear one: the window exists, it was never sampled inside, and
+nothing here was run on Linux or macOS. It is a bound — *the window is smaller
+than 15 ms for a 64 MB write on this platform* — and a bound is what a `timeout`
+value can be chosen against.
+
+**And the dependent that predates install is now checked rather than reasoned.**
+The worry was that one torn line might darken the whole sink, which would make
+any kill a permanent blackout. It does not, and the reader's arms are distinct:
+`read_sink` returns an error **only** when the directory cannot be enumerated; a
+file that cannot be *read* is reported as `Unreadable` and skipped alone; a torn
+trailing line is `TailState::Partial` with every whole record before it kept; a
+whole line that does not parse is counted as `unparseable` with its neighbours
+kept. Four files in one sink, three damaged differently, every whole record
+still read — `one_damaged_file_does_not_cost_the_sink_its_other_records`, paired
+against an undamaged sink, and sabotaged red by making the reader skip a torn
+file.
+
+**A match-all `matcher` exists; a match-all `if` was not found.** Measured on a
+session using two tools, against a no-matcher control that fired twice:
+
+| declaration | fired |
+| --- | --- |
+| nothing (control) | 2 of 2 |
+| `matcher: "*"` | **2 of 2** |
+| `matcher: ""` | 2 of 2 |
+| `matcher: ".*"` | 2 of 2 |
+| `if: "*"` | **0 of 2** |
+| `if: "Read(*)"` | 1 of 2 |
+
+So `matcher` has a written value meaning *do not suppress* and `if` does not —
+`"*"` is **accepted by the loader and suppresses everything**, which is the
+worst of the three possible answers: not a syntax error anyone would see, just
+silence. `if` is therefore the one residual omission-dependency (§7b), and its
+failure direction is suppression.
 
 **And a fact that was inferred from the schema and is now measured: N hooks
 declared in ONE settings file for one event run CONCURRENTLY.** Three hooks with
@@ -558,6 +674,21 @@ is *"not on this path"* rather than *"not used"*.
   whose hooks were never installed both produce an empty record, and neither is
   "stopped". This is the same `NotAttempted`-versus-`NoEvidence` line ADR-0003
   draws and ADR-0010 §6 applies to shadowing.
+- **A project the registry has never seen is a third thing, not a missing
+  project.** *Added 2026-08-19 with §7b's user-level install.* A user-level hook
+  fires **everywhere**, so records arrive from directories vibe was never told
+  about — which is new: everything else vibe reports is about a project it was
+  given. They render as **unregistered**. Not dropped, because the events are
+  real and the session is named in every payload. **Not attributed to a nearest
+  match**, because that invents the fact deciding which project a record belongs
+  to. The payload carries `cwd`, so *where* is known; what is unknown is which
+  registry entry, if any, it corresponds to — and *unknown* is the word for it.
+- **A hook that was suppressed must not render as an agent that was quiet.**
+  *Added 2026-08-19.* §7b leaves `if` as a residual omission-dependency whose
+  failure direction is suppression, and `matcher` can suppress a whole group.
+  A suppressed hook delivers nothing, which is the same observable as an idle
+  agent and as a hook that was never installed. All three are **unknown** here,
+  and the display may not resolve them by preferring the reassuring one.
 
 ### 7. Vibe may write hook config, as one explicit act — and the wiring carries its own proof
 
@@ -1417,12 +1548,20 @@ inside **a configured root or the plan's declared target directory**. The
 user-level settings file is in neither, and widening the rule to admit "the home
 directory" would trade a bounded invariant for an unbounded one.
 
-**So the route is a closed variant, not a widened root.** The technique is
-ADR-0001 §3's missing `FileOp::Delete` and ADR-0005 §10 rule 1's constructed
-argv: the op names **no path at all**. It carries which settings file it edits
-as a two-valued choice — user-level or project-level — and `apply` resolves that
-to a path itself. A plan therefore cannot express a write to an arbitrary place
-outside a root, because there is no field to put one in.
+**So the route is a closed variant, not a widened root, and it has ONE member.**
+*Corrected 2026-08-19: the first draft made it two-valued, user or project.
+Project-level install was closed by the decision above, so no command could
+produce that variant — a representable state with no producer, and the moment
+anything reached it all three of the reader's problems come back.* The technique
+is ADR-0001 §3's missing `FileOp::Delete` and ADR-0005 §10 rule 1's constructed
+argv: **the op names no path, and carries no choice either.** `apply` resolves
+the one target itself. A plan cannot express a write to an arbitrary place
+outside a root because there is no field to put one in, and cannot express a
+project-level settings write because there is no variant for it.
+
+§9's obligation is the set, not the member: the control asserts the variant set
+has **exactly one** member, so adding a second turns it red — which is what
+makes re-opening project-level install a decision rather than a diff.
 
 **What makes that safe here is a property of this write, not a general
 permission:** the target path has **no component derived from data**. Not from a
@@ -1476,6 +1615,45 @@ already carries `before` and `after` so `--dry-run` renders the real diff before
 anything is written (ADR-0001 §3). A cost the user sees in advance is not the
 same kind of cost as one they discover afterwards.
 
+**The formatting is sniffed rather than imposed.** *Decided 2026-08-19, and it
+turns the cost table into one row that matters.* `PrettyFormatter::with_indent`
+takes the indent as bytes, so the editor reads the existing indent off the first
+indented line and reuses it, and does the same for the line ending. Measured on
+the re-install fixture, the same 49 lines formatted five ways:
+
+| formatted as | rewritten, naive | rewritten, sniffing |
+| --- | --- | --- |
+| 2-space LF | 0 | **0** |
+| 4-space LF | 44 | **0** |
+| tab LF | 46 | **0** |
+| 2-space **CRLF** | **48** | **0** |
+| 4-space CRLF | 48 | **0** |
+
+**The CRLF row is the one that was missing and it is the one from this
+project's own platform.** `to_string_pretty` emits `\n`; a CRLF
+`settings.json` on Windows is rewritten almost whole. Every row is
+byte-identical after sniffing.
+
+**The CRLF rewrite is a global newline replace, and that is safe for a reason
+worth asserting rather than assuming:** JSON escapes a newline inside a string
+as the two characters `\` and `n`, so a literal newline **byte** can only ever
+be formatting. Measured both ways — a string containing an escaped newline
+survives untouched, and the formatting newlines really were rewritten, so the
+check is not satisfied by a rewrite that did nothing.
+
+**The residuals are declared rather than discovered**, since sniffing is a
+heuristic and a heuristic that is silent about its misses is the thing this
+project keeps refusing:
+
+- **Nothing to sniff** — a minified file, or one with no indented line. Default
+  to two spaces. Measured: the sniffer returns `"  "` for a minified file.
+- **Mixed indentation** — the sniffer takes the **first** indented line, which
+  may not represent the file. Measured: a 2-space file with one tab-indented
+  line sniffs as tab, and would then be rewritten whole.
+
+Both land in `--dry-run`'s diff before anything is written, which is what
+constraint 2 is for and why neither is a blocker.
+
 **The prerequisite was a control repair, not a follow-up, and it is done.**
 `the_payload_lands_byte_identical_including_key_order` had **two** producers of
 its observable — key order and number formatting — and `preserve_order` removes
@@ -1510,12 +1688,61 @@ from six tool calls; a working session is not six.
 than answered: they sit in the set that neither fired nor was shown to be
 correctly registered.
 
-**And the emitted config writes `async` and `asyncRewake` explicitly false, or
-omits them, and never writes either as true.** §2's round 3b measured an
-`async: true` hook **killed with its start written and its end never**. That is
-§7's non-delivery hazard produced by the mechanism installed to prevent it, and
-it is one boolean away. Omission is safe — measured blocking — but the contract
-pins the property either way, which is what §7a's version declaration is for.
+#### Install writes every field it depends on, explicitly
+
+**Decided 2026-08-19.** The emitted hook carries `type`, `command`, `args`,
+`matcher: "*"`, `shell: false`… — every property whose default install would
+otherwise be relying on, written out. **This is not verbosity, it deletes a
+dependency.** Otherwise install's correctness rests on four measured defaults
+staying put across upstream releases, with nothing watching them, which is
+ADR-0005 §10 rule 4a's untriggered channel pointed straight at delivery.
+
+Two of the seven cannot be closed that way, and the measurement separated them:
+
+- **`matcher` CAN be closed.** `matcher: "*"` fires for every tool, measured
+  against a no-matcher control (§2, round 3c). So install writes it.
+- **`if` CANNOT.** No value meaning *do not suppress* was found. `if: "*"` is
+  **accepted by the loader and fires nothing** — not a syntax error anyone would
+  see, just silence.
+
+**`if` is therefore the one residual omission-dependency, registered as exactly
+that, with its failure direction.** Omission is permissive today, so the failure
+mode is **suppression**: a default that changed would silently stop delivery.
+§6 already forbids the reading that hides it — absence of events is not a state,
+so a suppressed hook must render as unknown rather than as an idle agent. It is
+also the reason §9's prohibition on testing defaults is scoped rather than
+blanket.
+
+#### The hazard is a killed hook, not the `async` field
+
+*Corrected 2026-08-19. An earlier draft forbade `async: true` and justified the
+prohibition with the observable — process killed, start on disk, end never
+written. **That observable has more than one producer**, so a prohibition
+written over the field leaves install free to reproduce the hazard by other
+means without violating anything recorded.*
+
+**Counted, the producers are three:**
+
+1. **`async: true` at session end.** Measured (§2, round 3b): the hook returned
+   to the background, the session ended, and the end line was never written.
+2. **A `timeout` shorter than the hook takes.** Measured: `timeout: 2` against a
+   5 s hook leaves start and no end.
+3. **Claude Code exiting, the machine sleeping, or the process being killed by
+   anything else.** **Not eliminable by any config vibe writes**, and therefore
+   the reason the hazard has to be stated over the outcome rather than over the
+   fields.
+
+**So the rule is: install must not increase the exposure of a hook to being
+killed mid-flight, and the two producers it controls are named.** `async` is
+never written true; `timeout` is written explicitly, at a value chosen against
+round 3c's bound rather than against the unlocated default. The third producer
+is why §7's per-session wiring proof and §5's liveness check both still exist —
+they fail in different directions, and this is a case only they cover.
+
+**And round 3c bounds what the third producer costs**, which is what makes the
+first two worth constraining rather than despairing of: on the platform
+measured, a kill leaves nothing or a whole record, never a torn one; and a torn
+record, if one ever occurs, costs its own file's tail and nothing else.
 
 ### 8. Open, and not mine to decide
 
@@ -1759,15 +1986,60 @@ that leave it say where they went.*
   finding, so **whatever is built states which properties it pins and which it
   does not.**
 
-- **The containment exception needs a control that ENUMERATES it, not one that
-  tests it.** *Added 2026-08-19 with §7b.* One named path outside every
-  configured root is admissible; two is a widened root wearing the costume of an
-  exception. A control asserting *"this write lands at the user settings file"*
-  passes just as happily against a build that has three such variants. So the
-  assertion is on the **set**: the settings-target enum has exactly the members
-  §7b names, and adding one turns it red. Paired the ordinary way — a plan that
-  tries to name a path directly must not compile, which is the missing-variant
-  technique asserting itself.
+- **DECLARED LIMIT: every measurement of Claude Code in this document is
+  single-platform.** *Added 2026-08-19, and stated because the register was
+  reading as if these were properties of the tool.* Rounds 1, 2, 3, 3b and 3c
+  were all taken on **`win32-x64`, one binary, one machine**. Constraint 3 makes
+  Linux, macOS and Windows first-class, and three of the findings are plausibly
+  platform-dependent rather than merely unverified elsewhere:
+
+  - **`shell`.** The default selects bash *on a Windows machine that has Git
+    Bash*. The schema's own prose says powershell without it, and says nothing
+    about `sh` versus `zsh` on Unix. The exec-form result — argv arrives literal
+    — is the one install depends on, and it is the one most likely to hold
+    everywhere; that is a guess, and it is labelled as one.
+  - **The intra-agent serialisation reading.** It rests on how this build
+    spawns and waits on hook processes, which is a per-platform code path.
+  - **The 15 ms concurrent-hook figure**, and every other latency here.
+  - **Round 3c's kill result.** NTFS with an append handle is not ext4 or APFS,
+    and `write_all` looping is exactly where the platforms could differ.
+
+  **What is mechanized, and it is the half that has a dependent.** The reader's
+  behaviour on damaged files — the thing a kill's cost actually reaches — is
+  Rust, runs in the ordinary test job, and therefore runs on all three platforms
+  in CI: `one_damaged_file_does_not_cost_the_sink_its_other_records`, paired and
+  sabotage-checked. So *"a torn record costs its own file's tail and nothing
+  else"* is three-platform even though *"a kill produces no torn record"* is
+  one.
+
+  **What is not mechanized, and why not rather than merely not yet.** Everything
+  needing a real Claude Code binary and a live session cannot run in CI: there
+  is no such binary on a runner, and a job that spent a model turn per push
+  would be measuring somebody else's service on this project's schedule. The
+  instruments are committed so the re-measurement is cheap on each of the three
+  platforms when someone is standing on one; nothing runs them automatically,
+  and §9's on-demand bullet says so.
+
+- **The settings-target control asserts the set has exactly ONE member.**
+  *Amended 2026-08-19.* §7b's route was two-valued in its first draft — user or
+  project — while project-level install had already been closed, so a
+  representable state existed that no command could produce. A control asserting
+  *"this write lands at the user settings file"* passes just as happily with a
+  second variant sitting beside it. The assertion is therefore on the cardinality
+  of the variant set, so re-opening project-level install is a decision that
+  turns something red rather than a diff that does not.
+
+- **The prohibition on testing omission defaults is SCOPED, not blanket.**
+  *Amended 2026-08-19.* For the properties §7b writes explicitly — `shell`,
+  `async`, `once`, `asyncRewake`, `matcher`, `timeout` — a control asserting the
+  build's default would report a fact about Claude Code as a defect here, and
+  install no longer depends on any of them. **`if` is excluded**, and it is the
+  only exclusion: it has no written value meaning *do not suppress*, so install
+  must omit it and does depend on the default. A default that changed would
+  silently stop delivery and **nothing else in this repository would catch it**,
+  which is precisely the case the prohibition would otherwise close. Whatever is
+  built for `if` states that it is measuring somebody else's build, so a red
+  reads as *upstream moved* rather than as *we broke something*.
 
 - **Records from an unregistered project need a paired control.** *Added
   2026-08-19 with §7b.* A user-level hook fires everywhere, so: a session in a
@@ -1785,16 +2057,6 @@ that leave it say where they went.*
   bytes**, not on a constant in the source: what ships is what install writes.
   Paired against a fixture that does declare `async: true` and is observed
   losing the record, so the control's premise is exercised rather than assumed.
-
-- **A control on the omission defaults would be a control on somebody else's
-  build, and it is deliberately NOT written here.** *Added 2026-08-19.* §2's
-  round 3b measures what this build does with an omitted field, and two of the
-  seven schema descriptions were false. The temptation is a test asserting those
-  seven behaviours. It would fail on every upstream release that changes one,
-  reporting a fact about Claude Code as a defect in this repository — which is
-  ADR-0005 §10 rule 4a's channel pointed at CI. What is written instead is the
-  **contract**: install emits the properties it depends on explicitly, so a
-  default that moves cannot move vibe with it.
 
 - **The measurement instruments are ON-DEMAND, and that is a capability rather
   than a proof.** *Added 2026-08-19.* `scratchpad/hook-{collect,fixture,probe,

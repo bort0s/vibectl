@@ -8,50 +8,114 @@ use std::io::Write;
 
 use vibe_core::{ApplyOutcome, ApplyReport, CoreError, Diagnostic, FileOp, Severity, WritePlan};
 
+/// What is at a `CreateFile` target **at render time**, as three states rather
+/// than two.
+///
+/// `Path::exists()` is a two-state answer to a three-state question: it returns
+/// `false` for *absent* and `false` for *a path this process may not stat*. That
+/// is the collapsed-observable failure this repository catalogues (ADR-0011),
+/// and the dry run is the last place to reintroduce it — the first version of
+/// this renderer used `exists()` and would have called an unreadable path
+/// absent, which is precisely the defect (ADR-0001 §3b) it was written to
+/// expose.
+///
+/// So the probe is a read, and a read that fails for a reason other than
+/// `NotFound` produces `Unknown` rather than a guess in either direction.
+enum TargetNow {
+    /// Measured `NotFound`. The create can proceed.
+    Absent,
+    /// Read. The bytes are the **before** side the user is owed.
+    Occupied(String),
+    /// Could not tell. Not "exists", not "absent" — constraint 5.
+    Unknown(std::io::ErrorKind),
+}
+
+fn target_now(path: &std::path::Path) -> TargetNow {
+    match std::fs::read_to_string(path) {
+        Ok(before) => TargetNow::Occupied(before),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => TargetNow::Absent,
+        Err(e) => TargetNow::Unknown(e.kind()),
+    }
+}
+
 /// Render a plan for a human, the way `--dry-run` shows it.
 pub fn write_plan_human(out: &mut impl Write, plan: &WritePlan) -> std::io::Result<()> {
     if plan.is_empty() {
         return writeln!(out, "Nothing to do.");
     }
 
+    // **Probed ONCE, rendered twice.** The operation list and the contents block
+    // below both describe the same `CreateFile`, and the thing they describe is
+    // volatile — a second probe could disagree with the first, and the dry run
+    // would then contradict itself in two places the user reads as one report.
+    // One observation cannot.
+    let now: Vec<Option<TargetNow>> = plan
+        .ops
+        .iter()
+        .map(|op| match op {
+            FileOp::CreateFile { path, .. } => Some(target_now(path)),
+            _ => None,
+        })
+        .collect();
+
     writeln!(out, "Plan ({} operations):", plan.ops.len())?;
-    for op in &plan.ops {
+    for (op, seen) in plan.ops.iter().zip(&now) {
         match op {
             FileOp::CreateDir { path } => {
                 writeln!(out, "  create dir   {}", path.display())?;
             }
             FileOp::CreateFile { path, contents } => {
-                // **A `CreateFile` whose target EXISTS is a plan that cannot
-                // apply**, and saying "create file" about it is the tool being
-                // dishonest in its own output — which hard constraint 5 covers
-                // explicitly, not only detection.
+                // **A `CreateFile` whose target is not empty does not create
+                // anything**, and rendering it as "create file" is the tool
+                // being dishonest in its own output — which hard constraint 5
+                // covers explicitly, not only detection. `apply` re-checks
+                // preconditions before running *any* op and returns
+                // `TargetExists` for exactly this (ADR-0001 §3b), so the whole
+                // plan fails and nothing at all is written.
                 //
-                // `apply` re-checks preconditions before running any op and
-                // returns `TargetExists` for exactly this, so the operation
-                // never runs. What the user would otherwise see is a plan that
-                // reads as ordinary and then an error naming a cause the dry run
-                // gave no hint of. *Added 2026-08-19, after a planner was found
-                // emitting one; the planner is fixed and this covers the next
-                // producer, present or future.*
+                // **The correction is on the operation line, not appended to
+                // it.** The first version printed the ordinary "create file"
+                // line and hung a warning off the end: the primary claim was
+                // still wrong and the warning was merely additive. What the line
+                // says now is what the operation is — a create *aimed at* a path
+                // that is not empty.
                 //
-                // Checked at RENDER time rather than trusted from plan time: the
-                // file can appear in between, and that is the case a dry run is
-                // least able to warn about otherwise.
-                if path.exists() {
-                    writeln!(
-                        out,
-                        "  create file  {} ({} lines)  -- TARGET EXISTS: apply \
-                         will refuse this plan",
-                        path.display(),
-                        contents.lines().count()
-                    )?;
-                } else {
-                    writeln!(
-                        out,
-                        "  create file  {} ({} lines)",
-                        path.display(),
-                        contents.lines().count()
-                    )?;
+                // **And it does not claim what apply will do.** The probe is at
+                // render time, deliberately, since the path can appear between
+                // planning and rendering. But the same volatility runs the other
+                // way: it can be gone again before apply, and then apply creates
+                // the file normally. The line states the observation and its
+                // consequence *while it holds*, which is all that was measured.
+                let lines = contents.lines().count();
+                match seen {
+                    Some(TargetNow::Occupied(_)) => {
+                        writeln!(
+                            out,
+                            "  create file  {} ({lines} lines)  -- ONTO AN EXISTING PATH",
+                            path.display()
+                        )?;
+                        writeln!(
+                            out,
+                            "               nothing is created: apply refuses a create onto a \
+                             path that exists, and refuses the whole plan with it. Seen at \
+                             render time; if the path is gone by then, apply proceeds."
+                        )?;
+                    }
+                    Some(TargetNow::Unknown(kind)) => {
+                        writeln!(
+                            out,
+                            "  create file  {} ({lines} lines)  -- TARGET UNREADABLE ({kind:?})",
+                            path.display()
+                        )?;
+                        writeln!(
+                            out,
+                            "               whether anything is here could not be determined, so \
+                             whether apply can create is unknown. Not guessed either way."
+                        )?;
+                    }
+                    _ => {
+                        writeln!(out, "  create file  {} ({lines} lines)", path.display())?;
+                    }
                 }
             }
             FileOp::UpdateFile { path, .. } => {
@@ -70,11 +134,57 @@ pub fn write_plan_human(out: &mut impl Write, plan: &WritePlan) -> std::io::Resu
 
     // Show the contents of a file being created. Seeing the manifest that is
     // about to be written is most of the value of a dry run.
-    for op in &plan.ops {
+    //
+    // **With a before side when there is one.** Constraint 2 rests on the user
+    // approving the diff, and a block showing only the new text implies the path
+    // was empty. Where it is not, what is there now comes first, and the new
+    // text is labelled with the condition under which it would ever be written.
+    for (op, seen) in plan.ops.iter().zip(&now) {
         if let FileOp::CreateFile { path, contents } = op {
             writeln!(out, "\n--- {} ---", path.display())?;
-            for line in contents.lines() {
-                writeln!(out, "  {line}")?;
+            match seen {
+                Some(TargetNow::Occupied(before)) => {
+                    writeln!(
+                        out,
+                        "  ON DISK NOW ({} lines) -- apply does not replace this, it refuses:",
+                        before.lines().count()
+                    )?;
+                    for line in before.lines() {
+                        writeln!(out, "  - {line}")?;
+                    }
+                    writeln!(
+                        out,
+                        "  WOULD BE WRITTEN ({} lines), only if the path were empty:",
+                        contents.lines().count()
+                    )?;
+                    for line in contents.lines() {
+                        writeln!(out, "  + {line}")?;
+                    }
+                }
+                // The case that produced §3b: a directory where a file belongs.
+                // What is there is NOT shown, because it was not read. An
+                // invented before side is the same class of wrong value as the
+                // "missing" label that started that defect.
+                Some(TargetNow::Unknown(kind)) => {
+                    writeln!(
+                        out,
+                        "  ON DISK NOW: could not be read ({kind:?}). Not shown rather than \
+                         guessed."
+                    )?;
+                    writeln!(
+                        out,
+                        "  WOULD BE WRITTEN ({} lines), only if the path were empty:",
+                        contents.lines().count()
+                    )?;
+                    for line in contents.lines() {
+                        writeln!(out, "  + {line}")?;
+                    }
+                }
+                _ => {
+                    for line in contents.lines() {
+                        writeln!(out, "  {line}")?;
+                    }
+                }
             }
         }
     }
@@ -1017,53 +1127,126 @@ mod repo_message_tests {
 mod create_file_honesty_tests {
     use super::*;
 
-    /// **A `CreateFile` whose target exists must say so in the dry run.**
+    fn render_create(dir: &std::path::Path, path: &std::path::Path) -> String {
+        let plan = WritePlan::new(
+            vibe_core::PlanIntent::New,
+            dir.to_path_buf(),
+            vec![FileOp::CreateFile {
+                path: path.to_path_buf(),
+                contents: "new line one\nnew line two\n".to_owned(),
+            }],
+        );
+        let mut out = Vec::new();
+        write_plan_human(&mut out, &plan).expect("render");
+        String::from_utf8(out).expect("utf8")
+    }
+
+    /// **A `CreateFile` whose target is not empty must not be rendered as a
+    /// create — on the operation line AND in the body.**
     ///
-    /// Constraint 5 is not only about detection: *"never guess, never invent a
-    /// plausible-looking value"* applies to the tool's own output, and
-    /// *"create file"* about a path that already exists is a plausible-looking
-    /// wrong value. `apply` refuses such a plan with `TargetExists`, so what the
-    /// user would otherwise see is an ordinary-looking plan followed by an error
-    /// naming a cause the dry run gave no hint of.
+    /// Constraint 5 is not only about detection: *"never invent a
+    /// plausible-looking value"* applies to the tool's own output, and *"create
+    /// file"* about a path that is not empty is a plausible-looking wrong value.
+    /// `apply` refuses such a plan with `TargetExists` (ADR-0001 §3b), so what
+    /// the user would otherwise see is an ordinary-looking plan followed by an
+    /// error naming a cause the dry run gave no hint of.
     ///
-    /// **Paired**, or this is satisfied by a build that warns about every
-    /// create: the same op with an absent target must render without the
-    /// warning.
+    /// **The body is asserted, not only the operation line.** The first version
+    /// of this control checked for a warning string and nothing else, so a build
+    /// that printed the ordinary create line, appended a warning, and then
+    /// dumped the new contents with no before side would have passed it. That
+    /// build says *create* twice and *replace* nowhere; the warning is additive,
+    /// and additive is not corrective. Constraint 2 rests on the user approving
+    /// the diff, so a body implying the path was empty is the half that matters.
+    ///
+    /// **Paired against absence**, or this is satisfied by a build that warns
+    /// about every create and carries no information.
     #[test]
     fn a_create_over_an_existing_path_is_not_rendered_as_an_ordinary_create() {
         let dir = tempfile::tempdir().expect("tempdir");
         let existing = dir.path().join("already-here.toml");
-        std::fs::write(&existing, "old\n").expect("plant");
+        std::fs::write(&existing, "the user's own line\n").expect("plant");
         let absent = dir.path().join("not-here.toml");
 
-        let render = |path: &std::path::Path| {
-            let plan = WritePlan::new(
-                vibe_core::PlanIntent::New,
-                dir.path().to_path_buf(),
-                vec![FileOp::CreateFile {
-                    path: path.to_path_buf(),
-                    contents: "new\n".to_owned(),
-                }],
-            );
-            let mut out = Vec::new();
-            write_plan_human(&mut out, &plan).expect("render");
-            String::from_utf8(out).expect("utf8")
-        };
-
-        let over_existing = render(&existing);
+        let over_existing = render_create(dir.path(), &existing);
         assert!(
-            over_existing.contains("TARGET EXISTS"),
-            "the dry run described a create over an existing path as an \
-             ordinary create; apply will refuse it and the user was told \
-             nothing. Rendered:\n{over_existing}"
+            over_existing.contains("ONTO AN EXISTING PATH"),
+            "the operation line described a create over an existing path as an \
+             ordinary create. Rendered:\n{over_existing}"
+        );
+        assert!(
+            over_existing.contains("the user's own line"),
+            "the body showed no BEFORE side, so it reads as a create onto an \
+             empty path — which is what the user approves against. \
+             Rendered:\n{over_existing}"
+        );
+        assert!(
+            over_existing.contains("ON DISK NOW") && over_existing.contains("WOULD BE WRITTEN"),
+            "the body did not distinguish what is there from what would be \
+             written, so the two are one observable again. \
+             Rendered:\n{over_existing}"
         );
 
-        let over_absent = render(&absent);
+        // And it must not claim a future it did not measure. The probe is at
+        // render time; the path can be gone before apply runs, and then the
+        // create succeeds. "apply WILL refuse" is one step past the observation
+        // — the same error as inferring `apply`'s behaviour from a table.
         assert!(
-            !over_absent.contains("TARGET EXISTS"),
+            !over_existing.contains("will refuse this plan"),
+            "the render asserted what apply will do from an observation it \
+             knows is volatile. Rendered:\n{over_existing}"
+        );
+
+        let over_absent = render_create(dir.path(), &absent);
+        assert!(
+            !over_absent.contains("ONTO AN EXISTING PATH") && !over_absent.contains("ON DISK NOW"),
             "every create is being warned about, so the warning carries no \
              information. Rendered:\n{over_absent}"
         );
-        assert!(over_absent.contains("create file"));
+        assert!(
+            over_absent.contains("create file") && over_absent.contains("new line one"),
+            "the ordinary create stopped rendering its contents. \
+             Rendered:\n{over_absent}"
+        );
+    }
+
+    /// **A target that could not be read is neither "exists" nor "absent", and
+    /// the body must not invent what is in it.**
+    ///
+    /// This is the exact shape of ADR-0001 §3b: a directory standing where a
+    /// file belongs. `Path::exists()` answers `true` here and `read_to_string`
+    /// fails, so a renderer built on `exists()` would print a before side it
+    /// never read — inventing a plausible value inside the repair written to
+    /// stop one being invented.
+    ///
+    /// Paired against the readable case above by construction: that one must
+    /// show the bytes, this one must not claim any.
+    #[test]
+    fn a_target_that_cannot_be_read_is_not_reported_as_either_state() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let blocked = dir.path().join("a-directory-where-a-file-belongs.md");
+        std::fs::create_dir(&blocked).expect("plant a directory");
+
+        // Premise: this is the unreadable case and not merely a missing one.
+        assert!(
+            std::fs::read_to_string(&blocked).is_err(),
+            "the fixture is readable, so the assertions below prove nothing"
+        );
+
+        let text = render_create(dir.path(), &blocked);
+        assert!(
+            text.contains("TARGET UNREADABLE"),
+            "an unreadable target rendered as one of the two states it is not. \
+             Rendered:\n{text}"
+        );
+        assert!(
+            text.contains("could not be read"),
+            "the body did not say the before side is unknown. Rendered:\n{text}"
+        );
+        assert!(
+            !text.contains("ON DISK NOW ("),
+            "the body printed a line count for content it never read. \
+             Rendered:\n{text}"
+        );
     }
 }

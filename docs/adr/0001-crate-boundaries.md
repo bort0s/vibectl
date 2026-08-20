@@ -277,6 +277,29 @@ Both halves are now written here, and the reason is not tidiness. `check_precond
 
 **The commands affected:** `vibe agents add`, `vibe agents sync` and `vibe agents update` — every path that reaches `install` — plus `vibe agents status`, which reported the wrong state without planning anything.
 
+### 3c. DEFECT (`vibectl`): `--dry-run` rendered every `CreateFile` as a create
+
+*Filed 2026-08-20. Introduced in `57c7b64` (2026-08-10), the commit that added `--dry-run` — so it has been present for as long as the dry run has, on all three platforms, for **every** command that plans a `CreateFile`: `vibe new`, `vibe render`, `vibe agents add`, `sync` and `update`.*
+
+**What it is.** `write_plan_human` rendered `CreateFile` as `create file <path> (N lines)` without looking at the path, and the contents block below it printed the new text alone. Where the path was not empty, the dry run therefore said *create* twice and said nothing about what was there — for an operation `apply` refuses (§3b).
+
+**Why it is filed rather than adjusted.** Constraint 2 is enforced by the user approving the plan; the plan the user approves is this text. A dry run that describes an operation which cannot happen, and shows no before side for a path that is not empty, is the enforcement mechanism misreporting. That is the same class as a wrong `status` label, not a display preference.
+
+**It is also the visible half of `plan_render`'s only race.** `plan_render` cannot produce this from a failed read — it emits `CreateFile` on a measured `NotFound` and returns `CoreError::Io` on any other error, which is §3b's invariant already held in that planner. What it can do is read `NotFound` and have the file appear before `apply` runs. The dry run is where the user would find out, and it did not say.
+
+**The repair, and the first attempt at it, which was half of one.** *Both on 2026-08-20; the first is recorded because the difference is the point.* The first version kept the ordinary `create file` line and **appended** a warning. The primary claim was still wrong and the warning was additive: a build that says *create*, then warns, then dumps the new contents with no before side, still describes a create onto an empty path in two places out of three. The correction has to be on the claim, not beside it. So:
+
+- the operation line says what the operation is — `create file … -- ONTO AN EXISTING PATH`, followed by the consequence;
+- the contents block shows **`ON DISK NOW`** with the bytes, then **`WOULD BE WRITTEN`** with the condition under which they ever would be.
+
+**What it may not say, which the first version did.** The first version's warning read *"apply will refuse this plan"*. The probe is at render time — deliberately, since the path can appear between planning and rendering — but that volatility runs both ways: the path can be gone again before `apply`, and then `apply` creates the file normally. Asserting `apply`'s behaviour from a volatile observation is the same error as §3b's withdrawn claim, one layer out. The line states the observation and its consequence *while it holds*.
+
+**The probe is a read, not `Path::exists()`, and that is not a detail.** `exists()` is a two-state answer to a three-state question: `false` for *absent* and `false` for *cannot stat*. Using it here would have rendered §3b's own fixture — a directory where a file belongs — as an ordinary create, reintroducing the collapsed observable inside the repair written to expose it. `TargetNow` is `Absent` / `Occupied(bytes)` / `Unknown(kind)`, and `Unknown` prints as unknown: no before side is shown for content that was not read.
+
+**And the probe runs once for two renderings.** The operation list and the contents block describe the same volatile path. Probing per block would let one report contradict itself; the observation is taken once and rendered twice.
+
+**Controlled by** `a_create_over_an_existing_path_is_not_rendered_as_an_ordinary_create` — asserting the operation line, the before side, *and* the absence of the future-tense claim, paired against an absent target — and `a_target_that_cannot_be_read_is_not_reported_as_either_state`. Four sabotages, each red: additive line, dropped before side, restored future claim, and `Unknown` collapsed back into `Occupied`.
+
 ### 4. Errors: `thiserror` in core, `anyhow` in the CLI, no exceptions
 
 ```rust

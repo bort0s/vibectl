@@ -161,15 +161,117 @@ pub struct ApplyReport { pub applied: Vec<AppliedOp>, pub skipped: Vec<SkippedOp
 
 **Measured, not read.** A reader spinning on the target through 400 replacements sees `Empty` on the old path and only whole contents on the new one, and **the negative half is what licenses the positive one** — a reader too slow to catch anything reports a clean sweep too. Both halves run in the ordinary test job on all three platforms.
 
+**AND *"a reader sees the old file or the new one"* IS FALSE ON WINDOWS.** *Measured 2026-08-19, and it corrects the claim this repair shipped with.* Under load, a reader spinning on the target during the rename gets a real `ErrorKind::NotFound` — the OS says the path does not exist. So the replacement is **not invisible to a concurrent reader**; what it is instead:
+
+| what a concurrent reader can observe | old path (`std::fs::write`) | temp + rename |
+| --- | --- | --- |
+| the whole old contents | yes | yes |
+| the whole new contents | yes | yes |
+| **the file empty or half written** | **yes, every write** | **no** |
+| the file absent (`NotFound`) | no | **yes, briefly** |
+| the read refused (`PermissionDenied`) | no | yes |
+
+**The destructive case is the one that moved**, and that is the repair: a zero-byte `.vibe/project.toml` is a parse error and a truncated manifest is worse, while an absent file is a defined state every caller here already handles — `read_document` returns `None`, the cache treats a missing file as absent-not-error. **It is not nothing**, and it is recorded rather than asserted away: a reader that lands in that window sees "no settings" for one read.
+
+**THE TRADE, WRITTEN AS A TRADE.** *Added 2026-08-19, because "the repair introduced two new observables" is a true sentence that a later reader could act on.*
+
+| | old path (`std::fs::write`) | temp + rename |
+| --- | --- | --- |
+| **empty or half-written file** | **every write, by construction** | never observed |
+| absent (`NotFound`) | never | rarely, under contention, Windows |
+| refused (`PermissionDenied`) | never | rarely, under contention, Windows |
+| **who has to handle it** | every reader, and none did | every reader, and most already do |
+| **which platforms** | **all three** — `File::create` truncates everywhere | **Windows only** — `rename(2)` is specified atomic on POSIX, where a reader never observes either |
+
+**A certain corrupting state was exchanged for a rare recoverable one.** The old window was not a risk, it was a certainty: `File::create` truncates before `write_all`, so the file was zero bytes on *every* write, and a zero-byte `.vibe/project.toml` is a parse error rather than a state any reader has a branch for. The new observables are transient and both have an existing, correct meaning in most readers.
+
+**Measured — and the numbers are labelled as what they are.** Four readers spinning on the target through **12,000 replacements**, three batches: **~360,000 reads, one `PermissionDenied`, zero `NotFound`.**
+
+- **One `PermissionDenied` in ~360,000 reads. The rate is not estimated**, and neither is any duration derived from it — one event does not support a frequency, and a frequency multiplied by a cycle time does not become a window length. *An earlier draft said "one read in 10^5 to 10^6" and then "microseconds or less"; both are withdrawn.*
+- **The zero for `NotFound` in this run is a guard never reached.** What establishes reachability is a **different, higher-contention run**, which produced it. The two are separate measurements and only the second says the state exists.
+
+**Contrast the old path, whose window a deterministic control catches every single time.** That asymmetry — certain versus not-estimated-but-rare — is the trade, and it does not need the rate to hold.
+
+**WHO ACTUALLY HANDLES IT — enumerated, not assumed.** *"An absent file is a defined state every caller already handles"* was a claim about every call site made without visiting them. Visited:
+
+| reader | `NotFound` | any other error |
+| --- | --- | --- |
+| `ManifestDocument::open` | `CoreError::ManifestNotFound` | `CoreError::Io` — **distinct** |
+| `Registry::plan_render` | plans a `CreateFile` | returns `CoreError::Io` — **distinct** |
+| `Cache::load` | `CacheLoad::Absent` | `CacheLoad::Corrupt { why }` — **distinct** |
+| `RenderMarker::classify_path` | `RenderState::Absent` | `RenderState::Unverifiable` — **distinct, and commented as deliberate** |
+| `AgentLock::load` | `LockLoad::Absent` | `LockLoad::Corrupt` — **distinct** |
+| `Witness::observe` (cache) | no witness | no witness — **collapsed, conservatively** |
+| `AgentState` scan | `AgentState::Missing` | **`AgentState::Missing` — COLLAPSED, and wrong** |
+| `ops::already_installed` | `false` | `false` — **collapsed, conservatively** |
+| `ops::install` | plans `CreateFile` | plans `CreateFile` — **collapsed, and it misreports the diff** |
+| `ops::remove` | no delete op | no delete op — **collapsed, safe direction** |
+
+**Five of ten distinguish the two correctly**, three collapse them in the safe direction, and **two collapse them into a wrong claim.**
+
+**The three "safe direction" rows, argued rather than labelled** — *added 2026-08-19, because `conservatively` is a word where an argument goes:*
+
+- **`Witness::observe`** is the one that needed the argument. Collapsing an unreadable manifest into *no witness* means the cache cannot claim the entry is fresh, so it re-scans. **The direction is toward not-claiming**, which is the right one — but it is a reader producing silence for a permissions reason, and §7's whole subject is silence that means something else. What saves it is that the consequence is **work, not a claim**: a re-scan re-reads the manifest and reaches its own conclusion.
+
+  **REGISTERED AS AN EXPIRING LIMIT, because that argument is conditional on a dependent nothing enforces.** *Added 2026-08-19.* The day the witness gains a user-visible meaning — *"cached"*, *"fresh"*, anything a user reads — this row moves to the wrong-claim column and **nothing flags it**. Same shape as `shell` depending on `args`: a property that holds because of something elsewhere, which no control connects. What would close it is a control asserting the witness is never rendered; not built, because there is no display for it to guard and a control over an absence with no producer is the shape §9 rejects. **The trigger is a witness value reaching `output.rs`.**
+- **`ops::remove`** cannot delete on a failed read because it never builds the `RemoveOwnedAgent` op, and there is no other way to delete — the constraint is doing the work, not the branch.
+- **`adoptable_on_exact_match`** returning `false` **refuses adoption**; its safety was a property of what its one caller did with the `false`, not of the function. That is no longer true of it — it takes the bytes now (see the chain below) — and it is the row that turned out not to be conservative at all. Both were there before this repair; the repair makes the input reachable more often, so they are named here rather than left for the next reader:
+
+- **`AgentState` reports `Missing` for a file it could not read.** That is constraint 5 — a fact about the world inferred from a failure to look — and the honest value **already exists two lines away**: `AgentState::Unverifiable`, documented as *"ownership or content cannot be established"*. A one-line change and a control, and **what a label claims is a product decision**, so it is recorded rather than taken.
+- **`ops::install` turns an update into a create.** A transient error makes it plan `CreateFile` for a file that exists, so `--dry-run` shows *create* where the truth is *replace*, and the `before` side of the diff is lost. Not destructive — `apply` replaces either way — but the diff the user approves is wrong, and constraint 2's whole argument is that the diff is what makes a write reviewable.
+
+**TWO OF THE COLLAPSED ROWS COMPOSE, and the composition produces a plan that cannot apply.** Measured 2026-08-19. It is **not** a defect in this repair — its precondition is a directory where a file belongs, which needs no concurrency and no rename — so it is filed on its own as **§3b** with its introduction date, its reachability and its corrected severity. Named here because the enumeration above is what found it: nothing about the rows individually said they composed.
+
+**And none of them retries.** Every site reports or plans from a single read, so a transient error in the window becomes a reported fact rather than something a second attempt clears. That is the answer to *"transient with a retrying caller, or does the caller just report?"* — **it reports**, and that is what makes the two collapsing sites matter.
+
+**It was found because an instrument conflated two facts.** The first classifier mapped *every* read error to `Missing`, so a reader that was **denied** and a reader that found **no file** shared one observable — the failure this repository catalogues, inside the control asserting the absence of it. Split, it fired both ways: `PermissionDenied` on some runs and a genuine `NotFound` on others. Only the second is a window, and only the split could tell.
+
 **What the repair does not promise.** Durability. There is no `fsync`, so a crash can lose the *new* contents; whether it can also lose the old ones is a property of the filesystem rather than of this code and is not measurable here, so it is not asserted.
 
 **And the second write path had the same shape with a delete in it.** `Cache::save` had its own temp-and-rename plus a fallback that **removed the destination and retried**, under the comment *"Windows will not rename onto an existing file in every case"*. The comment was read rather than measured and the fallback could not help: measured on Windows 10 Pro 19045, a rename-over is refused exactly when another process holds the destination without `FILE_SHARE_DELETE` — and `DeleteFile` is refused in **the same two cases** and permitted in **the one where the rename already worked**. So the fallback was inert where it was aimed and destructive if it had ever fired, since it left the destination missing between the delete and the retry. It now goes through the one primitive.
+
+**`CreateFile` NEVER APPLIES OVER AN EXISTING PATH, and that is a gate rather than a convention.** *Measured 2026-08-19.* `check_precondition` runs over every op **before any op runs** and returns `CoreError::TargetExists` for a `CreateFile` whose target exists. So the write arm's sharing of `CreateFile` and `UpdateFile` — true of `write_atomically` called directly — never sees that case through `apply`.
+
+**The two planners that emit `CreateFile` were checked against it.** `Registry::plan_render` emits one **only** on `NotFound`; on an existing target it plans an `UpdateFile` carrying `before`, and on any other read error it returns `CoreError::Io`. It was already correct. `agents::install` was not, and is §3b.
+
+**What remains is a display defect, and it outlives any one planner.** `--dry-run` rendered such an op as *"create file … (N lines)"* with no before side and no sign the target exists — an ordinary-looking plan followed by an error naming a cause the dry run gave no hint of. **Hard constraint 5 is not only about detection**: *never invent a plausible-looking value* covers the tool's own output, and *"create file"* about a path that already exists is one. The renderer checks existence **at render time** — the file can appear between planning and rendering, and that is the case a dry run is least able to warn about otherwise — and says the plan will be refused. Controlled and paired, so it cannot degrade into warning about every create.
 
 **A pattern, not just a fix.** The fallback existed because of a **read** property — *"Windows will not rename onto an existing file in every case"* — and the measurement shows it could not have helped. That is the same shape as every other read-versus-measured finding in this repository, and the base rate is now nine to zero. **Suspect the tool first, including when the tool is what a previous commit believed about the tool.**
 
 **One limit on that measurement:** it is Windows-only. On POSIX, `unlink` succeeds on an open file, so *"the delete fallback was inert where it was aimed"* is a **single-platform finding**. Nothing turns on it — the code is gone — but the register should not read as if the claim were universal.
 
 **The trigger to revisit was not hooked to anything, and now it is.** *Amended 2026-08-19.* It said: a third write path appearing outside `apply`. A third write path appearing is visible only if something looks, and nothing did — which is how the second one survived from P0. The control named above is what fires. There are two today — `apply` and `Cache::save` — and they share one primitive; a third would mean the invariant *"core mutates the filesystem in one place"* has stopped being true, which is the thing §3 exists to say.
+
+### 3b. DEFECT (P5, `agents`): a failed read produced a plan that could not apply
+
+*Filed 2026-08-19, where the write path lives rather than inside the work that found it. **Filed with a corrected severity**: the report that found it said the file was replaced, and it is not — see the withdrawal below.*
+
+**What it is.** Three collapsed observables in `agents`, composing:
+
+1. the `AgentState` scan read the installed file with `.ok()`, so a read **error** became `AgentState::Missing` — a fact about the world inferred from a failure to look, which is hard constraint 5;
+2. `Missing` does not need `--force`, so `install`'s overwrite gate let it through where `Modified` refuses;
+3. `install` read again with `.ok()`, got `None`, and planned a **`CreateFile`** carrying the store's copy, aimed at a path that exists.
+
+**Reachable since P5, on all three platforms, deterministically.** The precondition is **a directory standing where an agent file belongs** — no concurrency, no Windows, no rename. A user produces it by making a directory of that name by hand, by a tool that creates `.claude/agents/<name>.md/` as a folder, or by an old checkout in which that path was a directory. Any read error does it; the directory is simply the one that is deterministic.
+
+**WHAT IT DOES NOT DO, AND AN EARLIER REPORT SAID IT DID.** *Withdrawn 2026-08-19, the same day.* That report said *"a user's edited agent, replaced"*. **Measured: `apply` refuses.** `check_precondition` runs over **every** op before any op runs, and `CreateFile` on an existing path returns `CoreError::TargetExists`. The plan is built, the dry run displays it, and the write never happens:
+
+```
+OPS:          [CreateFile { path: …/.claude/agents/a.md, contents: <the store's copy> }]
+APPLY RESULT: Err(TargetExists { path: …/.claude/agents/a.md })
+```
+
+**So the severity is a wrong report and an opaque failure, not data loss.** The corrected list of what it costs:
+
+- **`vibe agents status` says `missing`** for a file that is there and unreadable. That is the constraint-5 half, and it is a claim the user acts on.
+- **`--dry-run` says *"create file … (N lines)"*** and shows the new contents with no before side, for an operation that will be refused.
+- **`vibe agents add` then fails with `TargetExists`**, which names the symptom and not the cause. The cause — *the installed file could not be read* — was known three steps earlier and discarded.
+
+**And the reason it never destroyed anything is a mechanism nobody in this chain was relying on.** `check_precondition`'s `CreateFile` arm is the only thing between the plan and the write, and an earlier round's summary — *"`CreateFile` and `UpdateFile` share one arm in `apply`, so `CreateFile` onto an existing path replaces it"* — described the **write** arm and omitted the **gate** in front of it. True of `write_atomically` called directly; not true of a plan going through `apply`. Both halves are now written down, because a defence that holds by accident of a summary nobody checked is one commit from not holding.
+
+**The repair, on the invariant rather than the case: no `FileOp` is ever produced from a read that failed.** `install` reads once, and any error other than `NotFound` refuses with `Unverifiable` before an op is built; the state scan distinguishes absent from unreadable, which also closes the `--force` gate; `adoptable_on_exact_match` takes the bytes rather than reading them. Controlled by `no_plan_is_ever_produced_from_a_failed_read`, with both repairs sabotaged independently.
+
+**The commands affected:** `vibe agents add`, `vibe agents sync` and `vibe agents update` — every path that reaches `install` — plus `vibe agents status`, which reported the wrong state without planning anything.
 
 ### 4. Errors: `thiserror` in core, `anyhow` in the CLI, no exceptions
 

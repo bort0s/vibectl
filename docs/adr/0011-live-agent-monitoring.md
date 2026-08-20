@@ -2022,12 +2022,21 @@ only part of the design that would delete anything.
 **Constraint 2's exemption exists in the text and does not survive the
 mechanism.** The README reads *"No command deletes your files"* — scoped to the
 user's files, which a sink vibe created is arguably not. But ADR-0001 §3 enforces
-it by the **absence of `FileOp::Delete`**: *"a destructive command is not merely
-discouraged, it is unrepresentable."* An absent enum variant has no scope. So any
+it by the **absence of `FileOp::Delete`**, which makes *an op that names a path
+and removes it* unrepresentable. An absent enum variant has no scope. So any
 vibe-side deletion must either add that variant — re-arming deletion at every op
 site to serve one feature, converting a structural guarantee back into a
 discipline — or write outside `plan`/`apply`, which is a second mutation path
 with no dry run, no preconditions and none of ADR-0005 §10's containment.
+
+  *This paragraph quoted ADR-0001 §3's former wording — "a destructive command is
+  not merely discouraged, it is unrepresentable" — which §3 corrected on
+  2026-08-19 as stronger than what the type system does. **The conclusion is
+  unaffected and the quotation was stale:** deleting a sink file is precisely
+  *an op that names a path and removes it*, the one form the absent variant does
+  cover, so this argument only ever needed the narrow claim. Repaired 2026-08-20,
+  found by re-running the retraction sweep at full width — a `grep` for the
+  quoted phrase returns **zero** here, because it spans a line break.*
 
 **And it makes ADR-0005 §10 rule 5's TOCTOU residual materially worse**: today,
 winning the parent-swap race gets an attacker a file **written**; with `Delete`
@@ -3036,6 +3045,40 @@ that leave it say where they went.*
   the *scope* of a claim rather than of its truth. One is an instrument claiming
   more than it observed; this is a control covering less than its name implies.
 
+  **And there is a third, which this sequence produced last: TRUE, AND
+  MISREADABLE.** *Added 2026-08-20.* `gate.sh --sabotage` printed
+
+  ```
+  SABOTAGE 2 — a tree that DOES NOT COMPILE
+    MSRV 1.85 --locked           exit=0
+  ```
+
+  and every word of it was correct. That step is `cargo check` without
+  `--all-targets`: it compiles lib and bins, never test code, which is where both
+  sabotages land — and the scope is deliberate, documented in CI, with a reason
+  (`rust-version` promises what a **consumer** builds, and dev-dependencies carry
+  MSRVs of their own). The verdict was red both times, from clippy and test.
+
+  **So the label did not claim further than the tool reached. It let a reader get
+  there unaided**, by standing next to a headline it had no relationship with.
+  Constraint 5 forbids the first and says nothing about the second, and the
+  repair is different in kind: not narrowing a claim, but **putting the scope in
+  the label** — `MSRV 1.85 lib+bins`.
+
+  The three now complete a set, and naming the third is worth a line because it
+  is the only one where nothing is wrong with the sentence:
+
+  | category | the sentence is | repair |
+  | --- | --- | --- |
+  | claims more than observed | **false**, or unsupported | narrow it to what was measured |
+  | covers less than its name implies | **true**, and the name is the overclaim | move the control to the invariant, or say which case |
+  | true, and misreadable | **true**, and complete | put the scope where the reader is — in the label, not in a document |
+
+  **The tell for the third is position, not wording.** It only misleads because
+  of what it is printed beside; the same line in isolation is unobjectionable.
+  That makes it invisible to any review that reads a claim on its own — which is
+  every review that reads a diff.
+
 - **NOT THAT CLASS: AUTOMATION THAT DISCARDS WORK WHEN IT MEETS AN OBSTACLE.**
   *Added 2026-08-20, and filed apart from the instrument class deliberately.*
   A rebase of this branch was driven by a loop containing
@@ -3101,12 +3144,25 @@ that leave it say where they went.*
   next person to retract something will be reading the rules and not
   ADR-0008."*
 
-  Seven days later the not-swept half happened again, in the same shape: the
-  retraction went into ADR-0001 §3b and the disproved claim was left standing in
-  shipped source, at the call site of the repair. **So the rule is now
-  three-sided, and twice the failing side had the rule already written.** What
-  this entry adds is therefore not the rule but the two things that were missing
-  from it — an instrument, and the reason the reading half fails.
+  Seven days later the not-swept half happened again: the retraction went into
+  ADR-0001 §3b and the disproved claim was left standing in shipped source, at
+  the call site of the repair.
+
+  **Three sides, and calling them three instances of one class was wrong.**
+  *Corrected 2026-08-20, the day after writing it that way.* Grouping them puts
+  the wrong repair on all three, because the causes are different:
+
+  | instance | what was in place | cause | repair |
+  | --- | --- | --- | --- |
+  | 2026-08-13 (the one that produced the rule) | nothing | **no rule** — the practice existed and was applied intermittently | write the rule |
+  | 2026-08-19 (`VIBE_REQUIRE_GH` shape, recurring) | rule | **no instrument** — *"sweep the residue"* is an instruction to go and search | build one |
+  | 2026-08-20 (this one) | rule, read, and applied — **three passes were run** | **the 80-column hard wrap**: a line-oriented search cannot see a claim longer than a line | remove the ceiling |
+
+  **Only the third says something new, and it is the nastier one.** The first two
+  are about someone not doing the thing. The third is about doing it, three
+  times, correctly, and still missing ten of thirteen occurrences — because the
+  tool everybody reaches for has a one-line ceiling and prose here is wrapped at
+  80 columns. See the entry below; it is not a retraction rule at all.
 
   A claim was withdrawn on 2026-08-19 — *"a user's edited
   agent, replaced"*, a constraint 2 violation asserted about shipped code, and
@@ -3136,7 +3192,91 @@ that leave it say where they went.*
   and **prints how many files it scanned**, so a bounded answer is distinguishable
   from a search that stopped early. `scratchpad/sweep.py` is that instrument; the
   first version of it died mid-run on an encoding error and still printed a
-  total, which is the same failure one level up.
+  total, and the second died **printing a match containing an arrow** on a
+  cp1252 console — having already found the sites, unable to say so. Both are
+  the same failure one level up.
+
+- **A TEXT SEARCH OVER HARD-WRAPPED PROSE HAS A ONE-LINE CEILING, AND ITS WIDTH
+  IS DECLARED WITH THE RESULT.** *Added 2026-08-20. Not a retraction rule —
+  retraction is only where it was noticed.*
+
+  `grep`, `rg`, `Select-String` and every editor's find match **within a line**.
+  Prose in this repository is hard-wrapped at 80 columns. So any search over
+  documents or doc comments is blind to every statement longer than one line —
+  and that is not a uniform loss, it is **selective against the sentences that
+  carry arguments**, because a claim short enough to fit on one line is rarely
+  the claim worth searching for.
+
+  **Demonstrated on this corpus, in one line each:**
+
+  ```
+  grep -c "not merely discouraged" docs/adr/0011-live-agent-monitoring.md   ->  0
+  sweep.py --pattern "not\s+merely\s+discouraged"                          ->  2 sites
+  ```
+
+  The second site is a **fourth un-swept retraction residue**, found by re-running
+  the sweep at full width: §Retention quoted ADR-0001 §3's *former* enforcement
+  wording, corrected 2026-08-19 as stronger than what the type system does, and
+  built an argument on it. *Severity stated exactly: the quotation was stale and
+  the conclusion was not affected* — deleting a sink file is precisely the one
+  form the absent variant does cover. Repaired in place.
+
+  **The scope of the rule is where the text is wrapped, not what it is about.**
+  `control_inventory.rs` and the bypass control scan **source**, where a
+  declaration or an attribute genuinely is one line, and line-oriented matching
+  is correct there. Documents, doc comments, commit messages and prose comments
+  in source are not, and that last category is the one that hides in a source
+  scan.
+
+  **What it costs retroactively, said plainly:** every *"searched, zero
+  occurrences"* claim made over prose in this project's history had this ceiling
+  and did not declare it. They are pass-2 results. That does not make them wrong;
+  it makes their width unstated, which is the same defect as an undeclared
+  sampling window. `scratchpad/sweep.py` is the instrument, and re-running one of
+  those searches through it is cheap.
+
+- **AND THE HIGHEST-COST RESIDUE IS A PROSE COMMENT IN SHIPPED SOURCE.** *Added
+  2026-08-20, from the site that survived two passes.* Of the thirteen
+  occurrences of the withdrawn `agents` claim, one was categorically worse than
+  the rest: the comment in `agents/ops.rs`, **at the call site of the repair
+  itself**, still asserting *"a user's edited agent, gone."*
+
+  Rank residue by who reads it and what they do next:
+
+  1. **A prose comment in shipped source, at the code it describes.** It is on
+     `main`; it is the first thing a future session reads to learn what that code
+     does; and it is *adjacent to working code*, so it reads as established. The
+     round-8 summary that omitted `check_precondition`'s gate was exactly this,
+     and it is what made §3b's chain look destructive for several rounds.
+  2. **A comment beside a control or a CI step.** ADR-0002 §7's original
+     instance: the next author copies the neighbour, not the ADR.
+  3. **A quotation of the claim in another document.** Stale, findable, and
+     usually reached by someone already reading carefully.
+  4. **The paragraph the retraction was written in.** Never the problem; it is
+     where people look last for a claim they think is settled.
+
+  **And it is exactly the category the two searches miss.** A document sweep
+  looks at `docs/`; a source scan is line-oriented and the comment is wrapped.
+  So the worst residue sits in the intersection of both blind spots, which is
+  why the sweep covers source and normalises wrapping rather than doing one or
+  the other.
+
+  **A fifth site, found the same day, is the ranking confirming itself.**
+  `crates/vibe-core/src/monitor/sink.rs`'s module doc carries the superseded
+  enforcement wording *and* speaks of `prunable`, which this document retracted
+  entirely on 2026-08-19 — two retractions' residue in one prose comment in
+  shipped source. **Provenance measured rather than assumed:** introduced by
+  `f356f34` (2026-08-18), removed on this branch by `ca4a902` (2026-08-19, the
+  prunability retraction), and **still on `main` today**. The fix branch does not
+  modify `sink.rs` at all, so it inherits the site rather than introducing it and
+  does not need to move for it; landing this branch is what removes it.
+
+  *And a note on how the provenance was measured, because getting it wrong is
+  the same family: `git log -S… -- <path> <ref>` puts the ref after `--`, so git
+  reads it as a pathspec and searches the current branch instead. It returned a
+  commit that is not in `main` at all. Checked with `merge-base --is-ancestor`
+  before reporting; the argument order silently changed what was measured, which
+  is the channel class one level down from the search ceiling above.*
 
 - **THE TIMING-DEPENDENT CONTROLS, ENUMERATED AND DISPOSITIONED.** *Added
   2026-08-19.* One control was found firing at **one red in six runs** — the

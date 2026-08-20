@@ -1378,19 +1378,37 @@ practice already existed and was applied intermittently, which is the finding:
   a line-oriented search is blind to any statement longer than a line — which
   selects against exactly the sentences that carry arguments.
 
-**The third instance says what the first two could not: the rule is not enough
-on its own.** Twice now the failing side has been someone who had the rule
-available and did not reach for it, and the second time it was written here, in
-the rules document, for that exact reason. *Sweep the residue* is an instruction
-to go and search, and a hand search is bounded by whatever pattern occurs to the
-searcher — so it fails quietly and reports done. **`scratchpad/sweep.py` is the
-instrument**: it strips comment and doc prefixes, collapses whitespace so a
-claim spanning a line break is visible, runs across every ref that will merge
-rather than the working tree, and prints the number of files scanned beside the
-number of sites, so a bounded answer is distinguishable from a search that
-stopped early. Committed rather than described, for the reason `probe.js` was:
-an instrument rebuilt from a paragraph is a new instrument with the old one's
-name.
+**The third instance is not a fourth reason to restate the rule. Its cause is
+different from the other two, and grouping them would put the wrong repair on
+all three.** The first happened with no rule; the second with the rule written
+and not reached for. **The third happened with the rule written, read, and
+applied** — three separate sweeps were run — and still missed ten of thirteen
+occurrences.
+
+**What defeated it was the 80-column hard wrap.** `grep` and every tool like it
+match *within a line*, so a search over wrapped prose cannot see any statement
+longer than one line. That loss is not uniform: it selects against exactly the
+sentences that carry arguments, because a claim short enough to fit on one line
+is rarely one worth retracting. Demonstrated on this corpus —
+`grep -c "not merely discouraged"` over ADR-0011 returns **0**, and a
+width-independent sweep returns a site, which turned out to be a **fourth**
+un-swept residue: §Retention quoting this document's own superseded enforcement
+wording.
+
+So the repair is not more wording, it is removing the ceiling.
+**`scratchpad/sweep.py`** strips comment and doc prefixes, collapses whitespace
+so a claim spanning a line break is visible, runs across every ref that will
+merge rather than the working tree, includes source as well as documents, and
+prints the number of files scanned beside the number of sites — so a bounded
+answer is distinguishable from a search that stopped early. Committed rather
+than described, for the reason `probe.js` was: an instrument rebuilt from a
+paragraph is a new instrument with the old one's name.
+
+**The rule that generalises past retraction is recorded in ADR-0011's register**,
+because it applies to every search over prose in this project and not only to
+this one: *a text search over hard-wrapped prose has a one-line ceiling, and its
+width is declared with the result.* Every *"searched, zero occurrences"* claim
+made over prose before 2026-08-20 has that ceiling and did not declare it.
 
 **The consequence arrived weeks later and arrived by copying.** The diff adding
 a `VIBE_REQUIRE_GIT` step reproduced the disproved claim **twice** — once in

@@ -475,10 +475,23 @@ impl<'a> Builder<'a> {
         // There used to be two reads here, both `.ok()`, and the invariant this
         // enforces was nobody's job. Measured: a read that failed for any reason
         // other than absence produced a `CreateFile` carrying the store's
-        // contents, aimed at a path that exists — and `apply` runs `CreateFile`
-        // and `UpdateFile` through one arm, so it replaces. A user's edited
-        // agent, gone, without the `--force` that `Modified` requires, from a
-        // transient error.
+        // contents, aimed at a path that exists, with no `--force` asked for
+        // and nothing said about the failed read.
+        //
+        // **This comment claimed the file was then replaced. Struck 2026-08-20
+        // — `apply` refuses.** `check_precondition` runs over every op before
+        // any op runs and returns `TargetExists`, so nothing is written on any
+        // path. The struck sentence described `apply`'s *write* arm and omitted
+        // the *gate* in front of it, and it was inferred from a summary rather
+        // than run. ADR-0001 §3b records the withdrawal and what the chain
+        // actually costs: a wrong `status` label, a dry run that misreports,
+        // and an error naming a symptom whose cause was discarded here.
+        //
+        // **The repair is not weakened by the withdrawal, and the reason is
+        // worth keeping at the call site:** the gate is one line in another
+        // crate, no test asserted it until §3b was filed, and every planner
+        // ever written depends on it. Producing a plan you know cannot apply is
+        // wrong on its own terms.
         //
         // The invariant is the repair, not the case: **no `FileOp` is ever
         // produced from a read that failed.** Written here rather than at each

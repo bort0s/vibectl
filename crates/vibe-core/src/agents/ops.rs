@@ -454,18 +454,52 @@ impl<'a> Builder<'a> {
     /// lock entry for. Compares content, never names or timestamps: the claim
     /// being made is "writing this file would change nothing", and only the
     /// bytes can support it.
-    fn adoptable_on_exact_match(&self, name: &str) -> bool {
+    /// **Takes the bytes rather than reading them.** *Changed 2026-08-19.* It
+    /// used to read the file itself and `unwrap_or(false)` the error, which made
+    /// its safety a property of what the CALLER did with the `false` — here a
+    /// refusal, which is the safe direction, but only by luck of the call site.
+    /// Now there is one read per install and the failure is handled once, where
+    /// it can refuse.
+    fn adoptable_on_exact_match(&self, name: &str, on_disk: Option<&[u8]>) -> bool {
         let Some(agent) = self.ctx.store_agents.get(name) else {
             return false;
         };
-        let path = self.ctx.project_dir.join(install_path(name));
-        std::fs::read(&path)
-            .map(|on_disk| lock::content_hash(&on_disk) == agent.content_hash)
-            .unwrap_or(false)
+        on_disk.is_some_and(|bytes| lock::content_hash(bytes) == agent.content_hash)
     }
 
     fn install(&mut self, name: &str, force: bool, reason: InstallReason) {
         let state = self.ctx.state_of(name);
+
+        // **ONE READ, AND A FAILED ONE PRODUCES NO PLAN.** *Added 2026-08-19.*
+        //
+        // There used to be two reads here, both `.ok()`, and the invariant this
+        // enforces was nobody's job. Measured: a read that failed for any reason
+        // other than absence produced a `CreateFile` carrying the store's
+        // contents, aimed at a path that exists — and `apply` runs `CreateFile`
+        // and `UpdateFile` through one arm, so it replaces. A user's edited
+        // agent, gone, without the `--force` that `Modified` requires, from a
+        // transient error.
+        //
+        // The invariant is the repair, not the case: **no `FileOp` is ever
+        // produced from a read that failed.** Written here rather than at each
+        // reader, because the previous repair of this exact shape — round 8's
+        // *absent is not unreadable* in `read_document` — covered the case it
+        // met and not the class, and this is the class arriving two functions
+        // away in the read-error form.
+        let install_target = self.ctx.project_dir.join(install_path(name));
+        let on_disk = match std::fs::read(&install_target) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => {
+                self.refuse(
+                    name,
+                    AgentState::Unverifiable,
+                    "the installed file could not be read, so what is on disk is \
+                     unknown and no plan can be made about it",
+                );
+                return;
+            }
+        };
 
         // Ownership first, always. A file we did not write is never adopted,
         // whatever the user asked for — silently taking ownership is how the
@@ -489,7 +523,9 @@ impl<'a> Builder<'a> {
         // `remove` would then delete it. Acceptable, because byte-identical to
         // the store means the content is recoverable from the store by
         // definition.
-        if state == Some(AgentState::PresentUnowned) && !self.adoptable_on_exact_match(name) {
+        if state == Some(AgentState::PresentUnowned)
+            && !self.adoptable_on_exact_match(name, on_disk.as_deref())
+        {
             self.refuse(
                 name,
                 AgentState::PresentUnowned,
@@ -535,8 +571,8 @@ impl<'a> Builder<'a> {
         };
 
         let rel = install_path(name);
-        let path = self.ctx.project_dir.join(&rel);
-        let current = std::fs::read(&path).ok();
+        let path = install_target;
+        let current = on_disk;
 
         // Already exactly right. `add` on an installed agent is a no-op, which
         // is what makes the §4 crash-recovery path ("run `add` again") safe.

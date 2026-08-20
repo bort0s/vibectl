@@ -992,3 +992,124 @@ fn every_command_except_update_works_with_the_network_gone() {
             .is_ok()
     );
 }
+
+/// **THE INVARIANT: no plan is ever produced from a read that failed.**
+///
+/// Written on the invariant rather than on the case, because the previous repair
+/// of this exact shape was written on a case. Round 8 established *absent is not
+/// unreadable* for `read_document` — right argument, control built — and the
+/// identical defect sat two functions away in the read-error form rather than
+/// the is-a-directory form. A control on the shape covers the shape.
+///
+/// # The chain this closes, measured before it was repaired
+///
+/// 1. the `AgentState` scan read with `.ok()`, so a read **error** became
+///    `AgentState::Missing` — a fact about the world inferred from a failure to
+///    look;
+/// 2. `Missing` does not need `--force`, so `install`'s overwrite gate let it
+///    through where `Modified` refuses;
+/// 3. `install` read again with `.ok()`, got `None`, and planned a
+///    **`CreateFile`** carrying the store's contents;
+/// 4. `apply` runs `CreateFile` and `UpdateFile` through **one arm**, so it
+///    replaces.
+///
+/// A user's edited agent, replaced, without the `--force` that `Modified`
+/// requires, from a transient error. Each link was separately defensible and the
+/// composition was not — which is why the assertion below is on the **plan**,
+/// the place all four meet.
+///
+/// # The failure mode this can construct, and the one it cannot
+///
+/// A **directory where the file belongs** is a deterministic read failure that
+/// is not `NotFound`, on every platform. It is the round-8 shape in its
+/// read-error form.
+///
+/// A transient `PermissionDenied` — the one ADR-0001 §3a measures during a
+/// replacement — needs a second process holding the file, and is **not**
+/// constructed here. The invariant is the same for both, which is the argument
+/// for asserting the invariant: this control does not have to enumerate the ways
+/// a read can fail, only that a failed one produces nothing.
+#[test]
+fn no_plan_is_ever_produced_from_a_failed_read() {
+    if !git_available() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let upstream = make_upstream(tmp.path(), &[("a", "body a")]);
+    let store = store_at(&tmp.path().join("store"), &upstream);
+    let proj = project(tmp.path(), &["a"]);
+    registry().agents_update_store(&store).unwrap();
+
+    let planned = registry()
+        .plan_agents_add(&proj, &["a".to_owned()], false, &store, TODAY)
+        .unwrap();
+    registry().apply(&planned.plan, &NullReporter).unwrap();
+
+    let path = proj.join(install_path("a"));
+    std::fs::write(&path, "the user's own edits").unwrap();
+
+    // Premise one: this is the protected state. Without it the assertion below
+    // is about an agent nobody was refusing to overwrite anyway.
+    let status = registry().agents_status(&proj, &store, TODAY).unwrap();
+    assert_eq!(
+        status
+            .report
+            .agents
+            .iter()
+            .find(|a| a.name == "a")
+            .unwrap()
+            .state,
+        AgentState::Modified
+    );
+
+    // Premise two, and it is the pairing: with the read WORKING, a plan is
+    // produced — so "no ops" below is not satisfied by a build that never plans.
+    let forced = registry()
+        .plan_agents_add(&proj, &["a".to_owned()], true, &store, TODAY)
+        .unwrap();
+    assert!(
+        !forced.plan.ops.is_empty(),
+        "the fixture cannot plan at all, so an empty plan proves nothing"
+    );
+
+    // Break the READ, not the file's existence.
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+
+    for force in [false, true] {
+        let planned = registry()
+            .plan_agents_add(&proj, &["a".to_owned()], force, &store, TODAY)
+            .unwrap();
+
+        assert!(
+            planned.plan.ops.is_empty(),
+            "a failed read produced {} op(s) with force={force}: {:?}. Each link \
+             in this chain was separately defensible; the composition replaces a \
+             file the tool could not read.",
+            planned.plan.ops.len(),
+            planned.plan.ops
+        );
+        assert_eq!(
+            planned.refused.len(),
+            1,
+            "a failed read must be REPORTED, not silently skipped — silence here \
+             is the same absence a successful no-op produces"
+        );
+        assert_eq!(planned.refused[0].state, AgentState::Unverifiable);
+    }
+
+    // And the state itself says "cannot tell" rather than "gone".
+    let status = registry().agents_status(&proj, &store, TODAY).unwrap();
+    assert_eq!(
+        status
+            .report
+            .agents
+            .iter()
+            .find(|a| a.name == "a")
+            .unwrap()
+            .state,
+        AgentState::Unverifiable,
+        "a file that could not be read must not report as Missing — that is a \
+         fact about the world inferred from a failure to look"
+    );
+}

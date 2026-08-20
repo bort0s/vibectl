@@ -21,12 +21,38 @@ pub fn write_plan_human(out: &mut impl Write, plan: &WritePlan) -> std::io::Resu
                 writeln!(out, "  create dir   {}", path.display())?;
             }
             FileOp::CreateFile { path, contents } => {
-                writeln!(
-                    out,
-                    "  create file  {} ({} lines)",
-                    path.display(),
-                    contents.lines().count()
-                )?;
+                // **A `CreateFile` whose target EXISTS is a plan that cannot
+                // apply**, and saying "create file" about it is the tool being
+                // dishonest in its own output — which hard constraint 5 covers
+                // explicitly, not only detection.
+                //
+                // `apply` re-checks preconditions before running any op and
+                // returns `TargetExists` for exactly this, so the operation
+                // never runs. What the user would otherwise see is a plan that
+                // reads as ordinary and then an error naming a cause the dry run
+                // gave no hint of. *Added 2026-08-19, after a planner was found
+                // emitting one; the planner is fixed and this covers the next
+                // producer, present or future.*
+                //
+                // Checked at RENDER time rather than trusted from plan time: the
+                // file can appear in between, and that is the case a dry run is
+                // least able to warn about otherwise.
+                if path.exists() {
+                    writeln!(
+                        out,
+                        "  create file  {} ({} lines)  -- TARGET EXISTS: apply \
+                         will refuse this plan",
+                        path.display(),
+                        contents.lines().count()
+                    )?;
+                } else {
+                    writeln!(
+                        out,
+                        "  create file  {} ({} lines)",
+                        path.display(),
+                        contents.lines().count()
+                    )?;
+                }
             }
             FileOp::UpdateFile { path, .. } => {
                 writeln!(out, "  update file  {}", path.display())?;
@@ -984,5 +1010,60 @@ mod repo_message_tests {
         });
         assert!(text.contains("left alone"), "{text}");
         assert!(!text.contains("Initialised"), "{text}");
+    }
+}
+
+#[cfg(test)]
+mod create_file_honesty_tests {
+    use super::*;
+
+    /// **A `CreateFile` whose target exists must say so in the dry run.**
+    ///
+    /// Constraint 5 is not only about detection: *"never guess, never invent a
+    /// plausible-looking value"* applies to the tool's own output, and
+    /// *"create file"* about a path that already exists is a plausible-looking
+    /// wrong value. `apply` refuses such a plan with `TargetExists`, so what the
+    /// user would otherwise see is an ordinary-looking plan followed by an error
+    /// naming a cause the dry run gave no hint of.
+    ///
+    /// **Paired**, or this is satisfied by a build that warns about every
+    /// create: the same op with an absent target must render without the
+    /// warning.
+    #[test]
+    fn a_create_over_an_existing_path_is_not_rendered_as_an_ordinary_create() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let existing = dir.path().join("already-here.toml");
+        std::fs::write(&existing, "old\n").expect("plant");
+        let absent = dir.path().join("not-here.toml");
+
+        let render = |path: &std::path::Path| {
+            let plan = WritePlan::new(
+                vibe_core::PlanIntent::New,
+                dir.path().to_path_buf(),
+                vec![FileOp::CreateFile {
+                    path: path.to_path_buf(),
+                    contents: "new\n".to_owned(),
+                }],
+            );
+            let mut out = Vec::new();
+            write_plan_human(&mut out, &plan).expect("render");
+            String::from_utf8(out).expect("utf8")
+        };
+
+        let over_existing = render(&existing);
+        assert!(
+            over_existing.contains("TARGET EXISTS"),
+            "the dry run described a create over an existing path as an \
+             ordinary create; apply will refuse it and the user was told \
+             nothing. Rendered:\n{over_existing}"
+        );
+
+        let over_absent = render(&absent);
+        assert!(
+            !over_absent.contains("TARGET EXISTS"),
+            "every create is being warned about, so the warning carries no \
+             information. Rendered:\n{over_absent}"
+        );
+        assert!(over_absent.contains("create file"));
     }
 }

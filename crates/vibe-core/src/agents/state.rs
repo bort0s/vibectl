@@ -177,10 +177,26 @@ pub fn compute(
     for (name, entry) in &locked {
         seen.insert(name.clone());
         let file = project_dir.join(&entry.path);
-        let on_disk = std::fs::read(&file).ok();
+        // **A FAILED READ IS NOT AN ABSENT FILE.** *Corrected 2026-08-19.* This
+        // was `.ok()`, so a file that could not be READ became
+        // `AgentState::Missing` — a fact about the world inferred from a
+        // failure to look, which is constraint 5, and the honest value already
+        // existed two variants away.
+        //
+        // It composed into destruction rather than staying a wrong label:
+        // `Missing` does not need `--force`, so the overwrite gate in
+        // `ops::install` let it through where `Modified` refuses, and the plan
+        // came out as a `CreateFile` over the user's edited file. Measured.
+        // `Unverifiable` needs `--force`, so this line also closes that gate.
+        let on_disk = std::fs::read(&file);
+        let read_failed_for_another_reason = matches!(
+            &on_disk,
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound
+        );
+        let on_disk = on_disk.ok();
 
         let store_entry = store.get(name);
-        let state = if !ownership_known {
+        let state = if !ownership_known || read_failed_for_another_reason {
             AgentState::Unverifiable
         } else if on_disk.is_none() {
             AgentState::Missing

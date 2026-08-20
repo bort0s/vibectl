@@ -7,6 +7,27 @@
 //! crate and cannot be linked from here, so what is measured is the mechanism,
 //! and the difference is declared rather than glossed.
 //!
+//! # THE `read` COLUMN DOES NOT MEASURE SIZE, AND THE CAUSE IS UNKNOWN
+//!
+//! Observed on Windows 10, three consecutive runs, stable to about a
+//! millisecond: **1.7 / 27.3 / 8.9 / 12.4 ms** for **4 KB / 32 KB / 512 KB /
+//! 8 MB**. Non-monotonic in size, and *reproducibly* so -- which together are
+//! the finding, not noise. A column that rises and falls with size across
+//! repeated runs is measuring something its name does not mention: page cache
+//! state, on-access virus scanning, or both. Only the 128 MB row is clearly
+//! size-dominated.
+//!
+//! Reproducible-and-non-monotonic is the same shape as the bimodal cold-start
+//! measured for hook invocation -- a second regime inside a population that was
+//! assumed to be one.
+//!
+//! **It is deliberately not chased.** The conclusion this measurement supports
+//! -- that display cost binds long before memory or time -- rests on the
+//! `count` and `render` columns, which are clean and monotonic across every
+//! run. Printing the anomaly is the alternative to printing a tidy table that
+//! hides it; suppressing the row would make the instrument look better than the
+//! measurement is.
+//!
 //! Build:  rustc -O ceiling.rs -o ceiling && ./ceiling
 
 use std::io::Write;
@@ -19,10 +40,15 @@ fn main() {
 
     // One 80-column line, the shape of every file these callers actually write.
     let line = "x".repeat(79);
+    // The header says what the column is, and `read*` carries the caveat above
+    // to anyone reading the output without the source -- the third label
+    // category: true, and misreadable, repaired by putting the scope in the
+    // label rather than in a document.
     println!(
         "{:>12}  {:>10}  {:>9}  {:>9}  {:>9}",
-        "bytes", "lines", "read ms", "count ms", "render ms"
+        "bytes", "lines", "read* ms", "count ms", "render ms"
     );
+    println!("  (* read does not track size below 8 MB -- see the module doc; cause unknown)");
 
     for &kb in &[4usize, 32, 512, 8 * 1024, 128 * 1024] {
         let path = dir.join(format!("t{kb}.txt"));

@@ -3196,6 +3196,33 @@ that leave it say where they went.*
   cp1252 console — having already found the sites, unable to say so. Both are
   the same failure one level up.
 
+- **AN INSTRUMENT THAT DIES AFTER MEASURING AND BEFORE REPORTING HAS NOT
+  PRODUCED A RESULT.** *Added 2026-08-20.* `sweep.py` raised
+  `UnicodeEncodeError` while **printing** a match containing an arrow, on a
+  console whose default codec is cp1252. It had already found every site. The
+  failure was in the channel between the instrument and its reader, after the
+  measurement was complete.
+
+  **What makes it a class rather than an encoding nuisance is the near miss.**
+  It died on one match while iterating over a list. Had it died on the *last*
+  one — or on a match somewhere in the middle of a long run — the visible result
+  would have been **a subset of the sites, printed, followed by a traceback that
+  reads like a formatting problem**. That is silent subtraction wearing an
+  innocuous error: the numbers on screen are real, they are simply not all of
+  them, and nothing about the output says so.
+
+  **The rule: an instrument either completes its output or reports nothing.**
+  Not "handles encoding" — the specific failure is incidental and the next one
+  will be a broken pipe, a full disk, or a console that closes. The structural
+  form is to **finish measuring, build the entire report, and emit it in one
+  act**, so a failure lands before any of it is trusted rather than partway
+  through. And where a total is printed, it is printed *with* its denominator,
+  so a truncated run is arithmetically visible.
+
+  It belongs beside the collapsing-instrument class above and is not the same
+  thing: that one loses a distinction *during* measurement; this one loses
+  *quantity* after it, and both end in a number that reads as complete.
+
 - **A TEXT SEARCH OVER HARD-WRAPPED PROSE HAS A ONE-LINE CEILING, AND ITS WIDTH
   IS DECLARED WITH THE RESULT.** *Added 2026-08-20. Not a retraction rule —
   retraction is only where it was noticed.*
@@ -3270,6 +3297,18 @@ that leave it say where they went.*
   prunability retraction), and **still on `main` today**. The fix branch does not
   modify `sink.rs` at all, so it inherits the site rather than introducing it and
   does not need to move for it; landing this branch is what removes it.
+
+  **DECIDED 2026-08-20: this site stays on `main` until this branch lands, and
+  that is a decision rather than a finding.** It sits badly with the ranking
+  directly above — maximum-severity residue, a prose comment in shipped source,
+  carrying **two** retractions at once — and the honest statement is that it was
+  left there **for sequencing convenience, not because it was harmless**. The
+  reason: its repair is already written on this branch, and opening a third
+  branch to carry one comment adds more in flight than it removes, which is the
+  larger risk at this point. **The decision is dated so that it is retaken rather
+  than inherited**: if this branch slips again, the trade changes, because the
+  cost of the residue accrues with time on `main` while the cost of a third
+  branch does not.
 
   *And a note on how the provenance was measured, because getting it wrong is
   the same family: `git log -S… -- <path> <ref>` puts the ref after `--`, so git

@@ -300,6 +300,46 @@ Both halves are now written here, and the reason is not tidiness. `check_precond
 
 **Controlled by** `a_create_over_an_existing_path_is_not_rendered_as_an_ordinary_create` — asserting the operation line, the before side, *and* the absence of the future-tense claim, paired against an absent target — and `a_target_that_cannot_be_read_is_not_reported_as_either_state`. Four sabotages, each red: additive line, dropped before side, restored future claim, and `Unknown` collapsed back into `Occupied`.
 
+### 3d. LIMIT: a plan holds whole files in memory, and nothing bounds them
+
+*Recorded 2026-08-20, with measurements. Found while stating a ceiling for §3c's before-side read, and it is not a §3c property — §3c inherited the class rather than introducing it.*
+
+**The plan is not a description of a write; it carries the bytes.** `FileOp::UpdateFile { before, after }` holds **two full copies** of the target — the whole file as read, and the whole file as it will be. `CreateFile` holds one. `check_precondition` reads the target again to compare, `plan_render` reads it to decide whether the file changed, and roughly ten call sites across `plan.rs`, `registry.rs` and `agents/` call `read_to_string` or `read` on a target with no size check anywhere in the path.
+
+**So peak memory during a plan is at least 2× the largest target, and there is no declared bound on the target.** Nothing enforces one, nothing measures one, and no control fails when it is exceeded.
+
+**This is a limit and not a defect**, and the distinction matters because §3a and §3b were both found in this section: nothing here is wrong, no claim is stronger than what the code does, and no data is at risk. What is missing is the *statement* — the write path's memory behaviour is a property nobody has written down, which is how §3b's chain composed.
+
+**What the current callers are, measured 2026-08-20 — and this is a property of today's callers, not a bound:**
+
+| population | n | min | p50 | p90 | max |
+| --- | --- | --- | --- | --- | --- |
+| installed agent files (`.claude/agents/*.md`) | 101 | 3.0 KB | 13.8 KB | 24.3 KB | **31.3 KB** |
+| this repository's `README.md` | 1 | — | — | — | 9.9 KB |
+
+Nothing prevents a caller from planning over a target of any size, and `vibe render`'s targets are user-authored. The table says what is true today; it must not be read as what the code guarantees.
+
+**What breaks first is display, not memory**, which is the useful part of the measurement — the cost is visible to a user long before it is visible to a machine:
+
+| target bytes | lines | read | `lines().count()` | render loop |
+| ---: | ---: | ---: | ---: | ---: |
+| 4,160 | 52 | * | 0.0 ms | 0.0 ms |
+| 32,800 | 410 | * | 0.0 ms | 0.1 ms |
+| 524,320 | 6,554 | * | 0.1 ms | 0.8 ms |
+| 8,388,640 | 104,858 | * | 2.5 ms | 9.9 ms |
+| 134,217,760 | **1,677,722** | 59.8 ms | 40.2 ms | 149.6 ms |
+
+A 128 MB target costs a quarter of a second and **prints 1.68 million lines**. A 512 KB target already prints 6,554. The dry run stops being readable at roughly four figures of lines, which a half-megabyte file reaches — so a user meets this at a size where the machine has not noticed.
+
+**\* The `read` column below 8 MB does not measure size, and the cause is unknown.** It is 1.7 / 27.3 / 8.9 / 12.4 ms for 4 KB / 32 KB / 512 KB / 8 MB — **non-monotonic and reproducible across three runs**, which together mean the column is measuring something other than what its name says: page cache, on-access virus scanning, or both. Reproducible-and-non-monotonic is the same shape as the bimodal cold-start measured for hook invocation — a second regime inside a population assumed to be one. It is not chased: the conclusion rests on `count` and `render`, which are clean and monotonic, and stating the anomaly is the alternative to presenting a tidy table that hides it.
+
+**Two repairs are owed, and they are different:**
+
+- **The displayed before side wants a line ceiling** — `--dry-run` should show the first N lines and say how many it withheld, rather than emitting a file. That is a `vibectl` change and it is what a user actually hits.
+- **The plan wants a declared limit** with these numbers beside it — either a documented bound or a refusal above one, decided in core. Until that decision, this entry *is* the declaration, which is the minimum constraint 5 asks: a property that is not measured must not be silently assumed.
+
+**Measured by** `scratchpad/dryrun-before-side-cost.rs`, committed rather than described. It measures the two operations the before side performs — `read_to_string`, then `lines()` counted and written — and **not** the renderer end to end, because `write_plan_human` lives in a binary crate and cannot be linked from a standalone measurement. That difference is declared rather than glossed.
+
 ### 4. Errors: `thiserror` in core, `anyhow` in the CLI, no exceptions
 
 ```rust

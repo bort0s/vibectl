@@ -98,11 +98,23 @@ def main(argv):
                 lo = max(0, m.start() - 170)
                 hits.append('%s:%s\n    ...%s...\n' % (ref, f, flat[lo:m.end() + 130]))
 
-    for h in hits:
-        print(h)
+    # **BUILT WHOLE, THEN EMITTED IN ONE ACT.** An earlier version printed each
+    # match as it went and died partway through on `UnicodeEncodeError` -- it
+    # had already found every site, and the failure was in the channel to the
+    # reader. Printing incrementally means such a death leaves a SUBSET on
+    # screen under a traceback that reads like a formatting nuisance: the
+    # numbers shown are real, they are just not all of them, and nothing says
+    # so. An instrument that dies after measuring and before reporting has not
+    # produced a result, so the report is assembled first and written once.
+    #
+    # The trailing marker is what makes truncation visible if the write itself
+    # is cut off -- a full disk, a closed console, a broken pipe.
+    report = ''.join(hits)
     # Both numbers, always. A site count with no denominator is the same
     # unbounded-answer problem one level up.
-    print('files scanned: %d   sites: %d' % (scanned, len(hits)))
+    report += 'files scanned: %d   sites: %d\n-- end of sweep --\n' % (scanned, len(hits))
+    sys.stdout.write(report)
+    sys.stdout.flush()
     return 0
 
 

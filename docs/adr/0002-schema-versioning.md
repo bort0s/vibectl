@@ -1367,6 +1367,30 @@ practice already existed and was applied intermittently, which is the finding:
   sabotage runs — a green step does not prove a control file executed — the
   retraction went into ADR-0008 §9 and the comment in `ci.yml` that asserted
   the disproved half was left alone.
+- **Not swept, again, 2026-08-20 — and this time the rule above was already
+  written.** A constraint 2 violation was asserted about shipped code, measured
+  false the next day, and withdrawn *in the paragraph where the withdrawal was
+  being written*. The disproved claim was still standing in `agents/ops.rs`, in
+  the comment at the call site of the repair itself, and in two more places. The
+  retraction needed **three passes**: one site, then three by a line-oriented
+  `grep`, then thirteen occurrences across 221 files and two branches by a sweep
+  that normalises whitespace first. Prose here is hard-wrapped at 80 columns, so
+  a line-oriented search is blind to any statement longer than a line — which
+  selects against exactly the sentences that carry arguments.
+
+**The third instance says what the first two could not: the rule is not enough
+on its own.** Twice now the failing side has been someone who had the rule
+available and did not reach for it, and the second time it was written here, in
+the rules document, for that exact reason. *Sweep the residue* is an instruction
+to go and search, and a hand search is bounded by whatever pattern occurs to the
+searcher — so it fails quietly and reports done. **`scratchpad/sweep.py` is the
+instrument**: it strips comment and doc prefixes, collapses whitespace so a
+claim spanning a line break is visible, runs across every ref that will merge
+rather than the working tree, and prints the number of files scanned beside the
+number of sites, so a bounded answer is distinguishable from a search that
+stopped early. Committed rather than described, for the reason `probe.js` was:
+an instrument rebuilt from a paragraph is a new instrument with the old one's
+name.
 
 **The consequence arrived weeks later and arrived by copying.** The diff adding
 a `VIBE_REQUIRE_GIT` step reproduced the disproved claim **twice** — once in

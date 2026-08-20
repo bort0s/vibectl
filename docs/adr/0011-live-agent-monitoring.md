@@ -3014,8 +3014,15 @@ that leave it say where they went.*
      installed on **lifecycle** events, where a matcher means something else.
   3. **`absent is not unreadable`** was established for `read_document` in the
      is-a-directory form (round 8), and the identical defect sat two functions
-     away in the read-error form — where it composed into replacing a file the
-     tool could not read (ADR-0001 §3a).
+     away in the read-error form — where it composed into a plan that aimed a
+     `CreateFile` at a file the tool could not read (ADR-0001 **§3b**).
+
+     *Corrected 2026-08-20 on two counts: this said the composition **replaced**
+     that file, which was withdrawn the day it was filed — `apply` refuses it —
+     and it pointed at §3a, which is the zero-byte write and a different defect.
+     The entry survived the withdrawal because the sweep that carried it out was
+     line-oriented and this sentence spans a line break. See the retraction entry
+     below.*
 
   **The tell is that the control names the failure rather than the property.**
   *"A directory where the file should be must not report as absent"* is a case;
@@ -3028,6 +3035,108 @@ that leave it say where they went.*
   **It sits beside the instrument class above for a reason:** both are failures of
   the *scope* of a claim rather than of its truth. One is an instrument claiming
   more than it observed; this is a control covering less than its name implies.
+
+- **NOT THAT CLASS: AUTOMATION THAT DISCARDS WORK WHEN IT MEETS AN OBSTACLE.**
+  *Added 2026-08-20, and filed apart from the instrument class deliberately.*
+  A rebase of this branch was driven by a loop containing
+  `git rebase --continue || git rebase --skip`. It met an unexpected conflict,
+  took the `--skip`, dropped two commits, and printed *"Successfully rebased"*.
+
+  **It belongs in its own entry because it is not a lossy conversion.**
+  `grep -c FAILED`, the gate's double run, `.ok()` and the bare `cd` all collapse
+  two observables into one by inattention — the measuring channel loses a
+  distinction it was never asked about. `|| git rebase --skip` collapses nothing.
+  It is an **instruction to discard work on obstacle**, obeyed exactly, with
+  nobody watching. Grouping the two would put the wrong repair on both.
+
+  **The repairs differ, and this is the one for this class: do not automate an
+  operation that rewrites history.** A rebase, a `reset --hard`, a force-push, a
+  filter — one conflict at a time, each resolution chosen and looked at. The
+  correct rebase was done exactly that way; it is written here as the rule rather
+  than left as what happened to be done the second time.
+
+  **And the verification is by content, not by count.** Measured: **42 commits
+  before, 42 after the bad rebase, 44 after the correct one.** The check anyone
+  would actually run — *did the number change?* — reads "no loss" and is wrong,
+  because the expected count is not derivable from the branch being held: the new
+  base contributed three commits and one superseded commit dropped out. What
+  found it was `grep -c` for two strings that had to be in the tree. That much is
+  shared with the instrument class: **assert content, never a summary line.**
+
+- **A PROPOSED CLOSURE IS CHECKED FOR EXISTENCE BEFORE IT IS WEIGHED.** *Added
+  2026-08-20.* A rule was proposed to replace the per-file `EXAMPLES` list in the
+  bypass control: *every file under `examples/` must write through `temp_dir()`*
+  — structural rather than a judgement, and it does not age. It was declined, and
+  the reason given was cost.
+
+  **The reason was wrong, because the rule does not exist.** The control is a
+  source scan, and a source scan cannot decide **where a path points** —
+  `temp_dir()` reaching the write is a runtime property. There is nothing to
+  weigh: no cost, no residual risk, no version of it that could be taken later at
+  a higher price.
+
+  **A declined closure and a nonexistent one read identically in a register and
+  are not the same thing.** The first is a debt with a price on it, and someone
+  may later decide to pay it. The second is an empty row that makes the register
+  look more complete than it is, and it will be re-proposed by whoever reads it.
+  So: state the predicate in terms the instrument can actually evaluate before
+  costing it. That check is one sentence and it settles the question.
+
+  **The direction of review is worth recording, because it runs both ways.** Two
+  of the proposals that failed on contact were the reviewer's rather than the
+  author's — this one, and the sampling exception argued for and approved two
+  rounds before the control it exempted was found firing one red in six. Neither
+  is an argument about who is careful. It is an argument for the same treatment
+  of a proposal regardless of who made it, which the register can only support if
+  it records both.
+
+- **THE RETRACTION RULE ALREADY EXISTED, AND IT DID NOT FIRE.** *Added
+  2026-08-20, and it registers nothing new — which is the finding.* **ADR-0002
+  §7 has carried this since 2026-08-13:** *"retracting a claim is not finished
+  when the retraction is written, it is finished when the residue is swept —
+  across code and comments, not only where the retraction is recorded."* It was
+  written from a two-sided instance in this repository, its own text says *"the
+  practice already existed and was applied intermittently, which is the
+  finding"*, and it was placed in the rules document precisely because *"the
+  next person to retract something will be reading the rules and not
+  ADR-0008."*
+
+  Seven days later the not-swept half happened again, in the same shape: the
+  retraction went into ADR-0001 §3b and the disproved claim was left standing in
+  shipped source, at the call site of the repair. **So the rule is now
+  three-sided, and twice the failing side had the rule already written.** What
+  this entry adds is therefore not the rule but the two things that were missing
+  from it — an instrument, and the reason the reading half fails.
+
+  A claim was withdrawn on 2026-08-19 — *"a user's edited
+  agent, replaced"*, a constraint 2 violation asserted about shipped code, and
+  false. It took **three passes** to actually remove it:
+
+  1. **one site.** The paragraph where the withdrawal was being written.
+  2. **three sites**, by line-oriented `grep` on two wordings — which found the
+     control's doc comment but missed everything spanning a line break.
+  3. **thirteen occurrences, five of them live** rather than quoted inside a
+     strike, over 221 files and both branches, by a sweep that normalises
+     whitespace and comment prefixes before matching.
+
+  **The blind spot is structural, not a typo.** Prose here is hard-wrapped at 80
+  columns, so a line-oriented search cannot see any statement longer than a line
+  — which selects against exactly the sentences that carry arguments. The worst
+  site was found only on pass three: **shipped source**, in the comment at the
+  call site of the repair itself, still asserting the withdrawn claim.
+
+  **So what was missing was never the wording.** Restating a rule that is already
+  written, in a third document, is the per-site restatement ADR-0002 §7 itself
+  argues against. What it lacked was an instrument: *sweep the residue* is an
+  instruction to go and search, and every search this project has run by hand has
+  been bounded by whatever pattern occurred to the searcher at the time.
+
+  So the sweep is an instrument like any other: it normalises wrapping,
+  covers every branch that will merge, includes source and not only documents,
+  and **prints how many files it scanned**, so a bounded answer is distinguishable
+  from a search that stopped early. `scratchpad/sweep.py` is that instrument; the
+  first version of it died mid-run on an encoding error and still printed a
+  total, which is the same failure one level up.
 
 - **THE TIMING-DEPENDENT CONTROLS, ENUMERATED AND DISPOSITIONED.** *Added
   2026-08-19.* One control was found firing at **one red in six runs** — the

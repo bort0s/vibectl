@@ -181,10 +181,16 @@ pub struct ApplyReport { pub applied: Vec<AppliedOp>, pub skipped: Vec<SkippedOp
 | absent (`NotFound`) | never | rarely, under contention, Windows |
 | refused (`PermissionDenied`) | never | rarely, under contention, Windows |
 | **who has to handle it** | every reader, and none did | every reader, and most already do |
+| **which platforms** | **all three** — `File::create` truncates everywhere | **Windows only** — `rename(2)` is specified atomic on POSIX, where a reader never observes either |
 
 **A certain corrupting state was exchanged for a rare recoverable one.** The old window was not a risk, it was a certainty: `File::create` truncates before `write_all`, so the file was zero bytes on *every* write, and a zero-byte `.vibe/project.toml` is a parse error rather than a state any reader has a branch for. The new observables are transient and both have an existing, correct meaning in most readers.
 
-**Measured, so the "rare" is not a word.** Four readers spinning on the target through **12,000 replacements**, three batches: **~360,000 reads, zero `NotFound`, one `PermissionDenied`.** A separate high-contention run did produce `NotFound`, so it is reachable rather than absent — but the rate is on the order of **one read in 10^5 to 10^6**. Against a replacement cycle of roughly 2 ms that puts the window at **microseconds or less**, and an order of magnitude is all this supports. Contrast the old path, whose window the deterministic control catches **every single time**.
+**Measured — and the numbers are labelled as what they are.** Four readers spinning on the target through **12,000 replacements**, three batches: **~360,000 reads, one `PermissionDenied`, zero `NotFound`.**
+
+- **One `PermissionDenied` in ~360,000 reads. The rate is not estimated**, and neither is any duration derived from it — one event does not support a frequency, and a frequency multiplied by a cycle time does not become a window length. *An earlier draft said "one read in 10^5 to 10^6" and then "microseconds or less"; both are withdrawn.*
+- **The zero for `NotFound` in this run is a guard never reached.** What establishes reachability is a **different, higher-contention run**, which produced it. The two are separate measurements and only the second says the state exists.
+
+**Contrast the old path, whose window a deterministic control catches every single time.** That asymmetry — certain versus not-estimated-but-rare — is the trade, and it does not need the rate to hold.
 
 **WHO ACTUALLY HANDLES IT — enumerated, not assumed.** *"An absent file is a defined state every caller already handles"* was a claim about every call site made without visiting them. Visited:
 
@@ -201,10 +207,39 @@ pub struct ApplyReport { pub applied: Vec<AppliedOp>, pub skipped: Vec<SkippedOp
 | `ops::install` | plans `CreateFile` | plans `CreateFile` — **collapsed, and it misreports the diff** |
 | `ops::remove` | no delete op | no delete op — **collapsed, safe direction** |
 
-**Five of ten distinguish the two correctly**, three collapse them in the safe direction, and **two collapse them into a wrong claim.** Both were there before this repair; the repair makes the input reachable more often, so they are named here rather than left for the next reader:
+**Five of ten distinguish the two correctly**, three collapse them in the safe direction, and **two collapse them into a wrong claim.**
+
+**The three "safe direction" rows, argued rather than labelled** — *added 2026-08-19, because `conservatively` is a word where an argument goes:*
+
+- **`Witness::observe`** is the one that needed the argument. Collapsing an unreadable manifest into *no witness* means the cache cannot claim the entry is fresh, so it re-scans. **The direction is toward not-claiming**, which is the right one — but it is a reader producing silence for a permissions reason, and §7's whole subject is silence that means something else. What saves it is that the consequence is **work, not a claim**: a re-scan re-reads the manifest and reaches its own conclusion. If the witness ever gained a user-visible meaning, this row would move to the wrong-claim column.
+- **`ops::remove`** cannot delete on a failed read because it never builds the `RemoveOwnedAgent` op, and there is no other way to delete — the constraint is doing the work, not the branch.
+- **`adoptable_on_exact_match`** returning `false` **refuses adoption**; its safety was a property of what its one caller did with the `false`, not of the function. That is no longer true of it — it takes the bytes now (see the chain below) — and it is the row that turned out not to be conservative at all. Both were there before this repair; the repair makes the input reachable more often, so they are named here rather than left for the next reader:
 
 - **`AgentState` reports `Missing` for a file it could not read.** That is constraint 5 — a fact about the world inferred from a failure to look — and the honest value **already exists two lines away**: `AgentState::Unverifiable`, documented as *"ownership or content cannot be established"*. A one-line change and a control, and **what a label claims is a product decision**, so it is recorded rather than taken.
 - **`ops::install` turns an update into a create.** A transient error makes it plan `CreateFile` for a file that exists, so `--dry-run` shows *create* where the truth is *replace*, and the `before` side of the diff is lost. Not destructive — `apply` replaces either way — but the diff the user approves is wrong, and constraint 2's whole argument is that the diff is what makes a write reviewable.
+
+**TWO OF THE COLLAPSED ROWS COMPOSE, AND THE COMPOSITION IS DESTRUCTIVE.** *Measured 2026-08-19, after the enumeration above reported them as separate and survivable.*
+
+The chain, each link separately defensible:
+
+1. the `AgentState` scan read with `.ok()`, so a read **error** became `AgentState::Missing`;
+2. `Missing` does not need `--force`, so `install`'s overwrite gate let it through where `Modified` refuses;
+3. `install` read again with `.ok()`, got `None`, and planned a **`CreateFile`** carrying the store's contents;
+4. `apply` runs `CreateFile` and `UpdateFile` through **one arm** — so it replaces.
+
+**Measured, not argued.** With a directory standing where an installed agent's file belongs — a deterministic read failure that is not `NotFound` — the state read `Missing`, **no refusal was recorded**, and the plan contained `CreateFile { path: …/a.md, contents: <the store's copy> }` aimed at a path that exists. A user's edited agent, replaced, without the `--force` that `Modified` requires, from a failure to read.
+
+**That is constraint 2 violated through a collapsed observable, with `FileOp::Delete` nonexistent throughout — the same shape as `Cache::save`**, and the reason the enumeration was worth doing: nothing about the rows individually said so.
+
+**And `--dry-run` would not have shown it.** A `CreateFile` renders as *"create file `<path>` (N lines)"*, and verbosely as the new contents alone: **no `before` side, and nothing saying the path already exists.** The diff the user approves is what constraint 2 rests on, so a wrong one is not a display detail.
+
+**The repair is on the invariant, not the case: no `FileOp` is ever produced from a read that failed.** `install` now reads **once**, and any error other than `NotFound` refuses with `Unverifiable` before an op is built. The `AgentState` scan distinguishes the two, which also closes the gate — `Unverifiable` needs `--force` where `Missing` does not. `adoptable_on_exact_match` takes the bytes rather than reading them, so its old `unwrap_or(false)` — safe only because of what its one caller did with the `false` — is gone.
+
+**Both repairs are independently load-bearing**, sabotaged separately: reverting the state fix reds the label assertion, reverting the refusal reds the plan assertion at `--force`.
+
+**Written on the invariant because the previous repair of this shape was written on the case.** Round 8 established *absent is not unreadable* for `read_document` — right argument, control built — and the identical defect sat two functions away in the read-error form rather than the is-a-directory form. See ADR-0011 §9's note on shape versus class.
+
+**LATENT-UNREACHABLE, MADE REACHABLE.** *Corrected: an earlier report said "both predate the repair", which reads as mitigation and is the opposite.* On the old write path a concurrent reader **could not** observe `PermissionDenied` — the failure mode did not exist. The atomic replacement creates it. So these two defects were unreachable rather than merely unnoticed, and no control ever saw them because **the precondition did not exist**. Predating explains why they were invisible; it does not reduce what they now cost. Same shape as the charset change's legacy filenames: the same gap, a larger population.
 
 **And none of them retries.** Every site reports or plans from a single read, so a transient error in the window becomes a reported fact rather than something a second attempt clears. That is the answer to *"transient with a retrying caller, or does the caller just report?"* — **it reports**, and that is what makes the two collapsing sites matter.
 

@@ -135,8 +135,10 @@ const BY_DESIGN: [&str; 1] = ["writer.rs"];
 /// **that one cannot rot, because it is the compiler's exclusion and not
 /// somebody's reading.**
 ///
-/// **What would close it** is scanning examples with a narrower rule of their
-/// own, rather than excluding them. Not built: it costs a second policy for
+/// **What would close it, named:** scan `examples/` with a rule of its own —
+/// forbid the destructive calls (`fs::write`, `File::create`, `remove_file`,
+/// `truncate`) anywhere outside a path under `std::env::temp_dir()`, which is
+/// what a fixture builder writes to and what real work does not. Not built: it costs a second policy for
 /// four files, and the failure it guards — an example that writes somewhere
 /// real — is not reachable by a user, since `cargo install` does not ship them.
 /// Recorded as a limit with its reason rather than as a hole awaiting a fix.

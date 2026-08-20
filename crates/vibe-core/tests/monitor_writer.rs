@@ -661,32 +661,44 @@ fn the_traversal_hazard_is_real_and_reachable_on_this_machine() {
 
     // The Unix half, and it is an assertion rather than a silence.
     //
-    // Measured absent on Linux; **unmeasured on macOS**, where no such
-    // measurement was available from this machine. Asserting it here makes the
-    // macOS runner take that measurement on every run: a red is not a defect in
-    // the writer, it is the discovery that macOS resolves `..` the way Windows
-    // does, and the doc comment above becomes wrong rather than incomplete.
+    // Measured absent on Linux, and — as of the run at `6668baa` on
+    // 2026-08-20 — **measured absent on macOS too**. Until that run macOS was
+    // unmeasured, no such measurement being available from this machine, and
+    // this assertion existed to make the runner take it.
     //
-    // **AND THE GREEN SIDE, which is the one more likely to be misread.** On
-    // macOS this is a FIRST MEASUREMENT, not a regression check. The first
-    // green here is the first time anyone has observed this behaviour on that
-    // platform — and it arrives in the checks list as a tick identical to the
-    // thousandth one. *Nobody investigates a green*, so the single run that
-    // establishes a platform's behaviour is also the run nobody reads.
+    // It did. So the hazard is **Windows-specific across the full matrix**,
+    // which is a stronger claim than the hedged one this comment carried
+    // before: a two-platform result cannot tell "Windows-specific" from
+    // "not-Linux", and a three-platform one can.
+    //
+    // The assertion stays, and its meaning changes: from this run onward it is
+    // a REGRESSION CHECK. A red is not a defect in the writer, it is the
+    // discovery that macOS has begun resolving `..` the way Windows does, and
+    // the doc comment above becomes wrong rather than incomplete.
+    //
+    // **AND THE GREEN SIDE, which was the one more likely to be misread, and
+    // is the one that happened.** On macOS the first green was a FIRST
+    // MEASUREMENT, not a regression check — and it arrived in the checks list
+    // as a tick identical to the thousandth one. *Nobody investigates a green*,
+    // so the single run that establishes a platform's behaviour is also the run
+    // nobody reads.
     //
     // A green on a measurement never taken before carries strictly more
     // information than the identical green on the run after it, and no CI
-    // interface distinguishes them. That is why both readings are written here
-    // rather than inferred later: afterwards the tick is all there is.
+    // interface distinguishes them. Both readings were written here BEFORE the
+    // run for exactly that reason; the run has since made one of them history,
+    // and it is dated rather than deleted. Afterwards the tick is all there is.
     // Registered with the cross-execution limit in ADR-0002 §7.
     #[cfg(not(windows))]
     assert!(
         escaped.is_empty(),
         "an unvalidated identity escaped the sink on a non-Windows platform. \
-         This was measured absent on Linux (WSL2 6.18.33.2) and never measured \
-         on macOS, so this red is a finding about the platform: `..` is being \
-         resolved lexically here, and control (d)'s reachability comment needs \
-         rewriting.\n{escaped:#?}"
+         This was measured ABSENT on Linux (WSL2 6.18.33.2) and ABSENT on \
+         macOS at 6668baa on 2026-08-20, so this red is a REGRESSION rather \
+         than a first finding: `..` is being resolved lexically on a platform \
+         where it demonstrably was not, and control (d)'s reachability comment \
+         — which now claims the hazard is Windows-specific across the whole \
+         matrix — needs rewriting.\n{escaped:#?}"
     );
 }
 

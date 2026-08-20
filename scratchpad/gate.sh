@@ -247,10 +247,9 @@ run_gate() {
   #   monitor_writer.rs:669   the cfg(not(windows)) arm of the reachability
   #                           premise under control (d), in
   #                           the_traversal_hazard_is_real_and_reachable_on_this_machine.
-  #                           CI-only by construction: macOS was never measured,
-  #                           and that runner is what takes the measurement. The
-  #                           cfg(windows) arm at :652 is the one that runs
-  #                           here, and its reading was already known.
+  #                           CI-only by construction. The cfg(windows) arm at
+  #                           :652 is the one that runs here, and its reading
+  #                           was already known.
   #
   # agents_store.rs:322 is NOT in that list. It is an inner block, not a whole
   # control: the test runs here and passes, because git-for-windows executes

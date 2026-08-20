@@ -1626,17 +1626,33 @@ of that OS, and there is neither.
 
 So the local gate establishes that `cfg(unix)` code **compiles and lints clean**.
 **It does not establish that it passes.** Clean lints say nothing about
-behaviour, and the standing of every `cfg(unix)` control here is **zero** until a
-CI runner executes it.
+behaviour, and the standing of every `cfg(unix)` control on this machine is
+**zero** — permanently, since no repair here can change it — until a CI runner
+executes it.
 
 The register of what that covers, because a limit without its instances is a
-disclaimer:
+disclaimer. **Two of these were executed for the first time by the run at
+`6668baa` on 2026-08-20, and each says so with the sha**, because the limit is
+about this machine and the entries are about what closed it:
 
 - **`atomic_replace.rs` — `the_targets_unix_mode_survives_the_replacement`.**
   The one that matters most. It is the control for `662f8e5`, the permissions
   repair that applies the mode at open time on Unix — **and `662f8e5` is the
   commit that introduced `plan.rs:454`.** Verification of that repair sits
   **entirely** with CI.
+
+  **TAKEN, and recorded as a measurement rather than as a passing build. Green
+  on `Test (ubuntu-latest)` and `Test (macos-latest)` at `6668baa`, 2026-08-20.**
+  That is the **first verification `662f8e5` has ever had**. It was written on
+  2026-08-19, merged, and carried for 48 commits with its control compiled out
+  on the only machine anyone ran tests on — so the mode-preservation property
+  was asserted by a test that had never once executed. Its standing was zero
+  *everywhere*, not merely locally, and nothing said so until the gate was made
+  to name its triple.
+
+  Dated deliberately, per the rule below: tomorrow this is an ordinary green in
+  a list of ordinary greens, and no CI interface will remember that the run at
+  `6668baa` was the one that turned an unexecuted assertion into a fact.
 
   **The pair's halves are not equivalent, and the asymmetry runs the wrong
   way.** Its Windows twin, `the_targets_readonly_flag_survives_the_replacement`,
@@ -1663,11 +1679,29 @@ disclaimer:
   `the_traversal_hazard_is_real_and_reachable_on_this_machine`.** Not the
   containment control itself but the **reachability premise** underneath it. Its
   purpose is CI-only by construction: the escape was measured **present** on
-  Windows and **absent** on Linux, and **macOS was never measured**. The arm that
-  runs locally is the `cfg(windows)` one, whose reading was already taken — so
-  this machine can only re-confirm what is known.
+  Windows and **absent** on Linux, and — until `6668baa` — **macOS was never
+  measured**. The arm that runs locally is the `cfg(windows)` one, whose reading
+  was already taken, so this machine can only re-confirm what is known.
 
-  **How to read the macOS leg, stated before the run rather than after it.** On
+  **THE MACOS MEASUREMENT WAS TAKEN. Green on `Test (macos-latest)` at
+  `6668baa`, 2026-08-20: no unvalidated identity escaped the sink.** The green
+  reading below is the one that applied.
+
+  So the reachability comment now rests on **three measurements** rather than
+  two and an assumption: the escape is reachable on Windows, and lexical `..`
+  resolution does **not** occur on Linux or on macOS. The hazard is
+  Windows-specific as a measured fact across the full matrix, which is a
+  stronger claim than the one the comment was written to make — it had been
+  hedged as *unmeasured on macOS* precisely because a two-platform result cannot
+  distinguish "Windows-specific" from "not-Linux".
+
+  This entry is dated for the reason the general form below gives. From the next
+  run onward the macOS tick is a regression check and carries nothing; this one
+  established the platform's behaviour, and only a written record separates the
+  two.
+
+  **How to read the macOS leg, stated before the run rather than after it, and
+  left in place now that it has been read.** On
   that platform this assertion is a **first measurement, not a regression
   check**, and the two are indistinguishable from the outside:
 

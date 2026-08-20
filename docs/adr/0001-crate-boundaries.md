@@ -173,6 +173,41 @@ pub struct ApplyReport { pub applied: Vec<AppliedOp>, pub skipped: Vec<SkippedOp
 
 **The destructive case is the one that moved**, and that is the repair: a zero-byte `.vibe/project.toml` is a parse error and a truncated manifest is worse, while an absent file is a defined state every caller here already handles — `read_document` returns `None`, the cache treats a missing file as absent-not-error. **It is not nothing**, and it is recorded rather than asserted away: a reader that lands in that window sees "no settings" for one read.
 
+**THE TRADE, WRITTEN AS A TRADE.** *Added 2026-08-19, because "the repair introduced two new observables" is a true sentence that a later reader could act on.*
+
+| | old path (`std::fs::write`) | temp + rename |
+| --- | --- | --- |
+| **empty or half-written file** | **every write, by construction** | never observed |
+| absent (`NotFound`) | never | rarely, under contention, Windows |
+| refused (`PermissionDenied`) | never | rarely, under contention, Windows |
+| **who has to handle it** | every reader, and none did | every reader, and most already do |
+
+**A certain corrupting state was exchanged for a rare recoverable one.** The old window was not a risk, it was a certainty: `File::create` truncates before `write_all`, so the file was zero bytes on *every* write, and a zero-byte `.vibe/project.toml` is a parse error rather than a state any reader has a branch for. The new observables are transient and both have an existing, correct meaning in most readers.
+
+**Measured, so the "rare" is not a word.** Four readers spinning on the target through **12,000 replacements**, three batches: **~360,000 reads, zero `NotFound`, one `PermissionDenied`.** A separate high-contention run did produce `NotFound`, so it is reachable rather than absent — but the rate is on the order of **one read in 10^5 to 10^6**. Against a replacement cycle of roughly 2 ms that puts the window at **microseconds or less**, and an order of magnitude is all this supports. Contrast the old path, whose window the deterministic control catches **every single time**.
+
+**WHO ACTUALLY HANDLES IT — enumerated, not assumed.** *"An absent file is a defined state every caller already handles"* was a claim about every call site made without visiting them. Visited:
+
+| reader | `NotFound` | any other error |
+| --- | --- | --- |
+| `ManifestDocument::open` | `CoreError::ManifestNotFound` | `CoreError::Io` — **distinct** |
+| `Registry::plan_render` | plans a `CreateFile` | returns `CoreError::Io` — **distinct** |
+| `Cache::load` | `CacheLoad::Absent` | `CacheLoad::Corrupt { why }` — **distinct** |
+| `RenderMarker::classify_path` | `RenderState::Absent` | `RenderState::Unverifiable` — **distinct, and commented as deliberate** |
+| `AgentLock::load` | `LockLoad::Absent` | `LockLoad::Corrupt` — **distinct** |
+| `Witness::observe` (cache) | no witness | no witness — **collapsed, conservatively** |
+| `AgentState` scan | `AgentState::Missing` | **`AgentState::Missing` — COLLAPSED, and wrong** |
+| `ops::already_installed` | `false` | `false` — **collapsed, conservatively** |
+| `ops::install` | plans `CreateFile` | plans `CreateFile` — **collapsed, and it misreports the diff** |
+| `ops::remove` | no delete op | no delete op — **collapsed, safe direction** |
+
+**Five of ten distinguish the two correctly**, three collapse them in the safe direction, and **two collapse them into a wrong claim.** Both were there before this repair; the repair makes the input reachable more often, so they are named here rather than left for the next reader:
+
+- **`AgentState` reports `Missing` for a file it could not read.** That is constraint 5 — a fact about the world inferred from a failure to look — and the honest value **already exists two lines away**: `AgentState::Unverifiable`, documented as *"ownership or content cannot be established"*. A one-line change and a control, and **what a label claims is a product decision**, so it is recorded rather than taken.
+- **`ops::install` turns an update into a create.** A transient error makes it plan `CreateFile` for a file that exists, so `--dry-run` shows *create* where the truth is *replace*, and the `before` side of the diff is lost. Not destructive — `apply` replaces either way — but the diff the user approves is wrong, and constraint 2's whole argument is that the diff is what makes a write reviewable.
+
+**And none of them retries.** Every site reports or plans from a single read, so a transient error in the window becomes a reported fact rather than something a second attempt clears. That is the answer to *"transient with a retrying caller, or does the caller just report?"* — **it reports**, and that is what makes the two collapsing sites matter.
+
 **It was found because an instrument conflated two facts.** The first classifier mapped *every* read error to `Missing`, so a reader that was **denied** and a reader that found **no file** shared one observable — the failure this repository catalogues, inside the control asserting the absence of it. Split, it fired both ways: `PermissionDenied` on some runs and a genuine `NotFound` on others. Only the second is a window, and only the split could tell.
 
 **What the repair does not promise.** Durability. There is no `fsync`, so a crash can lose the *new* contents; whether it can also lose the old ones is a property of the filesystem rather than of this code and is not measurable here, so it is not asserted.

@@ -135,10 +135,20 @@ const BY_DESIGN: [&str; 1] = ["writer.rs"];
 /// **that one cannot rot, because it is the compiler's exclusion and not
 /// somebody's reading.**
 ///
-/// **What would close it, named:** scan `examples/` with a rule of its own —
-/// forbid the destructive calls (`fs::write`, `File::create`, `remove_file`,
-/// `truncate`) anywhere outside a path under `std::env::temp_dir()`, which is
-/// what a fixture builder writes to and what real work does not. Not built: it costs a second policy for
+/// **The closure named last round does not exist, and saying it did was the
+/// awaiting-a-fix shape again.** *Corrected 2026-08-19.* The proposal was to
+/// forbid destructive calls in `examples/` outside a path under
+/// `std::env::temp_dir()`. **A source scan cannot decide where a path points**
+/// — that is a runtime property — so the rule is not implementable as a static
+/// check, and naming it as the closure made a limit read as one commit from
+/// being closed.
+///
+/// **What IS measured, and it is what the judgement rests on:** `scan_bench.rs`
+/// writes only under `tempfile::tempdir()` and, for `--keep`, under
+/// `std::env::temp_dir().join("vibe-bench-corpus")`. Both are inside temp. So
+/// the exclusion is **correct today, by measurement rather than by reading** —
+/// and the limit is that nothing re-measures it. That is the whole of the limit,
+/// with no closure pending. Not built: it costs a second policy for
 /// four files, and the failure it guards — an example that writes somewhere
 /// real — is not reachable by a user, since `cargo install` does not ship them.
 /// Recorded as a limit with its reason rather than as a hole awaiting a fix.

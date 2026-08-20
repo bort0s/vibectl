@@ -3002,6 +3002,33 @@ that leave it say where they went.*
   gate; the split `Seen` enum is it for the classifier. **Neither existed until
   the instrument had already reported something false.**
 
+- **REPAIR THE INVARIANT, NOT THE INSTANCE — the shape-versus-class rule.**
+  *Added 2026-08-19.* Three times now a control has been written on the case it
+  met rather than on the class it belongs to, and each time the same defect was
+  found again somewhere else:
+
+  1. **Ancestor gating** resolved one level up, because the one instance it
+     tripped over was one level up. A module gated two levels up would have been
+     scanned as shipped code.
+  2. **The match-all `matcher`** was measured on a **tool** event and about to be
+     installed on **lifecycle** events, where a matcher means something else.
+  3. **`absent is not unreadable`** was established for `read_document` in the
+     is-a-directory form (round 8), and the identical defect sat two functions
+     away in the read-error form — where it composed into replacing a file the
+     tool could not read (ADR-0001 §3a).
+
+  **The tell is that the control names the failure rather than the property.**
+  *"A directory where the file should be must not report as absent"* is a case;
+  *"no plan is ever produced from a read that failed"* is the invariant, and the
+  second does not have to enumerate the ways a read can fail. Where an invariant
+  can be stated, the control goes there — and where it cannot, the case-shaped
+  control says which case it covers, which is the same obligation §9 already puts
+  on quantifiers.
+
+  **It sits beside the instrument class above for a reason:** both are failures of
+  the *scope* of a claim rather than of its truth. One is an instrument claiming
+  more than it observed; this is a control covering less than its name implies.
+
 - **THE TIMING-DEPENDENT CONTROLS, ENUMERATED AND DISPOSITIONED.** *Added
   2026-08-19.* One control was found firing at **one red in six runs** — the
   sampling exception argued for and approved two rounds earlier. **The broken

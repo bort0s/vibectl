@@ -1602,12 +1602,9 @@ which portion of the subject was in front of it.
 
 - **It fails green, and it fails green permanently.** A collapsed observable is
   at least wrong under some input, so re-running can surface it. A correct
-  measurement of the wrong subject is right every time it is taken. `--sabotage`
-  had been run against this gate and passed: both its injections were
-  host-visible, so the harness's own controls were the same shape as the
-  blindness and could not see it. That is the hazard-class rule — *a control
-  proves only the hazard class it exercises* — arriving one level further out
-  than it did inside `probe.js`.
+  measurement of the wrong subject is right every time it is taken. Re-running
+  is not a strategy against it, and neither — see the entry below — was the one
+  mechanism built to test this gate.
 - **The coverage claim is the only thing that makes it detectable.** The gate's
   numbers carried no triple. Once they do — `clippy host
   (x86_64-pc-windows-msvc)` — the gap between CI's three OS legs and this
@@ -1638,11 +1635,24 @@ disclaimer:
 - **`atomic_replace.rs` — `the_targets_unix_mode_survives_the_replacement`.**
   The one that matters most. It is the control for `662f8e5`, the permissions
   repair that applies the mode at open time on Unix — **and `662f8e5` is the
-  commit that introduced `plan.rs:454`.** Its Windows twin,
-  `the_targets_readonly_flag_survives_the_replacement`, runs here, so the pair is
-  split exactly down the middle: the half covering the flag that carries no
-  exposure runs locally, and the half covering the mode that does, does not.
-  Verification of that repair sits **entirely** with CI.
+  commit that introduced `plan.rs:454`.** Verification of that repair sits
+  **entirely** with CI.
+
+  **The pair's halves are not equivalent, and the asymmetry runs the wrong
+  way.** Its Windows twin, `the_targets_readonly_flag_survives_the_replacement`,
+  runs here. What that half protects is the read-only flag — the only thing
+  `std::fs::Permissions` models on Windows, and a bit that **carries no
+  exposure**: a file readable a moment early is not a leak when the flag never
+  controlled who could read it. What the absent half protects is the **Unix
+  mode**, where a `0600` settings file silently coming back `0644` is the actual
+  hazard the primitive exists to prevent.
+
+  So the pair is split precisely down the middle, and **the member that runs
+  locally is the member that does not carry the risk.** This is the worst shape
+  partial coverage takes: *"per-platform control, green locally"* is true, reads
+  as coverage, and the green is entirely about the harmless half. Stating that
+  there are two halves is not enough — **the register has to say which one
+  carries the exposure**, or the count itself becomes the reassurance.
 - **`ignore_state_git.rs` —
   `a_signal_killed_child_produces_no_exit_code_and_maps_to_unknown`.** ADR-0010
   §10's reachable half. Locally the mapping keeps its synthesised-value coverage
@@ -1651,14 +1661,33 @@ disclaimer:
   reason the gating was argued for, is not taken here.
 - **`monitor_writer.rs` — the `cfg(not(windows))` assertion inside
   `the_traversal_hazard_is_real_and_reachable_on_this_machine`.** Not the
-  containment control itself but the **reachability premise** underneath it, and
-  its purpose is CI-only by construction: the escape was measured present on
-  Windows and measured absent on Linux, and **macOS was never measured**, so the
-  assertion exists to make the macOS runner take that measurement on every run.
-  A red there is a finding about the platform rather than a defect in the
-  writer. The arm that runs locally is the `cfg(windows)` one, which is the arm
-  whose reading was already taken — so this machine can only re-confirm what is
-  known and cannot produce the reading the other arm was written for.
+  containment control itself but the **reachability premise** underneath it. Its
+  purpose is CI-only by construction: the escape was measured **present** on
+  Windows and **absent** on Linux, and **macOS was never measured**. The arm that
+  runs locally is the `cfg(windows)` one, whose reading was already taken — so
+  this machine can only re-confirm what is known.
+
+  **How to read the macOS leg, stated before the run rather than after it.** On
+  that platform this assertion is a **first measurement, not a regression
+  check**, and the two are indistinguishable from the outside:
+
+  - **Red is a finding about the third platform, not a broken branch.** It means
+    macOS resolves `..` the way Windows does, the hazard is reachable there, and
+    the reachability comment is *wrong* rather than incomplete. Nothing in the
+    writer has regressed; something about the world has been learned. Reading it
+    as a build failure would discard the measurement and repair the assertion.
+  - **Green is also a first observation, and that is the direction more likely
+    to be misread.** It is the first time anyone has seen this behaviour on
+    macOS. It will sit in the checks list looking exactly like a regression
+    check passing — same tick, same name — while actually being a new fact.
+    *Nobody investigates a green* applies with full force: the one run that
+    establishes a platform's behaviour is also the one run nobody reads.
+
+  The general form, and the reason this is in the register rather than only in
+  the test's doc comment: **a green on a measurement never taken before carries
+  strictly more information than the identical green on the run after it, and
+  nothing in a CI interface distinguishes them.** Which reading applies has to be
+  written down *before* the run, because afterwards the tick is all there is.
 - **`agents_store.rs:322` — the `chmod 0755` inside
   `negative_control_cloning_a_local_repo_does_not_run_the_source_repos_hooks`.**
   Different shape, and the weakest of the four: the **test** runs here, and
@@ -1669,6 +1698,42 @@ disclaimer:
   it is covered where it exists. It is listed because a reader scanning for
   `cfg(unix)` will find it, and the answer *"this one is fine, and here is why"*
   is worth more than its absence from the list.
+
+**A sabotage must have a shape the subject might not see, or it confirms
+coverage instead of measuring it.** *Added 2026-08-20; the inverse of the
+hazard-class rule, aimed at the validator rather than at the control.*
+
+`--sabotage` exists to establish that the gate can go red, and it had passed.
+Both its injections — a failing test and a non-compiling tree — were
+**host-visible**. So the one mechanism built to find this gate's blind spots
+**shared the blind spot**: sabotage and gate compiled for the same triple, and a
+defect neither could see was a defect neither reported.
+
+That is not a second blind spot. It is the **validator inheriting the subject's
+premise**, and it fails differently from a validator that is merely incomplete.
+An incomplete suite leaves a class untested, and the gap is findable by
+enumerating what it covers. A suite that inherits the premise reports **coverage
+confirmed** over exactly the region where coverage is absent — its green is not
+missing evidence, it is evidence for the wrong conclusion.
+
+The hazard-class rule says a control proves only the class it exercises and
+**must have the target's shape**. This is its inverse, and the two are not in
+tension because they govern different objects: sharing the target's shape is
+what makes a *control* valid, and it is what makes a *sabotage* inert. A
+sabotage that can only express what the subject already sees is a tautology with
+a harness around it.
+
+`probe.js` produced this once already, one level in: its control was a
+single-line string, so it could not exercise the multi-line blindness the tool
+was built to prevent. It passed throughout, while the tool returned a false
+zero. Same principle, aimed at a gate instead of at a search — which is why this
+is indexed on the validator's shape and not on `#[cfg]` or on lints, neither of
+which will be the next instance's topic.
+
+**The check is a question with a short answer: before trusting a sabotage suite,
+ask what it cannot express.** Here that was *anything platform-conditional*,
+which names the missing injection precisely rather than gesturing at more
+coverage. Sabotage 3 is that injection.
 
 **A control must isolate the variable it is a control for — so a sabotage must
 sabotage only what it intends.** *Added 2026-08-20, from the same gate repair.*

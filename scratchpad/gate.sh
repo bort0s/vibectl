@@ -233,7 +233,14 @@ run_gate() {
   #                           the control for 662f8e5, the permissions repair,
   #                           which is also the commit that introduced the
   #                           defect this gate could not see. Its Windows twin
-  #                           at :462 DOES run, so the pair is split in half.
+  #                           at :462 DOES run — and THE HALF THAT RUNS IS THE
+  #                           HALF THAT CARRIES NO EXPOSURE. Windows models only
+  #                           the read-only flag, which never governed who could
+  #                           read the file; the absent half covers the Unix
+  #                           mode, where 0600 coming back 0644 is the hazard
+  #                           the primitive exists for. "Per-platform control,
+  #                           green locally" is true and reassures about the
+  #                           wrong member.
   #   ignore_state_git.rs:463 the reachable SIGKILL arm (ADR-0010 §10). The
   #                           mapping keeps synthesised-value coverage locally;
   #                           the reachable half does not.

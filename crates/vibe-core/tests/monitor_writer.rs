@@ -666,6 +666,19 @@ fn the_traversal_hazard_is_real_and_reachable_on_this_machine() {
     // macOS runner take that measurement on every run: a red is not a defect in
     // the writer, it is the discovery that macOS resolves `..` the way Windows
     // does, and the doc comment above becomes wrong rather than incomplete.
+    //
+    // **AND THE GREEN SIDE, which is the one more likely to be misread.** On
+    // macOS this is a FIRST MEASUREMENT, not a regression check. The first
+    // green here is the first time anyone has observed this behaviour on that
+    // platform — and it arrives in the checks list as a tick identical to the
+    // thousandth one. *Nobody investigates a green*, so the single run that
+    // establishes a platform's behaviour is also the run nobody reads.
+    //
+    // A green on a measurement never taken before carries strictly more
+    // information than the identical green on the run after it, and no CI
+    // interface distinguishes them. That is why both readings are written here
+    // rather than inferred later: afterwards the tick is all there is.
+    // Registered with the cross-execution limit in ADR-0002 §7.
     #[cfg(not(windows))]
     assert!(
         escaped.is_empty(),

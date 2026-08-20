@@ -1733,6 +1733,92 @@ about this machine and the entries are about what closed it:
   `cfg(unix)` will find it, and the answer *"this one is fine, and here is why"*
   is worth more than its absence from the list.
 
+**A correction applied at one site creates a contradiction at every site that
+restated the original.** *Added 2026-08-20, from ADR-0011 §7b, and filed as its
+own direction rather than as another residue.*
+
+The residue entries above are all about **retraction**: a claim was withdrawn,
+some site kept asserting it, and the repair is to catch up. This is not that.
+**Nothing was withdrawn and nothing was overtaken by events.**
+
+ADR-0011 §7b's containment paragraph was corrected on 2026-08-19 from a
+two-valued route to a one-valued one. A neighbouring paragraph, written the same
+day, restated the route as `FileOp::UpdateFile` — a variant with a `path` field,
+which makes the containment claim (*there is no field to put one in*) false of
+it. The two were **inconsistent from the moment of the correction**, not from
+some later drift. There was no interval during which both were true.
+
+- **It is undetectable by asking "what changed?"** A retraction sweep looks for
+  claims that used to hold. Both of these were authored into the same document
+  on the same day, and neither has a before-state to compare against.
+- **Reading order decides which one wins.** A reader reaching the plumbing
+  paragraph first builds the wrong thing *while believing they have read the
+  decision* — the restatement carries none of the reasoning, so nothing in it
+  signals that it is downstream of an argument made elsewhere.
+- **The failure lands in the implementation, not in the prose.** It was found
+  while building, by needing to pick one; a reader who never implemented would
+  have no reason to notice.
+
+**The check:** when correcting a decision, search for **restatements** of it,
+not only for claims that depended on it. A restatement is a copy without the
+argument, and the copy is what survives to mislead. A good seed is the
+mechanism's name — here, the type being named in two places.
+
+**Where a document contradicts itself, the section stating the SAFETY ARGUMENT
+outranks the section describing the MECHANISM.** *Added 2026-08-20, from
+resolving the above; recorded as a rule because it was applied without one.*
+
+Faced with two readings of ADR-0011 §7b and no way to satisfy both, the
+resolution was: the containment section wins, because **it is why the write is
+permitted at all**, and the plumbing section is only how it happens. That
+ordering was not written anywhere and it decided the build.
+
+It generalises past this instance:
+
+- **The safety argument is load-bearing for the permission; the mechanism is
+  load-bearing for nothing.** ADR-0005 §10 rule 5 admits this write only on the
+  containment argument's terms. Take the other reading and the write has no
+  admissibility argument left — not a weaker one, none.
+- **The mechanism section is the likelier copy.** It describes; the argument
+  section reasons. Reasoning is expensive to restate and tends to be written
+  once, which is exactly why the restatement is the half that goes stale.
+- **It is falsifiable rather than a preference.** If the safety section were the
+  copy and the mechanism section carried the argument, the ordering reverses —
+  the rule is about which text holds the reasoning, not about which heading it
+  sits under.
+
+**When two agents share an identity inside a tool, that tool is not a source for
+attribution.** *Added 2026-08-20, from a false claim in a session report.*
+
+A report asserted *"you last pushed `c34ce4d`"*. Measured: `c34ce4d` was pushed
+by the assistant, minutes earlier, in the same session, and the record of doing
+it was in that session's own history. The claim was inference presented as fact,
+and it drove a real operational decision — a finished commit was held back to
+avoid cancelling a CI run that was never shown to exist.
+
+The structural half is worth more than the correction. On this machine **every
+commit is `unknown <riccardobortos0@gmail.com>`**, whoever makes it. Git
+authorship was never capable of separating the two participants, so no amount of
+care reading `%an`/`%ae` would have answered the question. The only evidence is
+the session record.
+
+- **The tool is not defective; it was never asked.** Git attributes commits to a
+  configured identity, which is exactly what it promises. Nobody had checked
+  whether that identity distinguishes the parties whose actions were being
+  distinguished — the instrument rule (*measure the instrument's properties
+  before trusting a result*) pointed at a field rather than at a tool.
+- **Shared-identity attribution fails silently and confidently.** There is no
+  error, no empty result, no ambiguity marker. The answer looks authoritative
+  and is simply about a different question.
+- **Repository state is measurable and was not measured.** `git ls-remote`,
+  `git reflog show refs/remotes/...` and `git log -1 --format=%an` settle every
+  question here in one command each. The report guessed instead, on a subject
+  with a cheap instrument sitting beside it.
+
+**The check:** before attributing an action to a party, ask what would
+distinguish them from the other candidates *in the evidence being used*. If the
+answer is "nothing", the evidence is about something else.
+
 **A sabotage must have a shape the subject might not see, or it confirms
 coverage instead of measuring it.** *Added 2026-08-20; the inverse of the
 hazard-class rule, aimed at the validator rather than at the control.*

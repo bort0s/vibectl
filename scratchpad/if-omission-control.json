@@ -1,0 +1,16 @@
+[
+  {
+    "label": "if-omitted-CONTROL",
+    "_why": "The positive control. No `if` key at all, which is exactly what `vibe monitor install` writes. This variant MUST fire. If it does not, the omission default has changed from 'do not suppress' to something else and every installed hook has silently stopped delivering."
+  },
+  {
+    "label": "if-star",
+    "extra": { "if": "*" },
+    "_why": "Measured 2026-08-19 as 0 of 2 — accepted by the loader and suppressing everything, which is why install cannot write a match-all `if` and must omit the key instead. This variant MUST NOT fire. If it starts firing, `if: \"*\"` has acquired a do-not-suppress meaning and the omission dependency can be closed by writing it explicitly, which is the outcome that would let install stop depending on a default."
+  },
+  {
+    "label": "matcher-star-PAIR",
+    "matcher": "*",
+    "_why": "The other half of the asymmetry, in the same run. `matcher` HAS a written value meaning do-not-suppress and fired 2 of 2. Carried here so a run where nothing fires at all is distinguishable from a run where suppression is working: if this goes quiet too, the session or the fixture is broken and the `if` rows say nothing."
+  }
+]

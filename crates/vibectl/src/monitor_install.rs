@@ -34,6 +34,38 @@ use crate::reporter;
 /// to say where home is means install cannot run — but it must say *that*,
 /// rather than falling back to a guessed path and writing a hook config
 /// somewhere nobody looks.
+///
+/// # LIMIT: this resolution is not overridable by environment, and the cause is
+/// UNKNOWN
+///
+/// *Measured 2026-08-20 on Windows 10 Pro 19045, `directories` 6.0.0.*
+///
+/// `vibe monitor status` resolves home correctly under the unmodified
+/// environment. Setting `USERPROFILE` to a directory that **exists** makes
+/// [`vibe_core::prompts::user_home`] return `None`, and the command then
+/// reports that the platform will not say where home is. Reproduced four ways —
+/// forward slashes and backslashes, from Git Bash and from PowerShell — and it
+/// was `None` every time.
+///
+/// **The reason this is recorded is that the cause is unknown, not that it
+/// costs nothing here.** It costs nothing *here* because
+/// [`vibe_core::monitor::install`]'s `plan` and `state` take `home` as a
+/// parameter, so every control plants its own and none of them touch this
+/// function. That is the `list_prompts(.., user_home, ..)` precedent and it is
+/// why the limit is survivable.
+///
+/// But anyone trying to drive the **CLI** against a fixture home will hit it,
+/// and the failure looks exactly like holding it wrong: a correct-looking
+/// `USERPROFILE`, a directory that is really there, and a flat refusal. Nothing
+/// below diagnoses it, because nothing below knows why it happens.
+///
+/// **What was NOT established:** whether `BaseDirs::new()` is consulting
+/// `USERPROFILE` at all on this platform, whether it validates the value
+/// against something, or whether the override interacts with the known-folder
+/// API. Reading the crate would produce a plausible answer, and a plausible
+/// answer to *why did the instrument return nothing* is the shape this
+/// repository catalogues. **The way to close it is to measure `BaseDirs::new()`
+/// directly under each candidate environment**, which nobody has done.
 fn resolve_ambient() -> Result<(PathBuf, PathBuf, PathBuf), String> {
     let home = vibe_core::prompts::user_home().ok_or_else(|| {
         "this platform will not say where the home directory is, so the \
@@ -233,13 +265,26 @@ pub fn status_cmd(args: &MonitorStatusArgs) -> Result<Exit, CoreError> {
                 );
             }
         }
+        // **The label says what was checked, not how things are going.**
+        // "installed and healthy" was the first wording and it is one word from
+        // claiming delivery: `healthy` is a word about a running system, and
+        // nothing here looked at the sink. What was checked is that two paths
+        // exist. That is a statement about CAPABILITY, and §6 is the reason the
+        // difference matters — absence of events is not a state, so a label
+        // that lets a reader infer events are flowing has resolved the
+        // ambiguity in the reassuring direction on no evidence.
+        //
+        // The variant is still called `Healthy` because it is the health of the
+        // INSTALL, which is all this read can see. The sentence a user reads
+        // does not inherit that word.
         InstallState::Healthy { command, sink } => {
             let _ = writeln!(
                 stdout,
-                "installed and healthy.\n  command {}\n  sink    {}\n  \
-                 Both exist, so events can arrive. This does NOT mean any are \
-                 arriving: a sink that stops growing still cannot be told from a \
-                 quiet agent.",
+                "installed; both paths it names exist.\n  command {}\n  sink    {}\n  \
+                 So events CAN arrive. This says nothing about whether any have: \
+                 nothing here read the sink, and even a sink that was read cannot \
+                 tell a quiet agent from one that stopped.\n  \
+                 Checked: the config, not the events.",
                 command.display(),
                 sink.display()
             );

@@ -2954,6 +2954,43 @@ that leave it say where they went.*
   built for `if` states that it is measuring somebody else's build, so a red
   reads as *upstream moved* rather than as *we broke something*.
 
+  **The control is `scratchpad/if-omission-control.json`, committed 2026-08-20,
+  and it is OWED rather than waived.** *Recorded because a disposition went the
+  other way on 2026-08-20 — "uncontrolled by decision, per §9" — asserted
+  without reading §9, which says the opposite. `if` is the sole **exclusion**
+  from the prohibition, so the prohibition does not reach it, and "whatever is
+  built" presupposes something is. A gap list saying "no control" and one saying
+  "no control, by decision" read identically, and only one of them was true.*
+
+  It is a fixture for `hook-variants.js` rather than a Rust test, because it
+  needs a real Claude Code binary and a live session — §9's on-demand bullet
+  covers why that cannot run in CI. **Committed rather than described**, for the
+  reason `probe.js` was: an instrument rebuilt from a paragraph is a new
+  instrument with the old one's name, carrying none of the repairs and all of
+  the confidence.
+
+  ```
+  node scratchpad/hook-variants.js <fixtureDir> <outFile> \
+       SessionStart,Stop scratchpad/if-omission-control.json
+  ```
+
+  Three rows, and the third is what keeps the first two honest:
+
+  | variant | expected | what a change means |
+  | --- | --- | --- |
+  | `if` omitted (control) | **fires** | red ⇒ the omission default moved and **every installed hook has silently stopped delivering** |
+  | `if: "*"` | **does not fire** | firing ⇒ `"*"` gained a do-not-suppress meaning, and the dependency can be closed by writing it |
+  | `matcher: "*"` (pair) | **fires** | quiet ⇒ the session or fixture is broken, and the two `if` rows say nothing |
+
+  **Both directions are readings, not just the red one.** The second row going
+  green is the outcome that would let install stop depending on a default at
+  all — which is a reason to run this deliberately rather than only when
+  something looks wrong.
+
+  **It measures somebody else's build.** A red is *upstream moved*, and the
+  repair is a decision about what install writes, never a fix to this
+  repository's code.
+
 - **Records from an unregistered project need a paired control.** *Added
   2026-08-19 with §7b.* A user-level hook fires everywhere, so: a session in a
   directory the registry has never seen must render as **unregistered**, **and a

@@ -62,7 +62,20 @@ run_gate() {
   step "fmt --check"        cargo fmt --all -- --check                              || failed=1
   step "clippy -D warnings" cargo clippy --workspace --all-targets -- -D warnings   || failed=1
   step "test --workspace"   cargo test --workspace                                  || failed=1
-  step "MSRV 1.85 --locked" cargo +1.85.0 check --locked --workspace                || failed=1
+  # **The label carries the scope, because the output is read without the
+  # source.** This step is `check`, not `test`, and without `--all-targets`:
+  # it compiles the LIB AND BINS on 1.85 and never looks at test code. That is
+  # deliberate and CI says why -- `rust-version` promises what a consumer
+  # builds, and dev-dependencies have MSRVs of their own.
+  #
+  # It is labelled here because of what `--sabotage` prints: against a tree
+  # that does not compile, this step reported `exit=0`, correctly, about code
+  # the sabotage never touched. A reader seeing "MSRV 0" beside "does not
+  # compile" infers the wrong thing, and an instrument whose green is about a
+  # different subject than the reader assumes is the class this repository
+  # already catalogues. The verdict was still red -- clippy and test caught it
+  # -- so this is a legibility repair, not a correctness one.
+  step "MSRV 1.85 lib+bins" cargo +1.85.0 check --locked --workspace                || failed=1
   return $failed
 }
 

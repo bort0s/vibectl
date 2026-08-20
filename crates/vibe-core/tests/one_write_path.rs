@@ -124,6 +124,22 @@ const BY_DESIGN: [&str; 1] = ["writer.rs"];
 /// per file and the directory has to match this list exactly — a new example
 /// fails until somebody adds it here, which is the judgement being made rather
 /// than inherited.
+///
+/// # DECLARED LIMIT: the judgement is per file and it does not expire
+///
+/// *Added 2026-08-19.* This catches a **new** example. It does not catch an
+/// existing one changing: `scan_bench.rs` builds fixtures today, and if it grew
+/// a write to somewhere real tomorrow neither this list nor its length would
+/// move. So the exclusion is sound at the moment each line was written and
+/// ages from then on, which is exactly the asymmetry with `#[cfg(test)]` —
+/// **that one cannot rot, because it is the compiler's exclusion and not
+/// somebody's reading.**
+///
+/// **What would close it** is scanning examples with a narrower rule of their
+/// own, rather than excluding them. Not built: it costs a second policy for
+/// four files, and the failure it guards — an example that writes somewhere
+/// real — is not reachable by a user, since `cargo install` does not ship them.
+/// Recorded as a limit with its reason rather than as a hole awaiting a fix.
 const EXAMPLES: [(&str, &str); 3] = [
     (
         "atomic_replace_once.rs",

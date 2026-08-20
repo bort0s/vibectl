@@ -2430,6 +2430,20 @@ so *"the maximum"* was whichever mode the run sampled:
 - **A floor over the COLD-MODE maximum, with a stated margin** — catches the
   paging case, which is where `SessionStart` lands.
 
+**A COLD-MODE SAMPLE, KEPT WITH ITS DATE AND PLATFORM.** *2026-08-19,
+`windows/x86_64`, test profile.* One batch of ten produced a steady-state
+maximum of **48.8 ms** where the other eleven batches gave **14.7–18.7 ms** —
+nearly triple the second-worst. The derivation now uses p90, which **discards it
+by construction**, so it is written down here instead: either it is round 3e's
+cold mode reappearing inside what was supposed to be the warm population, or it
+is a third regime nobody has named. Not chased. Kept, because the floor below has
+to be derived from cold mode and **this is a cold-mode-sized sample**.
+
+**And it missed the never-taken branch by 1.2 ms.** 50 ms is where the multiplier
+overtakes the 5 s floor; 48.8 ms is 2.4% under it. The multiplier has never bound
+on any platform that has reported — and the next platform's distribution may take
+it, which would be the first time the two-term rule uses both terms.
+
 **The floor is currently inherited rather than derived, and that is recorded as
 a debt.** 5 s covers the 1.20–1.27 s cold measurements at about 4×, but the 5
 was chosen before those numbers existed. The multiplier has never bound, so the
@@ -2955,6 +2969,38 @@ that leave it say where they went.*
   rather than a fault in the reading. **Nobody should read 5 of 7 as "controls
   are stable."** Both numbers are printed in one invocation; only the second is
   a gate.
+
+- **A CLASS, NOT THREE ENTRIES: AN INSTRUMENT THAT COLLAPSES TWO OBSERVABLES
+  INTO ONE.** *Added 2026-08-19.* This document spends its length on the subject
+  producing two outcomes that share one observable — `OpenProcess` returning
+  NULL, a quiet agent and a removed hook, an unmatched `tool_use_id`. **The
+  harness does it too, and it had no controls at all.** Four instances in four
+  rounds, all in code written to measure:
+
+  1. **`cargo test | grep -c FAILED`** — *everything passed* and *nothing
+     compiled* both give zero. It reported a green tree that did not build.
+  2. **`gate.sh` running `cargo test` twice** — the two runs disagreed and the
+     script resolved the disagreement in favour of green.
+  3. **`fs::read(..).ok()` in the atomic-replace classifier** — *denied* and
+     *absent* both became `Missing`, inside the control asserting that state's
+     absence, and its failure text claimed a destroyed `settings.json` that had
+     not been measured.
+  4. **`gate.sh` run from outside the repo** — every step red, for a tree that
+     does not exist; *the subject is broken* and *the instrument is misplaced*
+     shared one output.
+
+  **The tell is the same every time: a lossy conversion on the path from
+  observation to verdict.** `grep -c` discards the exit code; `.ok()` discards
+  the error kind; two runs discard which one the verdict came from; a bare `cd`
+  discards where the measurement happened. Each is one line, each reads as
+  tidying, and each removes the distinction the instrument existed to draw.
+
+  **So the rule is not "check the gate" but the one this document already has,
+  turned around:** *when two outcomes share an observable, the instrument is as
+  likely to be the cause as the subject* — and an instrument has no control
+  unless somebody builds it one. `gate.sh --sabotage` is that control for the
+  gate; the split `Seen` enum is it for the classifier. **Neither existed until
+  the instrument had already reported something false.**
 
 - **THE TIMING-DEPENDENT CONTROLS, ENUMERATED AND DISPOSITIONED.** *Added
   2026-08-19.* One control was found firing at **one red in six runs** — the

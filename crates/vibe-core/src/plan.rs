@@ -451,7 +451,7 @@ fn write_temp(temp: &Path, target: &Path, contents: &str) -> std::io::Result<()>
         }
         let mut file = opts.open(temp)?;
         file.write_all(contents.as_bytes())?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(unix))]

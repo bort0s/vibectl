@@ -109,6 +109,36 @@ jobs:
           # is authoritative; this stops the action contributing a second one.
           rustflags: ""
 
+      # WHICH BINARY, AND OVER WHAT TARGET.
+      #
+      # `toolchain: stable` names a channel, not a release, and `cargo-clippy`
+      # on PATH is a rustup shim in any case — so neither this file nor a green
+      # tick records what actually ran. That became expensive: the local gate
+      # reported "clippy 0" for 48 commits while this job was about to fail on
+      # `plan.rs:454`, and locating the difference meant guessing at versions
+      # and config because neither side had written its own down.
+      #
+      # The difference was not the version. It was the HOST TRIPLE — the gate
+      # ran on windows-msvc, where the `#[cfg(unix)]` block holding the defect
+      # is stripped before clippy sees it. That is why the triple is printed
+      # here and not only the version: it is the field that actually differed.
+      #
+      # scratchpad/gate.sh prints these same values beside its own numbers.
+      # Printing them here is what makes the two sets of numbers comparable at
+      # all; a gate whose numbers cannot be compared to CI's is reporting on a
+      # different subject.
+      - name: Report the toolchain this job will invoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "resolved binaries (not the PATH shim):"
+          for b in cargo rustc cargo-clippy; do
+            printf '  %-13s %s\n' "$b" "$(rustup which "$b")"
+          done
+          printf '  %-13s %s\n' "rustc" "$(rustc --version)"
+          printf '  %-13s %s\n' "clippy" "$(cargo clippy --version)"
+          printf '  %-13s %s\n' "host" "$(rustc -vV | awk '/^host:/ {print $2}')"
+
       - name: Restore cargo cache
         uses: Swatinem/rust-cache@v2
         with:

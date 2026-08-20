@@ -244,7 +244,7 @@ pub struct ApplyReport { pub applied: Vec<AppliedOp>, pub skipped: Vec<SkippedOp
 
 ### 3b. DEFECT (P5, `agents`): a failed read produced a plan that could not apply
 
-*Filed 2026-08-19, where the write path lives rather than inside the work that found it. **Filed with a corrected severity**: the report that found it said the file was replaced, and it is not — see the withdrawal below.*
+*Filed 2026-08-19, where the write path lives rather than inside the work that found it. **The subject of this entry is the third block, not the first.** The chain is a P5 defect worth fixing; what makes it worth writing down at this length is that the mechanism which contained it was undocumented, and this register described the arm in front of it as absent.*
 
 **What it is.** Three collapsed observables in `agents`, composing:
 
@@ -254,20 +254,24 @@ pub struct ApplyReport { pub applied: Vec<AppliedOp>, pub skipped: Vec<SkippedOp
 
 **Reachable since P5, on all three platforms, deterministically.** The precondition is **a directory standing where an agent file belongs** — no concurrency, no Windows, no rename. A user produces it by making a directory of that name by hand, by a tool that creates `.claude/agents/<name>.md/` as a folder, or by an old checkout in which that path was a directory. Any read error does it; the directory is simply the one that is deterministic.
 
-**WHAT IT DOES NOT DO, AND AN EARLIER REPORT SAID IT DID.** *Withdrawn 2026-08-19, the same day.* That report said *"a user's edited agent, replaced"*. **Measured: `apply` refuses.** `check_precondition` runs over **every** op before any op runs, and `CreateFile` on an existing path returns `CoreError::TargetExists`. The plan is built, the dry run displays it, and the write never happens:
+**What it does, stated exactly: reported as create, refused at apply.** Not a constraint 2 violation — **zero bytes are lost, on every path.** `check_precondition` runs over **every** op before any op runs, and `CreateFile` on an existing path returns `CoreError::TargetExists`. The plan forms, `--dry-run` displays it, `apply` refuses it, and the write never happens:
 
 ```
 OPS:          [CreateFile { path: …/.claude/agents/a.md, contents: <the store's copy> }]
 APPLY RESULT: Err(TargetExists { path: …/.claude/agents/a.md })
 ```
 
-**So the severity is a wrong report and an opaque failure, not data loss.** The corrected list of what it costs:
+So the cost is a wrong report and an opaque failure, an order of magnitude below data loss:
 
 - **`vibe agents status` says `missing`** for a file that is there and unreadable. That is the constraint-5 half, and it is a claim the user acts on.
-- **`--dry-run` says *"create file … (N lines)"*** and shows the new contents with no before side, for an operation that will be refused.
+- **`--dry-run` renders it as an ordinary create**, for an operation that will be refused. (Repaired separately — see §3c.)
 - **`vibe agents add` then fails with `TargetExists`**, which names the symptom and not the cause. The cause — *the installed file could not be read* — was known three steps earlier and discarded.
 
-**And the reason it never destroyed anything is a mechanism nobody in this chain was relying on.** `check_precondition`'s `CreateFile` arm is the only thing between the plan and the write, and an earlier round's summary — *"`CreateFile` and `UpdateFile` share one arm in `apply`, so `CreateFile` onto an existing path replaces it"* — described the **write** arm and omitted the **gate** in front of it. True of `write_atomically` called directly; not true of a plan going through `apply`. Both halves are now written down, because a defence that holds by accident of a summary nobody checked is one commit from not holding.
+**WITHDRAWN, THE SAME DAY IT WAS FILED: the report that found this said the file was replaced.** It said *"a user's edited agent, replaced, without the `--force` that `Modified` requires"*, and declared a constraint 2 violation in shipped code. **There was no violation.** The claim was reached by reading a table and a plan dump and **inferring `apply`'s behaviour instead of running it** — the same error as *"every caller already handles it"*, which is a claim about all call sites made without visiting them. A register carrying a claim stronger than the truth is **constraint 5 running backwards**: this document exists to stop the tool inventing plausible values, and it had invented one about itself.
+
+**THE FINDING: the only defence between this plan and the write was undocumented, and this register described the arm in front of it as absent.** An earlier round's summary of the write path read *"`CreateFile` and `UpdateFile` share one arm in `apply`, so `CreateFile` onto an existing path replaces it"*. That describes the **write** arm and omits the **gate**. It is true of `write_atomically` called directly; it is false of any plan going through `apply`. So for several rounds the register said the guard did not exist, the guard did exist, and **nothing on either side was measured** — the false claim above is what you get when a chain is traced against that description.
+
+Both halves are now written here, and the reason is not tidiness. `check_precondition`'s `CreateFile` arm is load-bearing for constraint 2 across **every** planner, present and future, and until this entry no document said so. **A defence that holds by the accident of a summary nobody checked is one commit from not holding** — a reviewer deleting it would have found no text objecting, and a test asserting the *plan* rather than the *apply result* would not have caught the deletion either.
 
 **The repair, on the invariant rather than the case: no `FileOp` is ever produced from a read that failed.** `install` reads once, and any error other than `NotFound` refuses with `Unverifiable` before an op is built; the state scan distinguishes absent from unreadable, which also closes the `--force` gate; `adoptable_on_exact_match` takes the bytes rather than reading them. Controlled by `no_plan_is_ever_produced_from_a_failed_read`, with both repairs sabotaged independently.
 

@@ -1009,14 +1009,26 @@ fn every_command_except_update_works_with_the_network_gone() {
 /// 2. `Missing` does not need `--force`, so `install`'s overwrite gate let it
 ///    through where `Modified` refuses;
 /// 3. `install` read again with `.ok()`, got `None`, and planned a
-///    **`CreateFile`** carrying the store's contents;
-/// 4. `apply` runs `CreateFile` and `UpdateFile` through **one arm**, so it
-///    replaces.
+///    **`CreateFile`** carrying the store's contents, aimed at a path that
+///    exists.
 ///
-/// A user's edited agent, replaced, without the `--force` that `Modified`
-/// requires, from a transient error. Each link was separately defensible and the
-/// composition was not — which is why the assertion below is on the **plan**,
-/// the place all four meet.
+/// **A fourth link was claimed here and there is no fourth link.** *Struck
+/// 2026-08-20.* This doc said *"`apply` runs `CreateFile` and `UpdateFile`
+/// through one arm, so it replaces"*, and concluded *"a user's edited agent,
+/// replaced"*. **Measured: `apply` refuses** — `check_precondition` runs over
+/// every op before any op runs and returns `TargetExists`. Nothing is written,
+/// on any path. The struck sentence described the *write* arm and omitted the
+/// *gate* in front of it; it was inferred from a summary rather than run. See
+/// ADR-0001 §3b, where the withdrawal and its cause are recorded.
+///
+/// So what the chain costs is a wrong `status` label, a dry run that misreports,
+/// and an error naming a symptom whose cause was discarded three steps earlier.
+/// Each link was separately defensible and the composition was not — which is
+/// why the assertion below is on the **plan**, the place they meet. **The
+/// assertion is unchanged by the withdrawal**, and that is the point of putting
+/// it on the plan: *no plan is ever produced from a failed read* is worth
+/// holding whether or not a downstream gate happens to catch the plan today.
+/// The gate is one line in another crate and this control does not depend on it.
 ///
 /// # The failure mode this can construct, and the one it cannot
 ///

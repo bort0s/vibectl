@@ -1565,6 +1565,148 @@ would surface the same thing one level down. Same limit ADR-0005 §4a records
 about its own amendment, and it is stated here rather than left for a reader to
 assume the pair is now closed.
 
+**An instrument can report correctly about a subject that is not the one it is
+believed to be describing.** *Added 2026-08-20, from the local gate's clippy
+step, and filed as its own category rather than as another collapsing instance.*
+
+The distinction is the entry. `grep -c FAILED` **collapsed two observables** —
+"everything passed" and "nothing compiled" shared one number, so the reading was
+wrong under an input that existed. This one collapses nothing. The tool was the
+right tool, the count was correct, and every reading it produced was **true**. It
+was true of a **different portion of the world** than the one being reasoned
+about.
+
+`scratchpad/gate.sh` reported `clippy exit=0` for 48 commits while `plan.rs:454`
+carried a `needless_return` that CI's ubuntu leg failed on. Everything the
+instrument-versus-subject ordering prescribes was done and came back clean: the
+same clippy release — `0.1.97 (8bab26f4f6 2026-07-14)`, resolved with `rustup
+which` rather than `which`, because the PATH entry is a **shim** that answers for
+every toolchain and so cannot be asked this question — no `clippy.toml`, no
+`rust-toolchain.toml`, no `#[allow]` in scope, `[workspace.lints]` inherited
+identically, and CI's exact invocation exiting 0 when run here. The version
+identity is measured rather than read off the workflow: reintroducing the defect
+reproduces CI's diagnostic down to the documentation URL,
+`rust-1.97.0/index.html#needless_return`, at the same file, line and column.
+
+The variable was the **target triple**. `cargo clippy` compiles for the host;
+this host is `x86_64-pc-windows-msvc`; `#[cfg(unix)]` is stripped during
+expansion, before clippy lints a line. The defect lived inside one.
+
+**So "an instrument's properties are measured with the instrument" does not reach
+this, and the reason is worth being exact about.** That rule contrasts the
+**instrument** against the **code**. Here the instrument was identical — asking
+*which clippy?* returns *the same one*, truthfully, and closes the investigation
+with the defect still in the tree. The rule that finds it compares nothing:
+**state what the measurement covered.** Not which tool and not which version —
+which portion of the subject was in front of it.
+
+- **It fails green, and it fails green permanently.** A collapsed observable is
+  at least wrong under some input, so re-running can surface it. A correct
+  measurement of the wrong subject is right every time it is taken. `--sabotage`
+  had been run against this gate and passed: both its injections were
+  host-visible, so the harness's own controls were the same shape as the
+  blindness and could not see it. That is the hazard-class rule — *a control
+  proves only the hazard class it exercises* — arriving one level further out
+  than it did inside `probe.js`.
+- **The coverage claim is the only thing that makes it detectable.** The gate's
+  numbers carried no triple. Once they do — `clippy host
+  (x86_64-pc-windows-msvc)` — the gap between CI's three OS legs and this
+  machine's one is on the same screen as the number, and no inference is
+  required to see it.
+- **Indexed on the action, per the rule above.** The obvious phrasing is *"a lint
+  run covers only the platform it compiled for"*, and that is merely this
+  instance's topic. The next one will be a test filter that matched nothing, a
+  corpus that excluded the file in question, a feature flag that removed the
+  module. A rule indexed on `#[cfg]` fires for none of them; one indexed on
+  *state the coverage* fires for all of them.
+
+**The repair reaches cross-compilation. It does not reach cross-execution, and
+that limit is permanent on this machine.** Clippy now runs once per OS family —
+host bare, plus `--target x86_64-unknown-linux-gnu` and `--target
+x86_64-apple-darwin` — under CI's flags verbatim. `cargo test` cannot be given
+the same treatment: running a cross-compiled test needs an emulator or a machine
+of that OS, and there is neither.
+
+So the local gate establishes that `cfg(unix)` code **compiles and lints clean**.
+**It does not establish that it passes.** Clean lints say nothing about
+behaviour, and the standing of every `cfg(unix)` control here is **zero** until a
+CI runner executes it.
+
+The register of what that covers, because a limit without its instances is a
+disclaimer:
+
+- **`atomic_replace.rs` — `the_targets_unix_mode_survives_the_replacement`.**
+  The one that matters most. It is the control for `662f8e5`, the permissions
+  repair that applies the mode at open time on Unix — **and `662f8e5` is the
+  commit that introduced `plan.rs:454`.** Its Windows twin,
+  `the_targets_readonly_flag_survives_the_replacement`, runs here, so the pair is
+  split exactly down the middle: the half covering the flag that carries no
+  exposure runs locally, and the half covering the mode that does, does not.
+  Verification of that repair sits **entirely** with CI.
+- **`ignore_state_git.rs` —
+  `a_signal_killed_child_produces_no_exit_code_and_maps_to_unknown`.** ADR-0010
+  §10's reachable half. Locally the mapping keeps its synthesised-value coverage
+  through `ignore_state::tests::no_exit_code_is_unknown_and_emphatically_not_not_ignored`,
+  so this one degrades rather than vanishes — but the reachable arm, the whole
+  reason the gating was argued for, is not taken here.
+- **`monitor_writer.rs` — the `cfg(not(windows))` assertion inside
+  `the_traversal_hazard_is_real_and_reachable_on_this_machine`.** Not the
+  containment control itself but the **reachability premise** underneath it, and
+  its purpose is CI-only by construction: the escape was measured present on
+  Windows and measured absent on Linux, and **macOS was never measured**, so the
+  assertion exists to make the macOS runner take that measurement on every run.
+  A red there is a finding about the platform rather than a defect in the
+  writer. The arm that runs locally is the `cfg(windows)` one, which is the arm
+  whose reading was already taken — so this machine can only re-confirm what is
+  known and cannot produce the reading the other arm was written for.
+- **`agents_store.rs:322` — the `chmod 0755` inside
+  `negative_control_cloning_a_local_repo_does_not_run_the_source_repos_hooks`.**
+  Different shape, and the weakest of the four: the **test** runs here, and
+  passes, because git-for-windows executes hooks without an exec bit. Only the
+  unix statement inside it is skipped. On a Unix runner that statement is
+  protected by the test's own positive control — hooks that were never made
+  executable would not fire, and the `post-commit` assertion would go red — so
+  it is covered where it exists. It is listed because a reader scanning for
+  `cfg(unix)` will find it, and the answer *"this one is fine, and here is why"*
+  is worth more than its absence from the list.
+
+**A control must isolate the variable it is a control for — so a sabotage must
+sabotage only what it intends.** *Added 2026-08-20, from the same gate repair.*
+
+The gate's three sabotages append Rust to a test file. Written in the one-line
+`fn f() { .. }` form, every one of them also tripped `fmt --check`, so each went
+red partly for a reason it was not testing. For sabotages 1 and 2 that only
+blurred the reading — they were still red from the step that mattered.
+
+For sabotage 3 it would have **invalidated the control outright**. Its entire
+claim is that the previous host-only gate could not have seen a `cfg(unix)`
+defect, and a gate that catches it on **formatting** catches it. The
+demonstration and the artefact of the demonstration would have been
+indistinguishable, with the flattering reading available: *the gate went red,
+therefore the gate works.*
+
+Rustfmt-clean injections are therefore load-bearing rather than tidy. The general
+form: **a sabotage's blast radius is part of its design**, and an injection that
+trips an unrelated step has stopped being a control and become a coincidence.
+
+**Assert which branch produced the observable, not merely that it appeared.**
+*Added 2026-08-20, same gate; the shape this project has been reaching for.*
+
+Sabotage 3 does not pass on red. Red for the wrong reason is also red, and a
+harness that accepts any red has re-created `grep -c FAILED` with the colours
+swapped. It requires a **specific signature**: the host clippy leg **green**, a
+cross leg **red**. That is the only outcome that shows the *new* capability is
+what caught the defect, rather than something that was already there.
+
+Measured on the injection: `fmt 0 | clippy host 0 | linux 101 | macos 101 | test
+0 | MSRV 0`. The previous gate would have been **entirely green** on that tree —
+which is the claim, stated as a result rather than as an argument.
+
+The generalisation is the convergent-branch rule pointed at a harness instead of
+a classifier: where an outcome has more than one producer, a control that names
+the outcome has not named the producer. `RootOutcome::Unreadable` needed the
+branches separated to mean anything, and so does "the gate went red".
+
 The regression test that matters, and that must exist before the first write
 feature ships: a corpus of manifests in `crates/vibe-core/tests/corpus/` — each
 with comments, blank lines, mixed array styles, and keys from a hypothetical

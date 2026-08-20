@@ -219,14 +219,37 @@ run_gate() {
     fi
   done
 
-  # **`cargo test` IS HOST-ONLY, AND CANNOT BE OTHERWISE HERE.** Running
-  # cross-compiled tests needs an emulator or a machine of that OS, and there is
-  # neither. So every `#[cfg(unix)]` test body in this repo —
-  # agents_store.rs:322, atomic_replace.rs:427, ignore_state_git.rs:463 — is NOT
-  # EXECUTED by this step, and the counts below describe what ran on one target.
-  # The clippy legs above LINT that code; nothing local RUNS it. CI's
-  # `Test (ubuntu-latest)` and `Test (macos-latest)` are the only instruments
-  # that do, and a green gate is not a substitute for them.
+  # **`cargo test` IS HOST-ONLY, AND CANNOT BE OTHERWISE HERE.** Running a
+  # cross-compiled test needs an emulator or a machine of that OS, and there is
+  # neither. The clippy legs above establish that `cfg(unix)` code COMPILES AND
+  # LINTS CLEAN. They do not establish that it PASSES, and clean lints say
+  # nothing about behaviour — so the local standing of every `cfg(unix)` control
+  # is ZERO until a CI runner executes it.
+  #
+  # Registered with its instances in ADR-0002 §7, because a limit without them
+  # is a disclaimer. Three whole controls are not taken here:
+  #
+  #   atomic_replace.rs:427   the_targets_unix_mode_survives_the_replacement —
+  #                           the control for 662f8e5, the permissions repair,
+  #                           which is also the commit that introduced the
+  #                           defect this gate could not see. Its Windows twin
+  #                           at :462 DOES run, so the pair is split in half.
+  #   ignore_state_git.rs:463 the reachable SIGKILL arm (ADR-0010 §10). The
+  #                           mapping keeps synthesised-value coverage locally;
+  #                           the reachable half does not.
+  #   monitor_writer.rs:669   the cfg(not(windows)) arm of the reachability
+  #                           premise under control (d), in
+  #                           the_traversal_hazard_is_real_and_reachable_on_this_machine.
+  #                           CI-only by construction: macOS was never measured,
+  #                           and that runner is what takes the measurement. The
+  #                           cfg(windows) arm at :652 is the one that runs
+  #                           here, and its reading was already known.
+  #
+  # agents_store.rs:322 is NOT in that list. It is an inner block, not a whole
+  # control: the test runs here and passes, because git-for-windows executes
+  # hooks without an exec bit, and on Unix the `chmod` is protected by the
+  # test's own positive control. Named anyway, because a reader grepping for
+  # `cfg(unix)` will find it and deserves the answer rather than its absence.
   #
   # The label carries this, because the output is read without the source.
   TEST_OUT="$(mktemp -t gate.XXXXXX)"

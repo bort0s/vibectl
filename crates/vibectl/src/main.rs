@@ -14,6 +14,7 @@ mod cli;
 mod cmd;
 mod exit;
 mod monitor;
+mod monitor_install;
 mod output;
 mod prompts;
 mod reporter;
@@ -82,6 +83,8 @@ fn run(cli: &Cli) -> Result<Exit, vibe_core::CoreError> {
             );
             Ok(Exit::Failure)
         }
+        Command::Monitor(MonitorCommand::Install(args)) => monitor_install::install_cmd(args),
+        Command::Monitor(MonitorCommand::Status(args)) => monitor_install::status_cmd(args),
         Command::Prompt(sub) => match sub {
             PromptCommand::List(args) => cmd::prompt_list(args),
             PromptCommand::Show(args) => cmd::prompt_show(args),

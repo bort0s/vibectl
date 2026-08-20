@@ -598,7 +598,11 @@ fn add_installs_declares_and_migrates_the_schema() {
         .plan
         .ops
         .iter()
-        .map(|op| op.path().to_string_lossy().replace('\\', "/"))
+        .map(|op| {
+            op.resolved_path(&planned.plan.root)
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
         .collect();
     let agent_at = paths.iter().position(|p| p.ends_with("agents/a.md"));
     let lock_at = paths.iter().position(|p| p.ends_with("agents.lock"));
@@ -756,11 +760,10 @@ fn remove_drops_the_lock_entry_before_the_file() {
 
     // ADR-0006 §4, inverted: a crash leaves a file with no entry (unowned,
     // untouched, reported) and never an entry pointing at something gone.
-    let lock_at = planned
-        .plan
-        .ops
-        .iter()
-        .position(|op| op.path().ends_with("agents.lock"));
+    let lock_at = planned.plan.ops.iter().position(|op| {
+        op.resolved_path(&planned.plan.root)
+            .ends_with("agents.lock")
+    });
     let del_at = planned
         .plan
         .ops
@@ -827,7 +830,10 @@ fn a_crash_between_the_two_writes_leaves_an_unowned_file_that_add_recovers() {
         .plan
         .ops
         .iter()
-        .position(|op| op.path().ends_with("agents.lock"))
+        .position(|op| {
+            op.resolved_path(&planned.plan.root)
+                .ends_with("agents.lock")
+        })
         .expect("a lockfile write");
     let partial = vibe_core::WritePlan::new(
         vibe_core::PlanIntent::AgentsAdd,

@@ -56,18 +56,28 @@
 //! - [`settings`] — editing `settings.json`, a file vibe does not own: what
 //!   the write preserves, and why re-install rather than first install is the
 //!   case it is built around.
+//! - [`install`] — the plan `vibe monitor install` builds, and the three-state
+//!   read that keeps *not installed* from sharing an observable with *installed
+//!   and quiet*.
+//! - [`target`] — where install may write, as a closed set with one member.
+//!   The invariant is the set's **size**, not its member: §7b's route was
+//!   two-valued in draft while project-level install had already been closed,
+//!   which is a representable state no command could produce.
 
 pub mod identity;
+pub mod install;
 pub mod reader;
 pub mod record;
 pub mod settings;
 pub mod sink;
+pub mod target;
 pub mod writer;
 
 pub use identity::{
     AGENT_MAX_LEN, AgentComponent, ComponentRejection, IDENTITY_MAX_LEN, IdentityCollision,
     SEPARATOR, SESSION_MAX_LEN, SessionComponent, WriterIdentity, collisions, file_key,
 };
+pub use install::{InstallRequest, InstallState, PlannedInstall};
 pub use reader::{
     Attribution, ClockStep, Disagreement, Entry, FileView, OrderBasis, RecordOrder, Sequencing,
     SinkListing, collides, order, read_sink, sequencing,
@@ -79,4 +89,5 @@ pub use settings::{
     read_document,
 };
 pub use sink::{ReadRecord, SinkFile, SinkRead, TailState, read_file};
+pub use target::{CLAUDE_DIR, SETTINGS_FILE, SettingsTarget};
 pub use writer::{IoFailure, PayloadRefusal, WriteOutcome, WriteStage, Writer};

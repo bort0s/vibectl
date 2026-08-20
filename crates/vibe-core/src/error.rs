@@ -148,6 +148,20 @@ pub enum CoreError {
         path: PathBuf,
         state: crate::render::RenderState,
     },
+
+    /// `vibe monitor install` declined to edit a settings file.
+    ///
+    /// **Reported, never repaired** (ADR-0011 §7). Every
+    /// [`SettingsRefusal`](crate::monitor::SettingsRefusal) variant is a fact
+    /// about a file vibe does not own, and carrying the refusal rather than
+    /// prose is what lets a caller tell "your JSON is malformed" from "your
+    /// config declares vibe's identity somewhere vibe cannot own" - which need
+    /// different things from the user and must not read the same.
+    #[error("{}: {}", .path.display(), .refusal.key())]
+    SettingsRefused {
+        path: PathBuf,
+        refusal: crate::monitor::SettingsRefusal,
+    },
 }
 
 impl CoreError {
@@ -175,6 +189,7 @@ impl CoreError {
             CoreError::OwnershipUnknown { .. } => "VIBE_E_OWNERSHIP_UNKNOWN",
             CoreError::RenderFailed { .. } => "VIBE_E_RENDER_FAILED",
             CoreError::RenderRefused { .. } => "VIBE_E_RENDER_REFUSED",
+            CoreError::SettingsRefused { .. } => "VIBE_E_SETTINGS_REFUSED",
         }
     }
 
@@ -195,6 +210,7 @@ impl CoreError {
             | CoreError::StoreNotOurs { path, .. }
             | CoreError::StoreNotARepository { path }
             | CoreError::RenderRefused { path, .. }
+            | CoreError::SettingsRefused { path, .. }
             | CoreError::Io { path, .. } => Some(path),
             CoreError::GitUrlRejected { .. }
             | CoreError::ToolFailed { .. }
@@ -261,6 +277,13 @@ impl CoreError {
             }
             // `status` is the structured discriminant a consumer branches on;
             // `stderr` is git's prose and is carried alongside, never instead.
+            // The refusal's stable key is the discriminant a consumer branches
+            // on, for the same reason `ToolFailed` carries `status`: the
+            // `Display` prose is a fallback, and a caller that keys off it is
+            // reading a sentence rather than a fact.
+            CoreError::SettingsRefused { refusal, .. } => {
+                params.insert("refusal".to_owned(), refusal.key().to_owned());
+            }
             CoreError::ToolFailed { status, argv, .. } => {
                 if let Some(code) = status {
                     params.insert("status".to_owned(), code.to_string());

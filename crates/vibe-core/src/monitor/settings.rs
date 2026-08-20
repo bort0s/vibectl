@@ -387,7 +387,7 @@ pub fn install(
     // rule one layer in.
     let mut plan: Vec<(String, Option<usize>)> = Vec::new();
     for event in INSTALLED_EVENTS {
-        plan.push((event.to_owned(), locate(doc, event, spec)?));
+        plan.push((event.to_owned(), locate(doc, event, &spec.identity)?));
     }
 
     let desired = spec.group();
@@ -443,7 +443,7 @@ pub fn install(
 fn locate(
     doc: &SettingsDocument,
     event: &str,
-    spec: &HookSpec,
+    identity: &WriterIdentity,
 ) -> Result<Option<usize>, SettingsRefusal> {
     let Some(hooks) = doc.value.get("hooks") else {
         return Ok(None);
@@ -475,7 +475,7 @@ fn locate(
                 index,
             })?,
         };
-        let declaring = inner.iter().filter(|h| declares(h, spec)).count();
+        let declaring = inner.iter().filter(|h| declares(h, identity)).count();
         if declaring == 0 {
             continue;
         }
@@ -498,8 +498,14 @@ fn locate(
     Ok(found)
 }
 
-/// Whether one hook object declares this install's identity.
-fn declares(hook: &Value, spec: &HookSpec) -> bool {
+/// Whether one hook object declares this identity.
+///
+/// **Keyed on the identity alone, never on the command path.** The binary moves
+/// — a `cargo install` upgrade, a different checkout — and a hook found by its
+/// command would then read as absent, which install would answer by writing a
+/// second group beside the first. §7a already uses the identity to tell writers
+/// apart, and this is the same key at the config end.
+fn declares(hook: &Value, identity: &WriterIdentity) -> bool {
     let Some(args) = hook.get("args").and_then(Value::as_array) else {
         return false;
     };
@@ -507,10 +513,41 @@ fn declares(hook: &Value, spec: &HookSpec) -> bool {
     let mut it = strings.iter();
     while let Some(a) = it.next() {
         if *a == "--identity" {
-            return it.next().copied() == Some(spec.identity.as_str());
+            return it.next().copied() == Some(identity.as_str());
         }
     }
     false
+}
+
+/// The hook object vibe declares for one event, if it is there.
+///
+/// **The read side, and it needs no `FileOp`** (ADR-0011 §7b): ADR-0001 §3
+/// governs mutation, and this borrows nothing from the write route. Stated
+/// because the write variant is deliberately narrow, and a later change that
+/// widened it to serve a reader would give back exactly what §7b bought.
+///
+/// # Errors
+///
+/// Every shape refusal [`locate`] can produce - the same validation the write
+/// path runs, because a config vibe cannot parse is one it cannot report on
+/// either.
+pub fn declared_hook<'a>(
+    doc: &'a SettingsDocument,
+    event: &str,
+    identity: &WriterIdentity,
+) -> Result<Option<&'a Value>, SettingsRefusal> {
+    let Some(index) = locate(doc, event, identity)? else {
+        return Ok(None);
+    };
+    Ok(doc
+        .value
+        .get("hooks")
+        .and_then(|h| h.get(event))
+        .and_then(Value::as_array)
+        .and_then(|groups| groups.get(index))
+        .and_then(|group| group.get("hooks"))
+        .and_then(Value::as_array)
+        .and_then(|inner| inner.iter().find(|h| declares(h, identity))))
 }
 
 /// Read a settings file that may not exist.

@@ -25,6 +25,7 @@ use crate::cli::{
     AgentsUpdateArgs, StoreFlags,
 };
 use crate::exit::Exit;
+use crate::output::pretty;
 use crate::{output, reporter};
 
 fn store_config(flags: &StoreFlags) -> StoreConfig {
@@ -366,10 +367,6 @@ fn staleness_json(staleness: Staleness) -> serde_json::Value {
         }
         _ => serde_json::json!({ "state": "unrecognised" }),
     }
-}
-
-fn pretty(v: &serde_json::Value) -> String {
-    serde_json::to_string_pretty(v).expect("plain data serialises")
 }
 
 /// A revision, shortened for display only. Nothing is ever addressed by this.

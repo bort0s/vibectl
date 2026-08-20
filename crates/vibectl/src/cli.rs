@@ -55,6 +55,49 @@ pub enum MonitorCommand {
     /// error. Declared here so it appears in `--help` and so the name is
     /// reserved; the arguments live in `monitor::HookArgs`.
     Hook,
+    /// Write vibe's hook group into `~/.claude/settings.json`.
+    ///
+    /// **The one explicit act** (ADR-0011 §7). Vibe never repairs hook config
+    /// automatically and never writes it as a side effect of another command:
+    /// this is the only thing in the tool that edits a file it does not own.
+    Install(MonitorInstallArgs),
+    /// Report whether the hook is installed, and whether what it names is there.
+    Status(MonitorStatusArgs),
+}
+
+/// `vibe monitor install`.
+#[derive(Debug, Args)]
+pub struct MonitorInstallArgs {
+    /// The writer identity to declare. One per installed hook.
+    ///
+    /// **Validated and refused loudly before anything is written.** A
+    /// hand-written identity is only caught at write time, in a hook's stderr
+    /// that nobody reads — that asymmetry is registered in ADR-0011 rather than
+    /// repaired, and this flag is the half that can be made loud.
+    #[arg(long, default_value = "vibe")]
+    pub identity: String,
+
+    #[command(flatten)]
+    pub write: WriteFlags,
+
+    #[command(flatten)]
+    pub format: FormatFlags,
+}
+
+/// `vibe monitor status`.
+///
+/// **A read, and it takes no write route** (ADR-0011 §7b): reads are not
+/// `FileOp`s. Stated here because the write variant beside it is deliberately
+/// narrow, and serving this command from it would give back what that narrowness
+/// bought.
+#[derive(Debug, Args)]
+pub struct MonitorStatusArgs {
+    /// The writer identity to look for.
+    #[arg(long, default_value = "vibe")]
+    pub identity: String,
+
+    #[command(flatten)]
+    pub format: FormatFlags,
 }
 
 /// `vibe prompt` — ADR-0010's display.

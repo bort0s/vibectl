@@ -2328,12 +2328,43 @@ the crate.
 the text reached the disk — which is where the only genuinely destructive act in
 this tool lives.*
 
-**The route is `FileOp::UpdateFile` through `Registry::apply`**, so nothing new
-mutates the filesystem (ADR-0001 §3) and `--dry-run` is `plan_*()` plus render.
-`UpdateFile` carries `before` and `after`, so the diff a user sees is the real
-one — which is what makes the sniffing residuals in this section an **output**
-rather than a blocker: mixed indentation and mixed line endings both surface as
-a diff before anything is written.
+**The route is `FileOp::UpdateSettings` through `plan::apply`**, so nothing new
+mutates the filesystem (ADR-0001 §3) and `--dry-run` is `plan()` plus render.
+The op carries `before` and `after`, so the diff a user sees is the real one —
+which is what makes the sniffing residuals in this section an **output** rather
+than a blocker: mixed indentation and mixed line endings both surface as a diff
+before anything is written.
+
+**Corrected 2026-08-20, while building it. This paragraph said `UpdateFile`, and
+that contradicted the containment argument below.** `UpdateFile` carries a
+`path` field. The containment section's whole claim is that *a plan cannot
+express a write to an arbitrary place outside a root because there is no field
+to put one in* — which is false of any variant with a path in it. The two
+readings could not both hold, and only one of them carries the argument that
+makes this write admissible under ADR-0005 §10 rule 5 at all.
+
+So the containment reading won, and the correction is recorded rather than
+silently applied: **the section stating the safety argument outranks the section
+describing the plumbing**, because the first is why the write is allowed and the
+second is only how it happens.
+
+Worth naming as a residue of the kind ADR-0002 §7 catalogues, since it is a new
+direction for it: both paragraphs were written on 2026-08-19, and the
+containment one was *corrected* that day from a two-valued draft. The correction
+landed in one place and the neighbouring paragraph kept describing the
+uncorrected design. **Nothing was stale in the sense of having been overtaken by
+events** — the two were inconsistent from the moment the correction was made,
+and a reader reaching the plumbing paragraph first would have built the wrong
+thing while believing they had read the decision.
+
+**`before` is `Option<String>`**, which `UpdateFile`'s is not, and that is not
+incidental. A user who has never configured anything has no `settings.json`, so
+first install has nothing on the before side — and the two states are checked in
+**both** directions at apply: `Some` must still match, and `None` must still
+find nothing. A settings file that appeared between planning and applying is
+somebody's configuration, and writing over it would discard a file the user
+never saw in the diff. That is the same discard `PlanStale` exists to prevent,
+arriving from the side a one-directional check leaves open.
 
 **`apply` replaces atomically now, and it did not before.** `std::fs::write`
 truncates before writing, so the target was observably **zero bytes** part way

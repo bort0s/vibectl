@@ -121,14 +121,56 @@ pub fn write_plan_human(out: &mut impl Write, plan: &WritePlan) -> std::io::Resu
             FileOp::UpdateFile { path, .. } => {
                 writeln!(out, "  update file  {}", path.display())?;
             }
+            // **A REPLACE WITH A BEFORE SIDE, never a create** (ADR-0011 §7b).
+            // This is a file vibe does not own, and constraint 2 rests on the
+            // user approving what happens to it — so the line has to say that
+            // something is already there and is being rewritten. Rendering it
+            // as a create would understate the act in exactly the direction
+            // that matters.
+            //
+            // The op names no path, so the destination is resolved the same way
+            // `apply` will resolve it: against the plan's root. Printing what
+            // this build *would* write rather than what the op carries keeps
+            // the dry run and the write reading the same field.
+            FileOp::UpdateSettings { target, before, .. } => {
+                let resolved = op.resolved_path(&plan.root);
+                match before {
+                    Some(_) => writeln!(
+                        out,
+                        "  update       {} ({} settings)",
+                        resolved.display(),
+                        target.key()
+                    )?,
+                    // Not "create file": `apply` refuses a create onto an
+                    // existing path, and this op does not. Saying which of the
+                    // two it is keeps the line honest about the consequence
+                    // rather than only about the destination.
+                    None => writeln!(
+                        out,
+                        "  create       {} ({} settings, none there now)",
+                        resolved.display(),
+                        target.key()
+                    )?,
+                }
+            }
             // `FileOp` is #[non_exhaustive]; P5 adds validated git operations.
-            // Printing the path rather than skipping the line matters: a
+            // Printing the operation rather than skipping the line matters: a
             // dry-run that silently omitted an operation would understate what
             // is about to happen, which is the one thing a dry run must never
             // do.
-            other => {
-                writeln!(out, "  (operation)  {}", other.path().display())?;
-            }
+            //
+            // **And a variant with no path still gets a line.** `path()` is an
+            // `Option` now, and rendering `None` as nothing at all would be the
+            // silent omission this arm exists to prevent — arriving through the
+            // accessor rather than through the match.
+            other => match other.path() {
+                Some(path) => writeln!(out, "  (operation)  {}", path.display())?,
+                None => writeln!(
+                    out,
+                    "  (operation)  a destination this build cannot name, resolved under {}",
+                    plan.root.display()
+                )?,
+            },
         }
     }
 
@@ -139,6 +181,47 @@ pub fn write_plan_human(out: &mut impl Write, plan: &WritePlan) -> std::io::Resu
     // approving the diff, and a block showing only the new text implies the path
     // was empty. Where it is not, what is there now comes first, and the new
     // text is labelled with the condition under which it would ever be written.
+    // The settings edit's own block, and it is a DIFF rather than a listing.
+    //
+    // ADR-0011 §7b routes the editor's formatting residuals through here on
+    // purpose: nothing to sniff, mixed indentation and mixed line endings are
+    // declared as *outputs* rather than blockers precisely because they land in
+    // this block before anything is written. A block that showed only the new
+    // text would make that claim false — a whole-file rewrite and a two-line
+    // insertion would look identical.
+    for op in &plan.ops {
+        if let FileOp::UpdateSettings { before, after, .. } = op {
+            let resolved = op.resolved_path(&plan.root);
+            writeln!(out, "\n--- {} ---", resolved.display())?;
+            match before {
+                Some(before) => {
+                    writeln!(
+                        out,
+                        "  ON DISK NOW ({} lines) -- apply REPLACES this:",
+                        before.lines().count()
+                    )?;
+                    for line in before.lines() {
+                        writeln!(out, "  - {line}")?;
+                    }
+                    writeln!(out, "  WOULD BE WRITTEN ({} lines):", after.lines().count())?;
+                    for line in after.lines() {
+                        writeln!(out, "  + {line}")?;
+                    }
+                }
+                None => {
+                    writeln!(
+                        out,
+                        "  ON DISK NOW: nothing — this file does not exist yet."
+                    )?;
+                    writeln!(out, "  WOULD BE WRITTEN ({} lines):", after.lines().count())?;
+                    for line in after.lines() {
+                        writeln!(out, "  + {line}")?;
+                    }
+                }
+            }
+        }
+    }
+
     for (op, seen) in plan.ops.iter().zip(&now) {
         if let FileOp::CreateFile { path, contents } = op {
             writeln!(out, "\n--- {} ---", path.display())?;
@@ -1249,4 +1332,15 @@ mod create_file_honesty_tests {
              Rendered:\n{text}"
         );
     }
+}
+
+/// Pretty JSON for `--json`.
+///
+/// Lives here rather than in one command's module because three commands now
+/// render machine-readable output and a fourth would otherwise copy it. The
+/// `expect` is sound on plain data: every payload passed in is built from
+/// `serde_json::json!`, which cannot contain a non-string map key or a
+/// non-finite float - the only two things `to_string_pretty` fails on.
+pub fn pretty(v: &serde_json::Value) -> String {
+    serde_json::to_string_pretty(v).expect("plain data serialises")
 }

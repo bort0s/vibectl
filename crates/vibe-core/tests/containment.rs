@@ -431,7 +431,22 @@ fn every_plan_constructor_produces_absolute_paths() {
 
     for plan in [&sync_plan, &archive_plan] {
         for op in &plan.ops {
-            assert!(op.path().is_absolute(), "op path: {:?}", op.path());
+            // `path()` became an `Option` when `FileOp::UpdateSettings` arrived
+            // — a variant that deliberately names none (ADR-0011 §7b). A `None`
+            // here is NOT a pass: neither of these plans may contain a settings
+            // op, and `if let Some(..)` would have turned this control into a
+            // silent skip the moment one appeared. That is the shape this
+            // repository catalogues, so the absence is asserted rather than
+            // matched away.
+            let path = op.path().unwrap_or_else(|| {
+                panic!(
+                    "a plan op named no path in a {:?} plan: {op:?}. Only \
+                     `vibe monitor install` builds a path-less op, and neither \
+                     sync nor archive may.",
+                    plan.intent
+                )
+            });
+            assert!(path.is_absolute(), "op path: {path:?}");
         }
     }
     // No explicit restore: `_cwd` does it on the way out, panic or not.

@@ -38,6 +38,7 @@ use serde::{Serialize, Serializer};
 
 use crate::error::{CoreError, display_path};
 use crate::manifest::EditReason;
+use crate::monitor::target::SettingsTarget;
 use crate::report::{Event, Reporter};
 
 /// Serialise a path as a lossy string rather than failing.
@@ -47,7 +48,7 @@ use crate::report::{Event, Reporter};
 /// sibling `path_lossy` flag that ADR-0005 §4 specifies is emitted by
 /// [`crate::ErrorPayload`] today; wiring it through every plan op arrives with
 /// the full `--json` DTOs in P3.
-fn lossy_path<S: Serializer>(p: &Path, s: S) -> Result<S::Ok, S::Error> {
+pub(crate) fn lossy_path<S: Serializer>(p: &Path, s: S) -> Result<S::Ok, S::Error> {
     s.serialize_str(&display_path(p).0)
 }
 
@@ -62,6 +63,8 @@ pub enum PlanIntent {
     AgentsAdd,
     AgentsRemove,
     AgentsSync,
+    /// `vibe monitor install` (ADR-0011 §7).
+    MonitorInstall,
 }
 
 /// A single filesystem change. Additive only, by construction.
@@ -112,16 +115,74 @@ pub enum FileOp {
         path: PathBuf,
         observed_hash: String,
     },
+    /// Replace a Claude Code settings file `vibe monitor install` edits.
+    ///
+    /// **This variant names no path, and that is its entire point** (ADR-0011
+    /// §7b). ADR-0005 §10 rule 5 admits a write whose deepest existing ancestor
+    /// canonicalises inside a configured root or the plan's declared target
+    /// directory; the user-level settings file is in neither, and widening the
+    /// rule to admit "the home directory" would trade a bounded invariant for
+    /// an unbounded one.
+    ///
+    /// So the route is closed instead of the root being widened. There is no
+    /// field here to put a path in, and [`SettingsTarget`] has exactly one
+    /// member — so a plan cannot express a write to an arbitrary place outside
+    /// a root, and cannot express a project-level settings write either. The
+    /// file name is a compile-time literal per variant and `apply` resolves it
+    /// against [`WritePlan::root`], which is the containment boundary every
+    /// other op is already bounded by.
+    ///
+    /// Same technique as this enum's missing `FileOp::Delete` and ADR-0005 §10
+    /// rule 1's constructed argv: the dangerous state is unrepresentable rather
+    /// than merely avoided.
+    ///
+    /// `before` carries the same staleness contract as [`FileOp::UpdateFile`] —
+    /// see [`check_precondition`]. It is `None` when the file did not exist at
+    /// plan time, which is a real case here and not an error: a user who has
+    /// never configured anything has no `settings.json`, and install must still
+    /// work for them.
+    UpdateSettings {
+        target: SettingsTarget,
+        before: Option<String>,
+        after: String,
+    },
 }
 
 impl FileOp {
+    /// The path this op names, where it names one.
+    ///
+    /// **`Option`, because [`FileOp::UpdateSettings`] deliberately names none.**
+    /// Returning a synthesised path here would put the thing the variant exists
+    /// to withhold back into the type, one accessor away — so the absence is
+    /// visible at every call site instead. Callers that need the real
+    /// destination ask [`Self::resolved_path`], which requires a root and
+    /// therefore cannot be called without one.
     #[must_use]
-    pub fn path(&self) -> &Path {
+    pub fn path(&self) -> Option<&Path> {
         match self {
             FileOp::CreateDir { path }
             | FileOp::CreateFile { path, .. }
             | FileOp::UpdateFile { path, .. }
-            | FileOp::RemoveOwnedAgent { path, .. } => path,
+            | FileOp::RemoveOwnedAgent { path, .. } => Some(path),
+            FileOp::UpdateSettings { .. } => None,
+        }
+    }
+
+    /// Where this op will actually write, given the plan's containment root.
+    ///
+    /// For every path-carrying variant this is the path it already holds; the
+    /// root is ignored, because those ops were resolved at plan time and
+    /// `validate_path` is what bounds them. For [`FileOp::UpdateSettings`] the
+    /// root is where the destination comes from — the op contributes only a
+    /// fixed file name.
+    #[must_use]
+    pub fn resolved_path(&self, root: &Path) -> PathBuf {
+        match self {
+            FileOp::CreateDir { path }
+            | FileOp::CreateFile { path, .. }
+            | FileOp::UpdateFile { path, .. }
+            | FileOp::RemoveOwnedAgent { path, .. } => path.clone(),
+            FileOp::UpdateSettings { target, .. } => root.join(target.file_name()),
         }
     }
 }
@@ -474,9 +535,16 @@ fn write_temp(temp: &Path, target: &Path, contents: &str) -> std::io::Result<()>
 pub fn apply(plan: &WritePlan, rep: &dyn Reporter) -> Result<ApplyReport, CoreError> {
     let started = std::time::Instant::now();
 
+    // Resolved against the plan's root, so `UpdateSettings` — which names no
+    // path — is bounded by exactly the same five rules as every other op. Rule
+    // 5 in particular still runs here: ADR-0011 §7b argues the settings path
+    // cannot be assembled from data and therefore cannot traverse, and a check
+    // skipped on the ground that it cannot fail is a check that stops running
+    // when the ground moves.
     for op in &plan.ops {
-        validate_path(op.path(), &plan.root)?;
-        check_precondition(op)?;
+        let target = op.resolved_path(&plan.root);
+        validate_path(&target, &plan.root)?;
+        check_precondition(op, &target)?;
     }
 
     rep.event(Event::ApplyStarted {
@@ -492,7 +560,8 @@ pub fn apply(plan: &WritePlan, rep: &dyn Reporter) -> Result<ApplyReport, CoreEr
             outcome = ApplyOutcome::Cancelled { after_ops: index };
             break;
         }
-        let display = display_path(op.path()).0;
+        let resolved = op.resolved_path(&plan.root);
+        let display = display_path(&resolved).0;
         match op {
             FileOp::CreateDir { path } => {
                 if path.is_dir() {
@@ -521,6 +590,20 @@ pub fn apply(plan: &WritePlan, rep: &dyn Reporter) -> Result<ApplyReport, CoreEr
                     })?;
                 }
                 write_atomically(path, contents)?;
+                applied.push(display.clone());
+            }
+            // The same write as `UpdateFile`, against a destination the op did
+            // not name. The parent is created because a user who has never
+            // configured anything has no `~/.claude` either, and install is
+            // their first write to it.
+            FileOp::UpdateSettings { after, .. } => {
+                if let Some(parent) = resolved.parent() {
+                    std::fs::create_dir_all(parent).map_err(|source| CoreError::Io {
+                        path: parent.to_path_buf(),
+                        source,
+                    })?;
+                }
+                write_atomically(&resolved, after)?;
                 applied.push(display.clone());
             }
             FileOp::RemoveOwnedAgent { path, .. } => {
@@ -560,9 +643,40 @@ pub fn apply(plan: &WritePlan, rep: &dyn Reporter) -> Result<ApplyReport, CoreEr
     })
 }
 
-fn check_precondition(op: &FileOp) -> Result<(), CoreError> {
+fn check_precondition(op: &FileOp, resolved: &Path) -> Result<(), CoreError> {
     match op {
         FileOp::CreateDir { .. } => Ok(()),
+        // `UpdateFile`'s contract with one extra state, because this file may
+        // legitimately not exist: a user who has never configured anything has
+        // no `settings.json`, and install is their first write.
+        //
+        // **Absent and present are checked in both directions**, which is the
+        // half a one-sided version would drop. `before: None` must find nothing
+        // there — a file that appeared between planning and applying is
+        // somebody else's configuration, and writing `after` over it would
+        // discard a file the user never saw in the diff. That is the same
+        // discard `PlanStale` exists to prevent, arriving from the other side.
+        FileOp::UpdateSettings { before, .. } => {
+            match (before, std::fs::read_to_string(resolved)) {
+                (Some(before), Ok(current)) if &current == before => Ok(()),
+                (Some(_), Ok(_)) => Err(CoreError::PlanStale {
+                    path: resolved.to_path_buf(),
+                }),
+                (Some(_), Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                    Err(CoreError::ManifestNotFound {
+                        path: resolved.to_path_buf(),
+                    })
+                }
+                (None, Err(e)) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                (None, Ok(_)) => Err(CoreError::PlanStale {
+                    path: resolved.to_path_buf(),
+                }),
+                (_, Err(source)) => Err(CoreError::Io {
+                    path: resolved.to_path_buf(),
+                    source,
+                }),
+            }
+        }
         FileOp::CreateFile { path, .. } => {
             if path.exists() {
                 Err(CoreError::TargetExists { path: path.clone() })
